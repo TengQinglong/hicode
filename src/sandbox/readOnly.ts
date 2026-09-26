@@ -4,6 +4,7 @@ import {linuxFileScopeArgv} from "./linuxFileScope.js";
 
 export interface ReadOnlyAccess {
     paths: readonly string[];
+    aliases?: readonly {path: string; target: string}[];
     executables: readonly string[];
     deniedPaths: readonly string[];
     privateRoot: string;

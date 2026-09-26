@@ -14,7 +14,14 @@ server.setRequestHandler(ListToolsRequestSchema, () => {
     if (mode === "startup-failure") throw new Error("Fixture initialization failed");
     return {tools: [{name: "exit", inputSchema: {type: "object"}}]};
 });
-server.setRequestHandler(CallToolRequestSchema, (_request, extra) => {
+server.setRequestHandler(CallToolRequestSchema, async (_request, extra) => {
+    if (mode === "oversized") {
+        const chunk = Buffer.alloc(1024 * 1024, 120);
+        for (let i = 0; i < 129; i++) await new Promise<void>((resolve, reject) => {
+            process.stdout.write(chunk, error => error ? reject(error) : resolve());
+        });
+        return new Promise<never>(() => {});
+    }
     if (mode === "final-response") {
         process.stdout.write(JSON.stringify({jsonrpc: "2.0", id: extra.requestId,
             result: {content: [{type: "text", text: "x".repeat(1024 * 1024) + "FINAL_RESPONSE"}]}}) + "\n", () => process.exit(0));

@@ -1,5 +1,5 @@
 import {expect, test} from "bun:test";
-import {chmod, mkdir, readFile, realpath, stat, symlink, writeFile} from "node:fs/promises";
+import {chmod, mkdir, readFile, realpath, stat, symlink, writeFile, unlink} from "node:fs/promises";
 import {join} from "node:path";
 import {createSandboxRuntime} from "../../src/sandbox/index.js";
 import {createShellRunner} from "../../src/tools/bash/shellRunner.js";
@@ -9,8 +9,46 @@ import {createTestContext} from "../helpers/testContext.js";
 import {executeToolResult} from "../helpers/executeTool.js";
 import {createChildProcessEnvironment} from "../../src/runtime/childEnvironment.js";
 import {runShellArgv} from "../../src/tools/bash/process.js";
+import {prepareCommandReadAccess} from "../../src/tools/bash/readAccess.js";
 
 const enabled = ["darwin", "linux"].includes(process.platform) && process.env.HICODE_RUN_SANDBOX_INTEGRATION === "1";
+
+test.skipIf(!enabled)("read-only aliases preserve lexical paths without bypassing target denials", async () => {
+    await withTempProject(async (cwd, storage) => {
+        await mkdir(join(cwd, "src"));
+        await writeFile(join(cwd, "src/note.txt"), "ALIAS_NEEDLE\n");
+        await symlink("src", join(cwd, "current"));
+        await symlink("src/note.txt", join(cwd, "alias.txt"));
+        const sandbox = await createSandboxRuntime({cwd, storage, settings: {
+            filesystem: {denyRead: [], denyWrite: []}, network: {mode: "open", allowedDomains: [], allowLocalBinding: false},
+        }});
+        try {
+            expect(sandbox.status.kind).toBe("ready");
+            const ctx = createTestContext(cwd, {shellRunner: createShellRunner(sandbox, testChildEnvironment), readOnlyTools: true});
+            const run = (command: string) => executeToolResult("bash", JSON.stringify({command}), ctx, command);
+            for (const command of ["cat alias.txt", "rg -n ALIAS_NEEDLE current", "cat current/note.txt", "rg -L ALIAS_NEEDLE ."]) {
+                const result = await run(command);
+                expect(result.outcome).toBe("ok");
+                expect(result.modelContent).toContain("ALIAS_NEEDLE");
+            }
+            ctx.permissionRules.deny.push({toolName: "read_file", content: "src/note.txt", source: "local"});
+            expect((await run("rg -n ALIAS_NEEDLE current")).modelContent).not.toContain("ALIAS_NEEDLE\n");
+            expect((await run("cat alias.txt")).outcome).toBe("denied");
+            await symlink(storage.hicodeHome, join(cwd, "private-link"));
+            expect((await run("rg --files private-link")).outcome).toBe("denied");
+            if (process.platform === "linux") {
+                ctx.permissionRules.deny = [];
+                const access = await prepareCommandReadAccess("cat alias.txt", cwd, ctx);
+                await unlink(join(cwd, "alias.txt"));
+                await symlink(storage.hicodeHome, join(cwd, "alias.txt"));
+                const result = await createShellRunner(sandbox, testChildEnvironment).run({command: "cat alias.txt", cwd,
+                    signal: AbortSignal.timeout(5000), readAccess: access});
+                expect(result.termination).toMatchObject({kind: "spawn_error"});
+                if (result.termination.kind === "spawn_error") expect(result.termination.error.message).toContain("alias changed");
+            }
+        } finally {await sandbox.close();}
+    });
+}, 15000);
 
 test.skipIf(!enabled)("real OS command searches preserve read-only, private results and permissions", async () => {
     await withTempProject(async (cwd, storage) => {

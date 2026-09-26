@@ -1,7 +1,8 @@
 import {spawn, type ChildProcessWithoutNullStreams} from "node:child_process";
 import {PassThrough} from "node:stream";
 import {getDefaultEnvironment} from "@modelcontextprotocol/sdk/client/stdio.js";
-import {ReadBuffer, serializeMessage} from "@modelcontextprotocol/sdk/shared/stdio.js";
+import {deserializeMessage, serializeMessage} from "@modelcontextprotocol/sdk/shared/stdio.js";
+import {MCP_MAX_MESSAGE_BYTES, McpTransportLimitError} from "./transportBudget.js";
 import type {Transport} from "@modelcontextprotocol/sdk/shared/transport.js";
 import type {JSONRPCMessage} from "@modelcontextprotocol/sdk/types.js";
 import {createProcessTreeKiller} from "../tools/bash/process.js";
@@ -12,7 +13,9 @@ export class McpStdioTransport implements Transport {
     onerror?: Transport["onerror"];
     onmessage?: Transport["onmessage"];
     readonly stderr = new PassThrough();
-    private readonly buffer = new ReadBuffer();
+    private chunks: Buffer[] = [];
+    private bufferedBytes = 0;
+    private failed = false;
     private readonly killTree = createProcessTreeKiller();
     private child: ChildProcessWithoutNullStreams | undefined;
     private exited: Promise<void> = Promise.resolve();
@@ -45,15 +48,27 @@ export class McpStdioTransport implements Transport {
         child.stderr.on("error", report);
         child.stderr.pipe(this.stderr);
         child.stdout.on("data", (chunk: Buffer) => {
-            this.buffer.append(chunk);
-            while (true) {
-                try {
-                    const message = this.buffer.readMessage();
-                    if (message === null) break;
-                    this.onmessage?.(message);
-                } catch (error) {
-                    report(error instanceof Error ? error : new Error(String(error)));
+            if (this.failed) return;
+            try {
+                let offset = 0;
+                while (offset < chunk.length) {
+                    const newline = chunk.indexOf(10, offset);
+                    const end = newline < 0 ? chunk.length : newline;
+                    this.bufferedBytes += end - offset;
+                    if (this.bufferedBytes > MCP_MAX_MESSAGE_BYTES) throw new McpTransportLimitError();
+                    this.chunks.push(chunk.subarray(offset, end));
+                    if (newline < 0) break;
+                    const line = Buffer.concat(this.chunks, this.bufferedBytes).toString("utf8").replace(/\r$/, "");
+                    this.chunks = []; this.bufferedBytes = 0;
+                    this.onmessage?.(deserializeMessage(line));
+                    offset = newline + 1;
                 }
+            } catch (error) {
+                this.failed = true;
+                this.chunks = []; this.bufferedBytes = 0;
+                child.stdout.pause();
+                report(error instanceof Error ? error : new Error(String(error)));
+                void this.close();
             }
         });
         await new Promise<void>((resolve, reject) => {
@@ -97,7 +112,7 @@ export class McpStdioTransport implements Transport {
             }
         } finally {
             this.child = undefined;
-            this.buffer.clear();
+            this.chunks = []; this.bufferedBytes = 0;
             this.stderr.end();
             this.onclose?.();
         }

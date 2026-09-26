@@ -225,6 +225,7 @@ else
     printf '#!/bin/bash\n# HiCode source checkout\n' > "$launcher_temp"
 fi
 if [[ -n "$runtime_dir" ]]; then printf 'export HICODE_LINUX_RUNTIME_DIR=%q\n' "$runtime_dir" >> "$launcher_temp"; fi
+printf 'export PATH=%q:%q:%q:"${PATH:-/usr/bin:/bin}"\n' "$global_bin" "$bun_bin" "$rg_bin" >> "$launcher_temp"
 printf 'exec %q %q "$@"\n' "$bun_executable" "$source_dir/src/index.tsx" >> "$launcher_temp"
 chmod 755 "$launcher_temp"
 "$launcher_temp" --help >/dev/null

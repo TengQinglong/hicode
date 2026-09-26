@@ -21,6 +21,7 @@ export async function linuxFileScopeArgv(command: string, access: ReadOnlyAccess
         "--dir", checked(cwd)];
     const maskedDirectories = new Set<string>();
     const mountedPaths: string[] = [];
+    const visiblePaths: string[] = [];
     const optionalStat = async (path: string) => stat(path).catch((error: unknown) => {
         if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
         throw error;
@@ -30,6 +31,7 @@ export async function linuxFileScopeArgv(command: string, access: ReadOnlyAccess
         const canonical = await realpath(path);
         args.push(writable ? "--bind" : "--ro-bind", canonical, path);
         mountedPaths.push(canonical);
+        visiblePaths.push(path);
     };
     // rg discovers repository roots from ancestor .git metadata before honoring .gitignore.
     // Supply only the marker, not the repository's private Git contents.
@@ -46,6 +48,17 @@ export async function linuxFileScopeArgv(command: string, access: ReadOnlyAccess
     }
     for (const path of [...new Set(["/bin/bash", applySeccomp, ...access.executables])]) await bind(path);
     for (const path of [...new Set(access.paths)].sort((a, b) => a.length - b.length)) await bind(path);
+    // Preserve authorized lexical paths as links to the single mounted target.
+    // Duplicate bind mounts would let an alias bypass masks on that target.
+    for (const alias of [...(access.aliases ?? [])].sort((a, b) => a.path.length - b.path.length)) {
+        checked(alias.path); checked(alias.target);
+        if (await realpath(alias.path) !== alias.target || !access.paths.includes(alias.target)) {
+            throw new Error("Search alias changed after authorization; retry the command");
+        }
+        if (visiblePaths.some(path => isPathInside(path, alias.path))) continue;
+        args.push("--symlink", alias.target, alias.path);
+        visiblePaths.push(alias.path);
+    }
 
     const mask = async (path: string, writeOnly = false) => {
         checked(path);

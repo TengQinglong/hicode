@@ -42,9 +42,11 @@ function summary(exitCode = 0): HeadlessRunSummary {
 function createAdapter() {
   let sigintListener: (() => void) | undefined;
   let sigtermListener: (() => void) | undefined;
+  let sighupListener: (() => void) | undefined;
   const state = {
     sigintRemoved: false,
     sigtermRemoved: false,
+    sighupRemoved: false,
     exitCode: undefined as number | undefined,
     stdout: [] as string[],
     stderr: [] as string[],
@@ -56,6 +58,8 @@ function createAdapter() {
     onceSigterm(next) {
       sigtermListener = next;
     },
+    onceSighup(next) {sighupListener = next;},
+    removeSighup(removed) {state.sighupRemoved = removed === sighupListener;},
     removeSigint(removed) {
       state.sigintRemoved = removed === sigintListener;
     },
@@ -77,10 +81,27 @@ function createAdapter() {
     state,
     sigint: () => sigintListener?.(),
     sigterm: () => sigtermListener?.(),
+    sighup: () => sighupListener?.(),
   };
 }
 
 describe("headless CLI adapter", () => {
+  test("SIGHUP cancels the turn and awaits cleanup before removing listeners", async () => {
+    const fixture = createAdapter();
+    let cleaned = false;
+    const runCli = createHeadlessCli({adapter: fixture.adapter, runner: async (_options, signal) => {
+      try {
+        fixture.sighup();
+        expect(signal.aborted).toBe(true);
+        expect(signal.reason).toBe("shutdown");
+        return summary(130);
+      } finally {await new Promise(resolve => setTimeout(resolve, 5)); cleaned = true;}
+    }});
+    await runCli(options());
+    expect(cleaned).toBe(true);
+    expect(fixture.state.sighupRemoved).toBe(true);
+    expect(fixture.state.exitCode).toBe(130);
+  });
   test("正常结果设置 summary exit code 并清理 listener", async () => {
     const fixture = createAdapter();
     const runCli = createHeadlessCli({

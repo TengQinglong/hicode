@@ -1,5 +1,6 @@
 import {Client} from "@modelcontextprotocol/sdk/client/index.js";
 import {McpStdioTransport} from "./stdioTransport.js";
+import {boundMcpResponse, McpTransportLimitError} from "./transportBudget.js";
 import {StreamableHTTPClientTransport, StreamableHTTPError} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {AsyncLocalStorage} from "node:async_hooks";
 import {ToolListChangedNotificationSchema, type Tool as McpSdkTool} from "@modelcontextprotocol/sdk/types.js";
@@ -23,6 +24,7 @@ export async function connectMcpServer(
     onToolsChanged?: (server: McpConnectedServer | undefined) => void
 ): Promise<McpConnectedServer> {
     const lifetime = new AbortController();
+    let transportFailure: McpTransportLimitError | undefined;
     const requestScope = new AsyncLocalStorage<AbortSignal | undefined>();
     const transport = server.config.type === "stdio"
         ? new McpStdioTransport({
@@ -54,7 +56,11 @@ export async function connectMcpServer(
                     ...init, signal: requestSignal, redirect: "error", timeout: false,
                 };
                 const response = await fetch(url, requestOptions);
-                if (response.ok) return response;
+                if (response.ok) return boundMcpResponse(response, error => {
+                    transportFailure = error;
+                    onError?.(error);
+                    lifetime.abort(error);
+                });
                 await response.body?.cancel();
                 if (response.status === 401 || response.status === 403) throw new StreamableHTTPError(response.status, "Authentication required");
                 // The SDK includes HTTP error bodies in exceptions; servers can echo
@@ -72,6 +78,8 @@ export async function connectMcpServer(
             : send(message, options);
     }
     const safeError = (error: unknown): Error => {
+        if (transportFailure) return transportFailure;
+        if (error instanceof McpTransportLimitError) return error;
         if (server.config.type === "stdio") return error instanceof Error ? error : new Error(String(error));
         const status = error instanceof StreamableHTTPError ? error.code : undefined;
         return new Error(status
@@ -93,6 +101,7 @@ export async function connectMcpServer(
     // disconnection that would overwrite Failed with Closed in the manager.
     client.onclose = () => { closed = true; if (connected) onClosed?.(); };
     client.onerror = (error) => {
+        if (error instanceof McpTransportLimitError) transportFailure = error;
         if (lifetime.signal.aborted || signal?.aborted ||
             (server.config.type === "http" && requestScope.getStore()?.aborted)) return;
         onError?.(safeError(error));

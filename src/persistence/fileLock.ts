@@ -2,19 +2,15 @@ import {randomUUID} from "node:crypto";
 import {constants} from "node:fs";
 import {dirname, join} from "node:path";
 import {lstat, mkdir, open, readdir, rmdir, unlink} from "node:fs/promises";
+import {captureProcessIdentity, processOwnerState} from "./processIdentity.js";
 
 const TIMEOUT_MS = 2_000;
 const RETRY_MS = 20;
 const STALE_MS = 30_000;
-const OWNER = /^([1-9][0-9]*)-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/;
+const OWNER = /^v1-([1-9][0-9]*)-([a-f0-9]{64})-([a-f0-9]{64})-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/;
 
 function isCode(error: unknown, code: string): boolean {
     return !!error && typeof error === "object" && "code" in error && error.code === code;
-}
-
-function alive(pid: number): boolean {
-    try { process.kill(pid, 0); return true; }
-    catch (error) { return !isCode(error, "ESRCH"); }
 }
 
 async function removeEmptyDirectory(path: string): Promise<void> {
@@ -35,15 +31,21 @@ async function inspectDirectory(path: string) {
 }
 
 /** Remove only a dead owner's unique marker, then rmdir only if no other owner exists. */
-async function recoverAbandonedDirectory(path: string): Promise<void> {
+async function recoverAbandonedDirectory(path: string, local: Awaited<ReturnType<typeof captureProcessIdentity>>): Promise<void> {
     try {
         const {info, entries} = await inspectDirectory(path);
         if (entries.length === 0 && Date.now() - info.mtimeMs < STALE_MS) return;
         for (const entry of entries) {
-            const pid = Number(OWNER.exec(entry.name)![1]);
-            if (!Number.isSafeInteger(pid) || alive(pid)) continue;
+            const match = OWNER.exec(entry.name)!;
+            const pid = Number(match[1]);
+            if (!Number.isSafeInteger(pid) || pid > 2_147_483_647) throw new Error("Invalid persistence owner PID");
+            const state = await processOwnerState({pid, environment: match[2]!, start: match[3]!}, local);
+            if (state === "unknown") throw new Error(`Cannot verify persistence lock owner in this environment: ${path}`);
+            // The live holder may release and a new holder may mkdir while we
+            // probe its PID. Do not rmdir a potentially new, unpublished lease.
+            if (state === "alive") return;
             try { await unlink(join(path, entry.name)); }
-            catch (error) { if (!isCode(error, "ENOENT")) throw error; }
+            catch (error) { if (isCode(error, "ENOENT")) return; throw error; }
         }
         // A competing initializer that has published a marker prevents rmdir.
         await removeEmptyDirectory(path);
@@ -52,7 +54,21 @@ async function recoverAbandonedDirectory(path: string): Promise<void> {
 
 /** Directory leases need no recovery guard that can itself be orphaned. */
 export async function withFileLock<T>(path: string, action: () => Promise<T>): Promise<T> {
-    const owner = `${process.pid}-${randomUUID()}`;
+    return lockWithIdentity(path, action, await captureProcessIdentity());
+}
+
+/** A long-lived writer owns this immutable process snapshot; competing owners are always probed live. */
+export function createFileLocker() {
+    let identity: ReturnType<typeof captureProcessIdentity> | undefined;
+    return async <T>(path: string, action: () => Promise<T>): Promise<T> => {
+        const local = await (identity ??= captureProcessIdentity());
+        return lockWithIdentity(path, action, local);
+    };
+}
+
+async function lockWithIdentity<T>(path: string, action: () => Promise<T>, local: Awaited<ReturnType<typeof captureProcessIdentity>>): Promise<T> {
+    // Publish identity in the filename so another process never reads a partial owner record.
+    const owner = `v1-${local.pid}-${local.environment}-${local.start}-${randomUUID()}`;
     const marker = join(path, owner);
     const deadline = Date.now() + TIMEOUT_MS;
     await mkdir(dirname(path), {recursive: true});
@@ -71,7 +87,10 @@ export async function withFileLock<T>(path: string, action: () => Promise<T>): P
                 // enter alongside the initializer of a replacement directory.
                 if (entries.length === 1 && entries[0]!.name === owner) return await action();
             } catch (error) {
-                if (!isCode(error, "ENOENT") || published) throw error;
+                // macOS can report EINVAL instead of ENOENT if another releaser
+                // removes the directory during exclusive marker creation. Retry
+                // only before publication; no action has acquired the lease yet.
+                if (published || (!isCode(error, "ENOENT") && !(process.platform === "darwin" && isCode(error, "EINVAL")))) throw error;
             } finally {
                 if (published) {
                     try { await unlink(marker); }
@@ -80,7 +99,7 @@ export async function withFileLock<T>(path: string, action: () => Promise<T>): P
                 await removeEmptyDirectory(path);
             }
         } else {
-            await recoverAbandonedDirectory(path);
+            await recoverAbandonedDirectory(path, local);
         }
         if (Date.now() >= deadline) throw new Error(`Timed out waiting for persistence lock: ${path}`);
         await new Promise(resolve => setTimeout(resolve, RETRY_MS));

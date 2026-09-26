@@ -243,6 +243,7 @@ function runProcess({
             child.stdin?.removeAllListeners("error");
             child.removeAllListeners("error");
             child.removeAllListeners("close");
+            child.removeAllListeners("exit");
             if (outputFd !== undefined) {
                 try {
                     closeSync(outputFd);
@@ -335,6 +336,9 @@ function runProcess({
         child.once("error", (error) =>
             finish({kind: "spawn_error", error})
         );
+        // The command owns its process group even when its leader exits normally.
+        // Reap descendants holding pipes open; close still drains the final output.
+        child.once("exit", () => {void killProcessTree(child);});
         child.once("close", (code, closeSignal) => {
             finish(
                 forcedTermination ?? {

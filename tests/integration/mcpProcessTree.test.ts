@@ -11,23 +11,27 @@ function alive(pid: number): boolean {
     return result.exitCode === 0 && !result.stdout.toString().trim().startsWith("Z");
 }
 
-for (const mode of ["normal", "stubborn", "startup-failure", "natural-exit", "final-response"]) {
+for (const mode of ["normal", "stubborn", "startup-failure", "natural-exit", "final-response", "oversized"]) {
     test.skipIf(process.platform === "win32")(`MCP reaps its process group after ${mode}`, async () => {
         await withTempProject(async cwd => {
             const pidFile = join(cwd, "pids.json");
             let client: McpConnectedServer | undefined;
             let pids: {parent: number; child: number} | undefined;
+            const errors: string[] = [];
             try {
                 const connect = connectMcpServer({name: "fixture", source: "host", id: "fixture", config: {
                     type: "stdio", command: process.execPath,
                     args: [resolve(import.meta.dir, "../fixtures/mcp/processTreeServer.ts"), pidFile, mode],
-                    disabled: false, timeoutMs: 2000, toolTimeoutMs: 2000,
-                }}, cwd, testChildEnvironment);
+                    disabled: false, timeoutMs: 2000, toolTimeoutMs: 5000,
+                }}, cwd, testChildEnvironment, undefined, undefined, error => errors.push(error.message));
                 if (mode === "startup-failure") await expect(connect).rejects.toThrow("Fixture initialization failed");
                 else client = await connect;
                 pids = JSON.parse(await readFile(pidFile, "utf8"));
                 if (!pids) throw new Error("Missing fixture pids");
-                if (mode === "natural-exit" || mode === "final-response") {
+                if (mode === "oversized") {
+                    await expect(client!.callTool("exit", {}, AbortSignal.timeout(5000))).rejects.toThrow("128 MiB transport limit");
+                    expect(errors.some(message => message.includes("128 MiB transport limit"))).toBe(true);
+                } else if (mode === "natural-exit" || mode === "final-response") {
                     const result = await client!.callTool("exit", {}, AbortSignal.timeout(2000));
                     if (mode === "final-response") expect(result).toMatchObject({content: [{type: "text", text: expect.stringContaining("FINAL_RESPONSE")}]});
                 }

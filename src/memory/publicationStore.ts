@@ -8,7 +8,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
-import { ensurePrivateStorageDirectory, readPrivateStorageTextFile, withFileLock, writeFileAtomically, type HiCodeStorageLayout } from "../persistence/index.js";
+import { ensurePrivateStorageDirectory, readPrivateStorageTextFile, createFileLocker, writeFileAtomically, type HiCodeStorageLayout } from "../persistence/index.js";
 import { getMemoryWorkspacesDirectory, getMemoryWorkspacePaths, getMemoryStatePath, getMemoryIndexPath, getMemoryTopicsDirectory, getProjectMemoryDirectory } from "../persistence/layout.js";
 import { throwIfTurnAborted } from "../runtime/abort.js";
 import { memoryDraftTopicSchema, memoryPublicationSchema, memoryStateSchema, memorySourceRecordSchema, type MemoryDraftTopic, type MemoryLease, type MemoryPublication, type MemorySourceRecord } from "./publicationSchema.js";
@@ -27,6 +27,7 @@ export function serializeDraftTopic(topic: MemoryDraftTopic): string {
 }
 /** Markdown owns content; the locked workflow stores provenance, leases and bounded receipts. */
 export class MemoryPublicationStore {
+    private readonly lock = createFileLocker();
     readonly directory: string;
     constructor(private readonly storage: HiCodeStorageLayout, cwd: string) {
         this.directory = getProjectMemoryDirectory(storage, cwd);
@@ -112,7 +113,7 @@ export class MemoryPublicationStore {
         changed: boolean;
     }, signal?: AbortSignal): Promise<T> {
         ensurePrivateStorageDirectory(this.storage, this.directory);
-        return withFileLock(join(this.directory, ".memory.lock"), async () => {
+        return this.lock(join(this.directory, ".memory.lock"), async () => {
             if (signal)
                 throwIfTurnAborted(signal);
             const state = this.snapshot();
@@ -244,7 +245,7 @@ export class MemoryPublicationStore {
         const drafts = topics.map(topic => memoryDraftTopicSchema.parse(topic));
         if (drafts.length > 200 || new Set(drafts.map(topic => topic.key)).size !== drafts.length) throw new Error("Invalid Memory draft topic set");
         ensurePrivateStorageDirectory(this.storage, this.directory);
-        await withFileLock(join(this.directory, ".memory.lock"), async () => {
+        await this.lock(join(this.directory, ".memory.lock"), async () => {
             const state = this.snapshot();
             this.requireLease(state, lease, "consolidate");
             const allowed = new Set([...state.topics.flatMap(topic => topic.sources), ...lease.sourceIds]);
@@ -325,7 +326,7 @@ export class MemoryPublicationStore {
     }
     async recoverWorkspaces(signal: AbortSignal): Promise<void> {
         ensurePrivateStorageDirectory(this.storage, this.directory);
-        await withFileLock(join(this.directory, ".memory.lock"), async () => {
+        await this.lock(join(this.directory, ".memory.lock"), async () => {
             throwIfTurnAborted(signal);
             const state = this.snapshot();
             const root = getMemoryWorkspacesDirectory(this.directory);

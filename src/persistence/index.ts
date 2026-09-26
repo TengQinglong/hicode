@@ -1,6 +1,6 @@
 export {writeFileAtomically} from "./atomicFile.js";
 export {hasFileSystemErrorCode} from "./errors.js";
-export {withFileLock} from "./fileLock.js";
+export {withFileLock, createFileLocker} from "./fileLock.js";
 export {
     ensurePrivateStorageDirectory,
     readPrivateStorageTextFile,

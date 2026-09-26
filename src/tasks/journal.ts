@@ -4,7 +4,7 @@ import {dirname, join} from "node:path";
 import {
     getSessionStorageDirectory,
     type HiCodeStorageLayout,
-    withFileLock,
+    createFileLocker,
     writeFileAtomically,
 } from "../persistence/index.js";
 import {
@@ -170,6 +170,7 @@ function loadedJournal(entries: readonly TaskJournalEntry[]): LoadedTaskJournal 
 }
 
 class TaskJournal implements TaskJournalLike {
+    private readonly lock = createFileLocker();
     private appendTail: Promise<void> = Promise.resolve();
     private readonly cache = new Map<string, CachedJournal>();
 
@@ -198,7 +199,7 @@ class TaskJournal implements TaskJournalLike {
     async load(sessionId: string): Promise<LoadedTaskJournal> {
         const path = journalPath(this.storage, this.cwd, sessionId);
         await mkdir(dirname(path), {recursive: true, mode: 0o700});
-        return withFileLock(`${path}.lock`, async () => {
+        return this.lock(`${path}.lock`, async () => {
             const current = await this.readCurrent(path, sessionId);
             return loadedJournal(current.entries);
         });
@@ -253,7 +254,7 @@ class TaskJournal implements TaskJournalLike {
                 if (Buffer.byteLength(line, "utf8") > MAX_TASK_JOURNAL_LINE_BYTES) {
                     throw new Error(`Task Journal line exceeds the size limit: ${path}`);
                 }
-                await withFileLock(`${path}.lock`, async () => {
+                await this.lock(`${path}.lock`, async () => {
                     await mkdir(dirname(path), {recursive: true, mode: 0o700});
                     await chmod(dirname(path), 0o700);
                     const current = await this.readCurrent(path, entry.sessionId);

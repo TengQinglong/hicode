@@ -4,7 +4,7 @@ import {createHash, randomUUID} from "node:crypto";
 import {storedImageSchema, imageReferenceSchema, type StoredImage, type ImageReference} from "../images/content.js";
 import {chmod, link, lstat, open, readdir, readFile, rm, truncate, writeFile,} from "node:fs/promises";
 import {basename, dirname, isAbsolute, join, relative, resolve} from "node:path";
-import {ensurePrivateStorageDirectory, readPrivateStorageTextFile, withFileLock} from "../persistence/index.js";
+import {ensurePrivateStorageDirectory, readPrivateStorageTextFile, createFileLocker} from "../persistence/index.js";
 import {getArtifactKey, getResultId, getToolResultSessionDir,} from "./paths.js";
 import {createPreview} from "./format.js";
 import {
@@ -59,6 +59,7 @@ function isCode(error: unknown, code: string): boolean {
 }
 
 export class ToolResultStore {
+    private readonly lock = createFileLocker();
     readonly sessionDir: string;
     readonly maxArtifactBytes: number;
     readonly maxSessionBytes: number;
@@ -257,7 +258,7 @@ export class ToolResultStore {
 
     private async withMutation<T>(action: () => Promise<T>): Promise<T> {
         await this.ensureDir();
-        return withFileLock(join(this.sessionDir, ".store.lock"), async () => {
+        return this.lock(join(this.sessionDir, ".store.lock"), async () => {
             await this.ensureDir();
             return action();
         });

@@ -5,6 +5,7 @@ import {Server} from "@modelcontextprotocol/sdk/server/index.js";
 import {WebStandardStreamableHTTPServerTransport} from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {CallToolRequestSchema, ListToolsRequestSchema} from "@modelcontextprotocol/sdk/types.js";
 import {createMcpManager} from "../../src/mcp/manager.js";
+import {connectMcpServer} from "../../src/mcp/client.js";
 import {createToolRuntime} from "../../src/tools/runtime.js";
 import {withTempProject} from "../helpers/tempProject.js";
 import {testChildEnvironment} from "../helpers/childEnvironment.js";
@@ -18,6 +19,35 @@ async function until(predicate: () => boolean) {
         await Bun.sleep(5);
     }
 }
+
+test("HTTP oversized startup response is cancelled before JSON parsing with a useful diagnostic", async () => {
+    let cancelled = false;
+    const chunk = new Uint8Array(1024 * 1024).fill(120);
+    const server = Bun.serve({hostname: "127.0.0.1", port: 0, fetch: async request => {
+        if (request.method !== "POST") return new Response(null, {status: 405});
+        const message = await request.json() as {id?: number; method: string; params?: {protocolVersion: string}};
+        if (message.id === undefined) return new Response(null, {status: 202});
+        if (message.method === "initialize") return Response.json({jsonrpc: "2.0", id: message.id,
+            result: {protocolVersion: message.params!.protocolVersion, capabilities: {tools: {}}, serverInfo: {name: "limit", version: "1"}}});
+        let sent = 0;
+        return new Response(new ReadableStream<Uint8Array>({
+            async pull(controller) {
+                await Bun.sleep(1);
+                if (cancelled) return;
+                if (sent++ >= 130) {controller.close(); return;}
+                controller.enqueue(chunk);
+            }, cancel() {cancelled = true;},
+        }), {headers: {"content-type": "application/json"}});
+    }});
+    try {
+        await withTempProject(async cwd => {
+            await expect(connectMcpServer({name: "limit", source: "host", id: "limit", config: {
+                type: "http", url: `http://127.0.0.1:${server.port}/mcp`, disabled: false, timeoutMs: 5000, toolTimeoutMs: 5000,
+            }}, cwd, testChildEnvironment)).rejects.toThrow("128 MiB transport limit");
+            await until(() => cancelled);
+        });
+    } finally {await server.stop(true);}
+}, 10000);
 
 async function httpFixture(json: boolean) {
     const protocol = new Server({name: "http-fixture", version: "1"}, {capabilities: {tools: {listChanged: true}}});

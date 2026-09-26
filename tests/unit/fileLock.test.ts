@@ -47,7 +47,8 @@ test("real processes never overlap and preserve all updates", async()=>{
         const counter=join(cwd,"count"); await writeFile(counter,"0");
         const code=`import {withFileLock} from ${JSON.stringify(source)};import{readFile,writeFile}from'node:fs/promises';for(let i=0;i<15;i++)await withFileLock(${JSON.stringify(join(cwd,"state.lock"))},async()=>{const n=Number(await readFile(${JSON.stringify(counter)},'utf8'));await writeFile(${JSON.stringify(counter)},String(n+1));});`;
         const children=Array.from({length:4},()=>Bun.spawn([process.execPath,"--no-env-file","-e",code],{stdout:"pipe",stderr:"pipe"}));
-        expect(await Promise.all(children.map(child=>child.exited))).toEqual([0,0,0,0]);
+        const results=await Promise.all(children.map(async child=>({code:await child.exited,stderr:await new Response(child.stderr).text()})));
+        expect(results).toEqual(Array.from({length:4},()=>({code:0,stderr:""})));
         expect(await readFile(counter,"utf8")).toBe("60");
     });
 });

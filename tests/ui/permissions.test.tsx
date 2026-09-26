@@ -146,13 +146,23 @@ describe("permission confirmation UI", () => {
       instance.stdin.write("network checks");
       await flush();
       instance.stdin.write(ENTER);
-      await flush();
-      expect(instance.lastFrame()).toContain("first.test:443");
+      const waitForHost = async (host: string) => {
+        const deadline = Date.now() + 1500;
+        while (!instance.lastFrame()?.includes(host) && Date.now() < deadline) await flush(10);
+        expect(instance.lastFrame()).toContain(host);
+        // Ink attaches the new dialog's input handler in an effect after rendering.
+        await flush();
+      };
+      await waitForHost("first.test:443");
       instance.stdin.write(ENTER);
-      await flush();
-      expect(instance.lastFrame()).toContain("second.test:443");
+      await waitForHost("second.test:443");
       instance.stdin.write("2");
-      await done;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([done, new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error("Network decisions did not settle")), 1500);
+        })]);
+      } finally {clearTimeout(timeout);}
       expect(decisions).toEqual([
         {behavior: "allow", networkScope: "session"},
         {behavior: "allow", networkScope: "once"},

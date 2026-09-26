@@ -58,7 +58,9 @@ exec /bin/rm "$@"`,
   --version)
     if [[ "\${TEST_OLD_BUN:-0}" == 1 && ! -e "$HOME/.local/share/hicode/bin/bun" ]]; then echo 1.2.0; else echo 1.3.14; fi ;;
   install) [[ "\${TEST_INSTALL_FAIL:-0}" != 1 ]] ;;
-  */src/index.tsx) [[ "$2" == --help && "\${TEST_START_FAIL:-0}" != 1 ]] && cat "$1" ;;
+  */src/index.tsx)
+    if [[ -n "\${TEST_EXPECT_RG:-}" ]]; then [[ "$(command -v rg)" == "$TEST_EXPECT_RG" ]] || exit 96; fi
+    [[ "$2" == --help && "\${TEST_START_FAIL:-0}" != 1 ]] && cat "$1" ;;
   *) exit 97 ;;
 esac`,
         };
@@ -111,8 +113,9 @@ esac`,
         };
         await publish("v1");
         await run({home, source, publish, runInstalled: async () => {
+            const bundledRg = join(home, ".local/share/hicode/bin/rg");
             const child = Bun.spawn([join(home, ".local/share/hicode/bin/hicode"), "--help"], {
-                cwd: root, env: {HOME: home, PATH: `${bin}:/usr/bin:/bin`}, stdout: "pipe", stderr: "pipe",
+                cwd: root, env: {HOME: home, PATH: "/usr/bin:/bin", TEST_EXPECT_RG: await Bun.file(bundledRg).exists() ? bundledRg : join(bin, "rg")}, stdout: "pipe", stderr: "pipe",
             });
             const [code, output] = await Promise.all([child.exited, new Response(child.stdout).text()]);
             return {code, output};

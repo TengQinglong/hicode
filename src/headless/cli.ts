@@ -10,10 +10,12 @@ export interface HeadlessProcessAdapter {
     onceSigint(listener: SigintListener): void;
 
     onceSigterm(listener: SigintListener): void;
+    onceSighup(listener: SigintListener): void;
 
     removeSigint(listener: SigintListener): void;
 
     removeSigterm(listener: SigintListener): void;
+    removeSighup(listener: SigintListener): void;
 
     setExitCode(code: number): void;
 
@@ -39,11 +41,17 @@ const processAdapter: HeadlessProcessAdapter = {
     onceSigterm(listener) {
         process.once("SIGTERM", listener);
     },
+    onceSighup(listener) {
+        if (process.platform !== "win32") process.once("SIGHUP", listener);
+    },
     removeSigint(listener) {
         process.removeListener("SIGINT", listener);
     },
     removeSigterm(listener) {
         process.removeListener("SIGTERM", listener);
+    },
+    removeSighup(listener) {
+        if (process.platform !== "win32") process.removeListener("SIGHUP", listener);
     },
     setExitCode(code) {
         process.exitCode = code;
@@ -70,6 +78,7 @@ export function createHeadlessCli({
         };
         adapter.onceSigint(onSigint);
         adapter.onceSigterm(onSigterm);
+        adapter.onceSighup(onSigterm);
         try {
             const summary = await runner(options, controller.signal);
             adapter.setExitCode(summary.exitCode);
@@ -84,6 +93,7 @@ export function createHeadlessCli({
         } finally {
             adapter.removeSigint(onSigint);
             adapter.removeSigterm(onSigterm);
+            adapter.removeSighup(onSigterm);
         }
     };
 }

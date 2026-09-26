@@ -11,6 +11,7 @@ import {isBundledSkillFile} from "../../skills/bundled.js";
 export interface CommandReadAccess {
     plan: ReadCommand;
     paths: string[];
+    aliases: Array<{path: string; target: string}>;
     artifacts: string[];
     artifactDirectories: string[];
     deniedPaths: string[];
@@ -31,6 +32,7 @@ export async function prepareCommandReadAccess(command: string, cwd: string, ctx
     // The Host ceiling may be filesystem root; it is not the project supplying untrusted programs.
     const projectRoot = await realpath(ctx.cwd);
     const paths: string[] = [];
+    const aliases = new Map<string, string>();
     const artifacts: string[] = [];
     const artifactDirectories: string[] = [];
     const deniedPaths: string[] = [];
@@ -79,6 +81,7 @@ export async function prepareCommandReadAccess(command: string, cwd: string, ctx
                 try {
                     const canonical = await realpath(existing);
                     paths.push(canonical);
+                    if (existing !== canonical) aliases.set(existing, canonical);
                     // rg reads ancestor ignore files even when the explicit search starts in src/.
                     // Grant only existing regular ignore files inside this Agent's workspace.
                     if (plan.segments.some(segment => segment.program.split("/").at(-1) === "rg")) {
@@ -111,5 +114,5 @@ export async function prepareCommandReadAccess(command: string, cwd: string, ctx
             }
         }
     }
-    return {plan, paths: [...new Set(paths)], artifacts, artifactDirectories, deniedPaths: [...new Set(deniedPaths)], privateRoot, projectRoot};
+    return {plan, paths: [...new Set(paths)], aliases: [...aliases].map(([path, target]) => ({path, target})), artifacts, artifactDirectories, deniedPaths: [...new Set(deniedPaths)], privateRoot, projectRoot};
 }
