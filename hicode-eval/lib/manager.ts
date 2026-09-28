@@ -43,7 +43,9 @@ export class Lab {
       const batch = this.batches.get(state.batchId);
       if (!batch || batch.runIds.indexOf(name) < 0 || batch.tasks[batch.runIds.indexOf(name)] !== state.task) throw Error('Orphan or mismatched run');
       this.runs.set(name, state);
-      if (!done(state.state)) await this.update(name, { state: 'needs_recovery', collection: 'retained', note: 'Service restarted; inspect retained evidence before scheduling more work' });
+      const unstarted = state.state === 'queued' && state.startedAt === undefined &&
+        !await exists(join(this.path(name), 'job.json')) && !await exists(join(this.path(name), 'container.json'));
+      if (!done(state.state) && !unstarted) await this.update(name, { state: 'needs_recovery', collection: 'retained', note: 'Service restarted; inspect retained evidence before scheduling more work' });
     }
     for (const batch of this.batches.values()) if (batch.runIds.some(id => !this.runs.has(id))) throw Error('Batch has missing run evidence');
   }
@@ -124,6 +126,41 @@ export class Lab {
       await save(join(this.config.data, 'batches', id + '.json'), next); this.batches.set(id, next);
     });
     this.submissions = operation.catch(() => {}); await operation;
+  }
+  async resume(id: string): Promise<void> {
+    const operation = this.submissions.then(async () => {
+      const batch = this.batches.get(id);
+      if (!batch) throw Error('Unknown batch');
+      if (this.closed || this.halted || !this.machine || [...this.runs.values()].some(r => r.state === 'needs_recovery'))
+        throw Error('Recover retained runs and initialize the machine before resuming');
+      if (batch.cancelledAt) throw Error('Cancelled batches cannot resume');
+      if (!batch.runIds.some(run => this.runs.get(run)?.state === 'queued')) throw Error('No queued tasks to resume');
+      // Pump only existing queued records. Completed and attempted tasks are never replayed.
+      await this.pump();
+    });
+    this.submissions = operation.catch(() => {}); await operation;
+  }
+  async recover(id: string): Promise<Run> {
+    const operation = this.submissions.then(async () => {
+      const current = this.runs.get(id);
+      if (!current) throw Error('Unknown run');
+      if (this.closed || this.halted || this.jobs.has(id)) throw Error('Recovery unavailable while task or service is active/closing');
+      if (done(current.state) && current.state !== 'needs_recovery') return current;
+      if (current.state !== 'needs_recovery' || !this.machine) throw Error('Task must require recovery and machine must be initialized');
+      const path = this.path(id), before = join(path, 'state.before-recovery.json');
+      if (!await exists(before)) await save(before, current);
+      const result = await this.machine.recover(current, path);
+      const classified = classify(result.execution === 'completed' ? undefined : result.execution,
+        result.grading === 'unavailable' ? null : {reward: result.grading === 'passed' ? 1 : 0});
+      await this.update(id, {state: result.execution === 'cancelled' ? 'cancelled' : classified.state,
+        execution: result.execution, grading: result.grading, collection: 'complete',
+        reward: result.grading === 'unavailable' ? undefined : result.grading === 'passed' ? 1 : 0,
+        note: result.note, finishedAt: current.finishedAt ?? Date.now()/1000});
+      await this.pump();
+      return this.runs.get(id)!;
+    });
+    this.submissions = operation.catch(() => {});
+    return operation;
   }
   batchView(batch: Batch) {
     const runs = batch.runIds.map(id => this.runs.get(id)!);

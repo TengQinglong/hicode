@@ -4,6 +4,8 @@ from pathlib import Path
 from protocol import Events,atomic_json,namespace_argv
 from verifier import verify
 from terminal import capture,settle
+from cleanup import stop_task_processes,finalize_task
+from recovery import process_start
 
 run_id=sys.argv[1]
 if len(run_id)!=16 or any(c not in '0123456789abcdef' for c in run_id):raise ValueError('Invalid run ID')
@@ -36,7 +38,7 @@ for p in [root,project,home,logs,control]:p.mkdir(parents=True,exist_ok=True)
 subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(project),str(home),str(logs),str(control)],check=True)
 os.chown(root,uid,account.pw_gid);os.chmod(root,0o700)
 for p in [project,home,logs,control]:os.chmod(p,0o700)
-atomic_json(root/'identity.json',{'uid':uid,'user':name,'pid':os.getpid(),'run':run_id})
+atomic_json(root/'identity.json',{'version':2,'uid':uid,'user':name,'pid':os.getpid(),'runnerStart':process_start(os.getpid()),'run':run_id})
 
 def demote():
     os.setgroups([]);os.setgid(account.pw_gid);os.setuid(uid)
@@ -56,20 +58,7 @@ socket=str(control/'tmux.sock')
 def tmux(*args,**kwargs):return command(['tmux','-S',socket,*args],**kwargs)
 
 def stop_user():
-    for path in Path('/proc').iterdir():
-        if not path.name.isdigit():continue
-        try:
-            if path.stat().st_uid==uid:os.kill(int(path.name),signal.SIGKILL)
-        except (ProcessLookupError,FileNotFoundError):pass
-    for _ in range(50):
-        alive=False
-        for p in Path('/proc').iterdir():
-            try:
-                if p.name.isdigit() and p.stat().st_uid==uid and p.joinpath('stat').read_text().rsplit(')',1)[1].split()[0]!='Z':alive=True
-            except FileNotFoundError:pass
-        if not alive:return
-        time.sleep(.1)
-    raise RuntimeError('Task processes could not be stopped')
+    stop_task_processes(uid)
 
 terminal_started=False
 model=config['model'];release=config['release'];status='failed';grade='unavailable';events=Events();offset=0
@@ -164,7 +153,6 @@ finally:
         try:capture(tmux,emit)
         except (OSError,RuntimeError,ValueError,subprocess.TimeoutExpired) as error:
             emit('error',message='Final terminal capture failed: '+str(error)[-1000:])
-    stop_user()
     result={'execution':status,'grading':grade,'uid':uid}
-    atomic_json(root/'result.json',result)
+    finalize_task(root,result)
     emit('result',**result)

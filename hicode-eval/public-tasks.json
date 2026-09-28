@@ -10,7 +10,8 @@
       "tests/test_outputs.py": "d6f510b51fafc81b4e9b5cc95535aa13491c8753e0e4171db42c45f4de460ee7"
     },
     "initializer": null,
-    "verifierPrelude": "copy-test-helper"
+    "verifierPrelude": "copy-test-helper",
+    "inputs": []
   },
   "log-summary-date-ranges": {
     "hashes": {
@@ -23,7 +24,8 @@
       "tests/test_outputs.py": "2fc06a6ce1944ad82f84fb437395fa75ed8c0eadd385b92e375c27e5bc9cb2b4"
     },
     "initializer": "log_generator_deterministic.py",
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "inputs": []
   },
   "regex-log": {
     "hashes": {
@@ -34,6 +36,74 @@
       "tests/test.sh": "4770437ea96c3cc84684b4f99d55fb148fcac09f9ea1e8ef49de487716e6c334",
       "tests/test_outputs.py": "345c3bd09ab6f6fe8c8361a58c0a47bf0a13b3fcb38a5ac7824e44ff855e8f72"
     },
+    "initializer": null,
+    "verifierPrelude": "none",
+    "inputs": []
+  },
+  "sqlite-db-truncate": {
+    "hashes": {
+      "environment/Dockerfile": "49ac9305c360f117c10c940b5d036a76fb4a29a0f4302e7d75e573c352db0aea",
+      "environment/trunc.db": "a7f00ee232fe621629dc014eb2619ac793131843ede1fd892f3b8b7e17332a5b",
+      "instruction.md": "465c135cd80be49023ea3ecf8f1d840c679b3a960efe425d510894e417b9d802",
+      "solution/solve.sh": "6aa341ba5e614aa5ef991cdd2d398da1c5833b80123795d7da87ea41da431a04",
+      "task.toml": "8b4c4d2abfe7dc8b7a3bac4567f60c08f7a9219b2cc65df0de7c5ee3d37721d6",
+      "tests/test.sh": "4770437ea96c3cc84684b4f99d55fb148fcac09f9ea1e8ef49de487716e6c334",
+      "tests/test_outputs.py": "8f5bc11018687d8c5894ebf1b4ec6fad004828e5ce442d3cc04d925ef53ef881"
+    },
+    "inputs": [
+      {
+        "source": "environment/trunc.db",
+        "target": "trunc.db"
+      }
+    ],
+    "initializer": null,
+    "verifierPrelude": "none"
+  },
+  "code-from-image": {
+    "hashes": {
+      "environment/Dockerfile": "5bd29db32ea0ef2b5c87c8526d0ac1b102be922dab66510f06439ab9dc84809c",
+      "environment/code.png": "f4d0330407b363a9ef03d563e5c2ffd24aa76345f997613741f9fc0935354305",
+      "instruction.md": "8c3af6483e409defef9786da51f318ae2ca71afe2327b94471d2f0e2e367442c",
+      "solution/solve.sh": "bf3dcc484e6c47b7991cb401b17820cfffa33050265ae86328e4a81be1ee7693",
+      "task.toml": "ccaeb57fa92193f2256f924b32d5c4281e573ae449ef29e44d5e9cba84ef6fca",
+      "tests/test.sh": "4770437ea96c3cc84684b4f99d55fb148fcac09f9ea1e8ef49de487716e6c334",
+      "tests/test_outputs.py": "b9b7cb0033116df88a4807404bf309190f92d62a89df2ce64cdcbf732efe084a"
+    },
+    "inputs": [
+      {
+        "source": "environment/code.png",
+        "target": "code.png"
+      }
+    ],
+    "initializer": null,
+    "verifierPrelude": "none"
+  },
+  "constraints-scheduling": {
+    "hashes": {
+      "environment/Dockerfile": "7d9aba072a4a907229728b9739c8cf821fc2c98450babd64452682caf3759c84",
+      "environment/inputs/alice_calendar.ics": "5a5d45804bffd339c2479d49e76fe817b38244d14d389afe1de583443808ecbc",
+      "environment/inputs/bob_calendar.ics": "c97e85dbcdd756758f8a80f4db5fd5c1dcacee79298e4d2262f46de5ff680b50",
+      "environment/inputs/carol_calendar.ics": "32a0f8687637df0a12b8e5c56d49c4192bc3e790856943632d70f237c7c1363b",
+      "instruction.md": "342def78177f9bc41bea4d11af679bc385a9dda2ac8a1e425be384a5b7f937b6",
+      "solution/solve.sh": "802d81ec064fad3050bbade95a2f847ac24e0b7f80fa69b0bcee0347dc92fe77",
+      "task.toml": "db3d457bcae683d1d0dab33f2a059da9ef30beaa08271d766fae09d1c0054c83",
+      "tests/test.sh": "4770437ea96c3cc84684b4f99d55fb148fcac09f9ea1e8ef49de487716e6c334",
+      "tests/test_outputs.py": "1422b345ba3aacdfc4184e962811b6379988435896c50d8cf62903e70990c5d1"
+    },
+    "inputs": [
+      {
+        "source": "environment/inputs/alice_calendar.ics",
+        "target": "alice_calendar.ics"
+      },
+      {
+        "source": "environment/inputs/bob_calendar.ics",
+        "target": "bob_calendar.ics"
+      },
+      {
+        "source": "environment/inputs/carol_calendar.ics",
+        "target": "carol_calendar.ics"
+      }
+    ],
     "initializer": null,
     "verifierPrelude": "none"
   }

@@ -1,11 +1,12 @@
-import { test, expect } from 'bun:test';
-import { mkdtemp, rm, mkdir, writeFile, symlink, realpath } from 'node:fs/promises';
+import { test, expect, spyOn } from 'bun:test';
+import { mkdtemp, rm, mkdir, readFile, writeFile, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classify, Lab } from '../lib/manager.js';
 import { save, tree } from '../lib/store.js';
 import { runSchema, configSchema, batchSchema } from '../lib/types.js';
 import { serve } from '../lib/server.js';
+import { LinuxMachine } from '../lib/linux.js';
 
 async function fixture() {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'hicode-eval-')));
@@ -133,4 +134,72 @@ test('new batches default to thirty minutes and preserve an explicit budget', as
   const { budgetSchema } = await import('../lib/types.js');
   expect(budgetSchema.parse({}).agentSeconds).toBe(1800);
   expect(budgetSchema.parse({agentSeconds: 2400}).agentSeconds).toBe(2400);
+});
+
+
+test('restart preserves unstarted queue; explicit resume does not replay completed tasks', async () => {
+  const f = await fixture(), previous = finished();
+  const queued = runSchema.parse({ ...previous, id: '1111111111111111', task: 'beta', state: 'queued', execution: 'pending', grading: 'pending', collection: 'pending' });
+  const prepare = spyOn(LinuxMachine.prototype, 'prepare').mockResolvedValue(undefined);
+  const execute = spyOn(LinuxMachine.prototype, 'execute').mockResolvedValue({type: 'result', execution: 'completed', grading: 'passed', uid: 20001});
+  let lab: Lab | undefined;
+  try {
+    await persist(f, previous);
+    await save(join(f.dir, 'batches', previous.batchId+'.json'), {version:1,id:previous.batchId,name:'fixture',budget:f.config.budget,tasks:['alpha','beta'],runIds:[previous.id,queued.id],concurrency:1,createdAt:1,model:f.config.model,payload:{}});
+    await save(join(f.dir, 'runs', queued.id, 'state.json'), queued);
+    await mkdir(join(f.dir, 'runs', queued.id, 'task/beta'), {recursive:true});
+    await save(join(f.dir, 'runs', queued.id, 'task-files.json'), {});
+    await save(join(f.config.payload, 'manifest.json'), {});
+    lab=new Lab(f.config,'fake');await lab.init();
+    expect(lab.runs.get(queued.id)?.state).toBe('queued');
+    expect(execute).not.toHaveBeenCalled();
+    await expect(lab.resume(previous.batchId)).rejects.toThrow('initialize');
+    await lab.prepareMachine();await lab.resume(previous.batchId);
+    for (let i=0;i<100&&lab.runs.get(queued.id)?.state!=='passed';i++) await Bun.sleep(5);
+    expect(lab.runs.get(queued.id)?.state).toBe('passed');
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[0].id).toBe(queued.id);
+    expect(lab.runs.get(previous.id)).toEqual(previous);
+  } finally {await lab?.close();prepare.mockRestore();execute.mockRestore();await f.cleanup();}
+});
+
+test('a queued record with execution evidence requires recovery and cannot resume', async () => {
+  const f=await fixture(), queued=runSchema.parse({...finished(),state:'queued',execution:'pending',grading:'pending'});
+  const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined);
+  let lab:Lab|undefined;
+  try {
+    await persist(f,queued);await save(join(f.dir,'runs',queued.id,'job.json'),{});
+    lab=new Lab(f.config,'fake');await lab.init();await lab.prepareMachine();
+    expect(lab.runs.get(queued.id)?.state).toBe('needs_recovery');
+    await expect(lab.resume(queued.batchId)).rejects.toThrow('Recover');
+  } finally {await lab?.close();prepare.mockRestore();await f.cleanup();}
+});
+
+test('single-run recovery is serialized, idempotent, and exposed through the existing API', async () => {
+  const f=await fixture(), previous=runSchema.parse({...finished(),state:'needs_recovery',execution:'failed',grading:'pending',collection:'retained',note:'cleanup failed'});
+  const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined);
+  const recover=spyOn(LinuxMachine.prototype,'recover').mockResolvedValue({type:'result',execution:'completed',grading:'passed',uid:20001,note:'recovered without rerun'});
+  let lab:Lab|undefined,server:ReturnType<typeof serve>|undefined;
+  try {
+    await persist(f,previous);lab=new Lab(f.config,'fake');await lab.init();await lab.prepareMachine();
+    const [a,b]=await Promise.all([lab.recover(previous.id),lab.recover(previous.id)]);
+    expect(a.state).toBe('passed');expect(b.state).toBe('passed');expect(recover).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(await readFile(join(f.dir,'runs',previous.id,'state.before-recovery.json'),'utf8'))).toEqual(previous);
+    server=serve(lab,0);const {Client}=await import('../lib/client.js');
+    await new Client(server.port!).request('recover-run',{run:previous.id});
+    expect(recover).toHaveBeenCalledTimes(1);
+  } finally {server?.stop(true);await lab?.close();prepare.mockRestore();recover.mockRestore();await f.cleanup();}
+});
+
+test('failed recovery retains its blocked state and does not fabricate a score', async () => {
+  const f=await fixture(), previous=runSchema.parse({...finished(),state:'needs_recovery',execution:'failed',grading:'pending',collection:'retained'});
+  const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined);
+  const recover=spyOn(LinuxMachine.prototype,'recover').mockRejectedValue(Error('Runner is still alive'));
+  let lab:Lab|undefined;
+  try {
+    await persist(f,previous);lab=new Lab(f.config,'fake');await lab.init();await lab.prepareMachine();
+    await expect(lab.recover(previous.id)).rejects.toThrow('still alive');
+    expect(lab.runs.get(previous.id)).toEqual(previous);
+    expect(lab.batchView(lab.batches.get(previous.batchId)!).state).toBe('blocked');
+  } finally {await lab?.close();prepare.mockRestore();recover.mockRestore();await f.cleanup();}
 });

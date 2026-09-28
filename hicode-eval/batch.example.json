@@ -1,11 +1,14 @@
 {
-  "name": "Terminal-Bench \u00b7 Python and regex",
+  "name": "Terminal-Bench · Six public tasks",
   "tasks": [
     "cancel-async-tasks",
     "log-summary-date-ranges",
-    "regex-log"
+    "regex-log",
+    "sqlite-db-truncate",
+    "code-from-image",
+    "constraints-scheduling"
   ],
-  "concurrency": 2,
+  "concurrency": 3,
   "budget": {
     "agentSeconds": 1800
   }

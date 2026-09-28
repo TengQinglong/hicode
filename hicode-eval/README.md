@@ -4,7 +4,7 @@
 
 在一台长期运行的 Linux 容器中，批量测试 HiCode 完成公开编程任务的能力。CLI 提交任务，网页查看完整 TUI 和进度，结束后自动运行原题测试并保存日志。每题独立尝试一次，不追加纠错提示、不自动重跑。
 
-目前适配 Terminal-Bench 2.0 的 **3 道题**：`cancel-async-tasks`、`log-summary-date-ranges`、`regex-log`。其余 86 题仍需逐题适配，不能直接提交。此工具用于研发回归；共享系统、ARM64 环境和可调时限与官方环境存在差异，结果不等同于官方榜单成绩。
+目前适配 Terminal-Bench 2.0 的 **6 道题**：`cancel-async-tasks`、`log-summary-date-ranges`、`regex-log`、`sqlite-db-truncate`、`code-from-image`、`constraints-scheduling`。其余 83 题仍需逐题适配，不能直接提交。此工具用于研发回归；共享系统、ARM64 环境和可调时限与官方环境存在差异，结果不等同于官方榜单成绩。
 
 ## 1. 准备环境与数据
 
@@ -49,7 +49,7 @@ bash hicode-eval/eval.sh serve \
   --payload ../hicode-eval-data/payload-v1 \
   --docker-context colima-hicode \
   --machine hicode-eval-linux \
-  --concurrency 2
+  --concurrency 3
 ```
 
 服务先部署固定源码，依赖未变时复用生产依赖，否则只在此阶段安装一次。出现服务地址后打开 **http://127.0.0.1:8878**。网页只负责查看；保留服务终端，在另一个终端提交：
@@ -61,13 +61,15 @@ bash hicode-eval/eval.sh status --batch BATCH_ID
 bash hicode-eval/eval.sh wait --batch BATCH_ID --wait-seconds 30
 ```
 
-将 `BATCH_ID` 替换为提交返回的 ID。示例批次包含上述 3 题，并发 2、每题 30 分钟。修改批次文件的 `tasks`、`concurrency`、`budget.agentSeconds` 即可调整；并发最多 3，不能超过服务上限；时限为 30–7200 秒。实际预算和原题预算均会记录，加长时限属于研发评测条件。
+将 `BATCH_ID` 替换为提交返回的 ID。示例批次包含上述 6 题，并发 3、每题 30 分钟。修改批次文件的 `tasks`、`concurrency`、`budget.agentSeconds` 即可调整；并发最多 3，不能超过服务上限；时限为 30–7200 秒。实际预算和原题预算均会记录，加长时限属于研发评测条件。
 
 `--source` 和 `--model` 可成对覆盖已配置模型；自定义连接使用 `--model-config`。更换端口时，所有 CLI 命令都传同一个 `--port`。同一评测机只运行一个服务，不在任务期间部署另一个版本。
 
 CLI 可由人或 Codex 等工具操作，**不依赖 Codex 做调度或判题**。真实任务调用配置的模型并产生费用，离线测试不调用模型。
 
 ## 判题、日志与停止
+
+新增题目的数据库、图片和日历按 `public-tasks.json` 中的 `inputs` 清单精确复制并校验哈希，不复制整个题目目录。图片题需要模型显式支持图片输入。
 
 执行完成后自动上传原题测试并判题；执行期间不向 Agent 提供测试或参考解。使用原测试断言及 pytest 参数，把原 `test.sh` 的安装步骤移到环境准备阶段。`cancel-async-tasks` 还保留原测试辅助文件的复制步骤。
 
@@ -88,6 +90,8 @@ CLI 可由人或 Codex 等工具操作，**不依赖 Codex 做调度或判题**�
     verification.txt          原题测试输出
     evidence/                 代码、Home、日志等现场
     collection.json           导出校验记录
+    evidence/outcome.json     清理前保存的执行/判题事实
+    evidence/result.json      清理确认后的最终回执
 
 Linux 数据卷：/eval/runs/<run-id>/
 Linux 运行版本与依赖：/opt/hicode/
@@ -95,9 +99,19 @@ Linux 运行版本与依赖：/opt/hicode/
 
 事件与画面持续传回，完整现场每 30 秒尝试复制到宿主，结束时再次收集。突然关闭机器可能丢失尚未导出的内容；保留数据卷检查。日志可能含源码、提示词和工具输出，分享前需脱敏。
 
-关闭网页不影响任务。Ctrl+C 关闭评测服务会取消当前任务；`bash .devcontainer/linux.sh eval-stop` 停止整台评测机，保留数据卷。服务重启不自动重跑或接续旧题；发现未完成现场会停止新调度，需先核查现场。
+关闭网页不影响任务。Ctrl+C 关闭评测服务会取消当前任务；`bash .devcontainer/linux.sh eval-stop` 停止整台评测机，保留数据卷。服务重启不自动重跑或接续已执行的题；从未启动且无执行痕迹的题保留排队，发现其他未完成现场会停止新调度，需先核查现场。确认异常任务已收尾后，可用 `bash hicode-eval/eval.sh resume --batch BATCH_ID` 显式恢复现有排队调度；此命令不清除异常、不重跑已完成题。
 
 取消指定批次：`bash hicode-eval/eval.sh cancel --batch BATCH_ID`。跑完后可让 Codex 读取日志做复盘；可选的 `report --batch BATCH_ID --file report.md` 仅保存人工或外部分析，不调用模型、不改判分。
+
+若任务因清理或收集失败停在 `needs_recovery`，保持服务运行后执行：
+
+```bash
+bash hicode-eval/eval.sh recover --run RUN_ID
+```
+
+恢复会核验任务身份、原进程已退出、完成事件和判题证据，只清理该题残留进程，重新导出现场并更新原记录；不调用模型、不重新判题、不停止其他题。证据不足或不一致时拒绝恢复并保留现场。重复执行不会重复做题；恢复成功后继续调度已有队列。恢复前状态保存为 `state.before-recovery.json`，核验回执保存为 `evidence/recovery.json`。
+
+网页固定在当前窗口内，任务列表与终端历史分别滚动；调整窗口高度会改变终端可见行数，不会重播输出。
 
 ## 扩充题目与开发验证
 

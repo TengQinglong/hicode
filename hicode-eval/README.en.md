@@ -4,7 +4,7 @@
 
 Run public programming tasks through HiCode on a persistent Linux container. Submit batches from the CLI, watch the full TUI in a browser, and automatically collect test results and logs. Each task gets one independent attempt, with no corrective follow-up prompts or automatic retries.
 
-Currently supports **3 Terminal-Bench 2.0 tasks**: `cancel-async-tasks`, `log-summary-date-ranges`, and `regex-log`. The remaining 86 tasks require individual adaptation and cannot be submitted yet. This is a development regression tool: the shared system, ARM64 environment, and configurable time limits differ from official benchmark conditions. Results are not official leaderboard scores.
+Currently supports **6 Terminal-Bench 2.0 tasks**: `cancel-async-tasks`, `log-summary-date-ranges`, `regex-log`, `sqlite-db-truncate`, `code-from-image`, and `constraints-scheduling`. The remaining 83 tasks require individual adaptation and cannot be submitted yet. This is a development regression tool: the shared system, ARM64 environment, and configurable time limits differ from official benchmark conditions. Results are not official leaderboard scores.
 
 ## 1. Prepare the environment and dataset
 
@@ -49,7 +49,7 @@ bash hicode-eval/eval.sh serve \
   --payload ../hicode-eval-data/payload-v1 \
   --docker-context colima-hicode \
   --machine hicode-eval-linux \
-  --concurrency 2
+  --concurrency 3
 ```
 
 Startup deploys the fixed source release. Production dependencies are reused when unchanged, or installed once at this stage. Once the address appears, open **http://127.0.0.1:8878**. The web interface is read-only. Keep the server terminal open and submit from a second terminal:
@@ -61,13 +61,15 @@ bash hicode-eval/eval.sh status --batch BATCH_ID
 bash hicode-eval/eval.sh wait --batch BATCH_ID --wait-seconds 30
 ```
 
-Replace `BATCH_ID` with the ID returned on submission. The example runs all three supported tasks, with concurrency 2 and 30 minutes per task. Adjust `tasks`, `concurrency`, and `budget.agentSeconds` in the batch file as needed. Concurrency is capped at 3 and cannot exceed the service limit; task budgets range from 30 to 7200 seconds. Actual and original task budgets are recorded separately; extended budgets are development evaluation conditions.
+Replace `BATCH_ID` with the ID returned on submission. The example runs all six supported tasks, with concurrency 3 and 30 minutes per task. Adjust `tasks`, `concurrency`, and `budget.agentSeconds` in the batch file as needed. Concurrency is capped at 3 and cannot exceed the service limit; task budgets range from 30 to 7200 seconds. Actual and original task budgets are recorded separately; extended budgets are development evaluation conditions.
 
 Use `--source` and `--model` together to override a configured model, or `--model-config` for an explicit connection. If changing the port, pass the same `--port` to every CLI command. Run only one service per evaluation machine, and do not deploy another version while tasks are active.
 
 A person or an agent such as Codex can operate the CLI. **Scheduling and grading do not depend on Codex.** Real tasks incur usage charges from your configured model provider; offline tests do not call a model.
 
 ## Grading, logs, and shutdown
+
+Database, image, and calendar inputs are copied individually from the reviewed `inputs` manifest in `public-tasks.json` and verified by hash, rather than copying the entire task directory. The image task requires a model with explicit image input support.
 
 Original tests are uploaded and run after execution finishes; the Agent does not receive tests or reference solutions during its attempt. The verifier preserves the original assertions and pytest arguments, moving installation steps from `test.sh` into environment preparation. `cancel-async-tasks` also retains the original test helper copy step.
 
@@ -88,6 +90,8 @@ Host <data-dir>/
     verification.txt          Original test output
     evidence/                 Code, home directory, and logs
     collection.json           Export checksums
+    evidence/outcome.json     Execution/grading facts before cleanup
+    evidence/result.json      Final receipt after confirmed cleanup
 
 Linux data volume: /eval/runs/<run-id>/
 Linux source releases and dependencies: /opt/hicode/
@@ -95,9 +99,19 @@ Linux source releases and dependencies: /opt/hicode/
 
 Events and screens stream back continuously; full evidence collection is attempted every 30 seconds and again at completion. Abrupt machine shutdown can lose evidence not yet exported; retain the volume for inspection. Logs may contain source code, prompts, and tool output. Redact them before sharing.
 
-Closing the browser does not stop tasks. Ctrl+C in the service terminal cancels active tasks. `bash .devcontainer/linux.sh eval-stop` stops the evaluation machine while preserving its volume. Restarting the service does not resume or rerun old attempts; unfinished evidence blocks new scheduling until inspected.
+Closing the browser does not stop tasks. Ctrl+C in the service terminal cancels active tasks. `bash .devcontainer/linux.sh eval-stop` stops the evaluation machine while preserving its volume. Restarting the service does not resume or rerun attempted tasks. Unstarted tasks without execution evidence remain queued; other unfinished evidence blocks scheduling until inspected. After recovery, use `bash hicode-eval/eval.sh resume --batch BATCH_ID` to explicitly continue queued scheduling. This command does not clear errors or rerun completed tasks.
 
 Cancel a batch with `bash hicode-eval/eval.sh cancel --batch BATCH_ID`. After completion, optionally ask Codex to inspect the logs. `report --batch BATCH_ID --file report.md` stores an external analysis only; it does not call a model or change grading.
+
+If cleanup or collection leaves a task in `needs_recovery`, keep the service running and execute:
+
+```bash
+bash hicode-eval/eval.sh recover --run RUN_ID
+```
+
+Recovery checks task identity, runner termination, completion events, and grading evidence. It cleans up only that task's remaining processes, exports evidence again, and reconciles the original record without invoking the model, rerunning the verifier, or stopping other tasks. Missing or inconsistent evidence blocks recovery and preserves the scene. Repeated calls do not repeat the attempt; successful recovery resumes existing queued work. The prior state is saved as `state.before-recovery.json`, and the evidence receipt as `evidence/recovery.json`.
+
+The viewer fits the window, with separate scrolling for the task list and terminal history. Resizing changes visible terminal rows without replaying output.
 
 ## Extending and validating
 

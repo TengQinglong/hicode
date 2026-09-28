@@ -2,7 +2,7 @@ import { mkdir, appendFile, rename, rm, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { validatePublicTask, taskSchema } from './publicTasks.js';
+import { validatePublicTask, prepareTaskInputs, taskSchema } from './publicTasks.js';
 import { run, readJson, save, tree, exists } from './store.js';
 import type { Config, Run } from './types.js';
 const ROOT = resolve(import.meta.dir, '..');
@@ -31,7 +31,7 @@ export class LinuxMachine {
     const hash = createHash('sha256').update(archive).digest('hex');
     if (manifest.files['source.tar.gz'] !== hash) throw Error('Source payload changed');
     await run(this.docker('exec', this.config.machine, 'mkdir', '-p', '/opt/hicode-eval', '/opt/hicode/releases', '/eval/runs'));
-    for (const name of ['runner.py', 'terminal.py', 'verifier.py', 'protocol.py', 'record.py', 'preflight.ts', 'bootstrap.py']) await run(this.docker('cp', join(ROOT, 'container', name), this.config.machine + ':/opt/hicode-eval/' + name));
+    for (const name of ['runner.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'record.py', 'preflight.ts', 'bootstrap.py']) await run(this.docker('cp', join(ROOT, 'container', name), this.config.machine + ':/opt/hicode-eval/' + name));
     const target = '/opt/hicode-eval/source-' + hash + '.tar.gz';
     await run(this.docker('cp', join(this.config.payload, 'source.tar.gz'), this.config.machine + ':' + target));
     this.release = await run(this.docker('exec', this.config.machine, 'python3', '/opt/hicode-eval/bootstrap.py', target, hash), { timeout: 660000 });
@@ -45,16 +45,30 @@ export class LinuxMachine {
     await run(this.docker('cp', this.config.machine + ':/eval/runs/' + id + '/.', stage), { timeout: 60000 });
     const files = await tree(stage);
     const previous = join(path, 'evidence.previous');
+    // A prior interrupted rotation may have left both generations. The new stage
+    // has been fully validated before replacing either one.
+    if (await exists(previous) && await exists(join(path, 'evidence'))) await rm(previous, {recursive: true});
     if (await exists(join(path, 'evidence'))) await rename(join(path, 'evidence'), previous);
     await rename(stage, join(path, 'evidence')); await rm(previous, { recursive: true, force: true });
     await save(join(path, 'collection.json'), { complete: true, files });
+  }
+  async recover(state: Run, path: string): Promise<LinuxResult> {
+    if (!this.release || state.state !== 'needs_recovery') throw Error('Task is not eligible for recovery');
+    const output = await run(this.docker('exec', this.config.machine, 'python3', '/opt/hicode-eval/recovery.py', state.id), {timeout: 30000});
+    const result = packetSchema.parse({ ...JSON.parse(output), type: 'result' });
+    if (result.type !== 'result') throw Error('Invalid recovery result');
+    await this.collect(state.id, path);
+    return { ...result, note: 'Recovered from verified durable evidence; no Agent or verifier rerun.' };
   }
   async execute(state: Run, path: string, credential: string, onPhase: (phase: string) => Promise<void>): Promise<LinuxResult> {
     if (!this.release) throw Error('Evaluation machine not initialized');
     const remote = '/eval/runs/' + state.id;
     const task = join(path, 'task', state.task);
-    await run(this.docker('exec', this.config.machine, 'mkdir', '-p', remote + '/project'));
+    const inputs = join(path, 'inputs');
     const profile = await validatePublicTask(state.task, task);
+    await prepareTaskInputs(task, inputs, profile);
+    await run(this.docker('exec', this.config.machine, 'mkdir', '-p', remote + '/project'));
+    await run(this.docker('cp', inputs + '/.', this.config.machine + ':' + remote + '/project/'));
     if (profile.initializer) await run(this.docker('cp', join(task, 'environment', profile.initializer), this.config.machine + ':' + remote + '/project/' + profile.initializer));
     await run(this.docker('cp', join(task, 'instruction.md'), this.config.machine + ':' + remote + '/instruction.md'));
     const spec = taskSchema.parse(Bun.TOML.parse(await Bun.file(join(task, 'task.toml')).text()));
