@@ -4,7 +4,11 @@
     "src/**/*.ts",
     "src/**/*.tsx",
     "tooling/**/*.ts",
-    "tooling/**/*.tsx"
+    "tooling/**/*.tsx",
+    "hicode-eval/**/*.ts"
   ],
-  "exclude": ["tests/**"]
+  "exclude": [
+    "tests/**",
+    "hicode-eval/container/**"
+  ]
 }

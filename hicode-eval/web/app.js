@@ -1,0 +1,74 @@
+'use strict';
+const $=id=>document.getElementById(id);
+const terminal=new Terminal({cols:140,rows:40,disableStdin:true,scrollback:20000,fontSize:12,
+  fontFamily:'Menlo, Consolas, monospace',minimumContrastRatio:4.5,
+  theme:{background:'#ffffff',foreground:'#303b49',cursor:'#087f72',cursorAccent:'#ffffff',
+    selectionBackground:'#d3e6df',selectionForeground:'#162d32',
+    black:'#303b49',red:'#b54549',green:'#087568',yellow:'#8a650c',blue:'#2565a6',magenta:'#8752a1',cyan:'#147a88',white:'#687487',
+    brightBlack:'#687487',brightRed:'#c33742',brightGreen:'#087f72',brightYellow:'#946b00',brightBlue:'#286ec0',brightMagenta:'#9554b3',brightCyan:'#087d91',brightWhite:'#465366'},
+  allowProposedApi:false});
+// Measure the terminal while visible; it remains hidden until a snapshot is available.
+$('terminal-shell').hidden=false;
+terminal.open($('terminal'));
+$('terminal-shell').hidden=true;
+// The viewer never services clipboard/title/window commands originating in task output.
+for(const code of [0,1,2,52])terminal.parser.registerOscHandler(code,()=>true);
+let selected=null,selectedBatch=null,revision='',generation=0,timer=null,refreshPending=false,ticking=false;
+function refresh(){if(ticking){refreshPending=true;return;}clearTimeout(timer);void tick();}
+const label={pending:'待处理',completed:'正常完成',timeout:'超时',cancelled:'已取消',failed:'失败',passed:'通过',unavailable:'无有效判分',complete:'已回收',retained:'现场保留'};
+const names={queued:'排队',preparing:'准备环境',running:'执行中',waiting_for_approval:'等待审批',verifying:'自动判题',passed:'通过',failed:'未通过',error:'运行异常',cancelled:'已取消',cancelling:'正在停止',needs_recovery:'待回收数据',finished:'已结束',blocked:'调度暂停'};
+async function api(path){
+  let r=await fetch('/api/'+path);
+  if(r.status===403){await fetch('/');r=await fetch('/api/'+path);}
+  const x=await r.json();if(!r.ok)throw Error(x.error||'请求失败');return x;
+}
+function choose(id){if(selected===id)return;selected=id;revision='';generation++;terminal.reset();$('terminal-shell').hidden=true;$('terminal-empty').hidden=false;$('terminal-empty').textContent='正在读取任务记录…';$('preparation-panel').open=false;}
+function button(title,meta,active,onclick){const b=document.createElement('button');b.className='run'+(active?' active':'');const t=document.createElement('b');t.textContent=title;const m=document.createElement('small');m.textContent=meta;b.append(t,m);b.onclick=onclick;return b;}
+function cards(values){return values.map(([name,value])=>{const card=document.createElement('div');const number=document.createElement('strong');number.textContent=value;const text=document.createElement('span');text.textContent=name;card.append(number,text);return card;});}
+async function tick(){if(ticking)return;ticking=true;try{
+  const data=await api('status');$('connection').textContent=data.schedulingBlocked?'调度暂停 · 请检查异常记录':'已连接 · 并发上限 '+data.concurrency;$('error').textContent='';
+  if(!data.batches.some(b=>b.id===selectedBatch)){selectedBatch=data.batches[0]?.id||null;choose(null);}
+  const batch=data.batches.find(b=>b.id===selectedBatch);
+  if(batch){
+    $('batch-title').textContent=batch.name;
+    $('batch-detail').textContent=batch.id+' · '+batch.model.model+' · 并发 '+batch.concurrency+' · '+('每题 '+batch.budget.agentSeconds/60+' 分钟上限')+' · 版本 '+String(batch.payload.commit||'未知').slice(0,8)+(batch.payload.worktree_overlay?.length?'（含工作区改动）':'');
+    const c=batch.counts;$('summary').replaceChildren(...cards([['已完成',c.completed+'/'+c.total],['运行中',c.active],['排队',c.queued],['通过',c.passed],['未通过',c.failed],['异常',c.errors],['取消',c.cancelled]]));
+    const runs=data.runs.filter(r=>r.batchId===batch.id);
+    if(!runs.some(r=>r.id===selected))choose(runs.find(r=>['running','preparing'].includes(r.displayState))?.id||runs[0]?.id||null);
+  }else{
+    $('batch-title').textContent='还没有评测批次';$('batch-detail').textContent='提交题目清单后，在这里查看执行过程和判题结果。';
+    $('summary').replaceChildren();$('title').textContent='选择任务查看执行过程';$('detail').textContent='';$('statuses').replaceChildren();$('terminal-status').textContent='';$('attach').textContent='';$('preparation').textContent='尚未开始。';$('terminal-empty').textContent='提交批次后，任务会依次运行并自动判题。';
+  }
+  $('batches').replaceChildren(...data.batches.map(b=>{
+    const group=document.createElement('div');
+    group.append(button(b.name,new Date(b.createdAt*1000).toLocaleString()+' · '+b.counts.completed+'/'+b.counts.total+' · '+names[b.state],b.id===selectedBatch,()=>{selectedBatch=b.id;choose(null);refresh();}));
+    if(b.id===selectedBatch){
+      const tasks=document.createElement('div');tasks.className='task-tree';
+      tasks.append(...data.runs.filter(r=>r.batchId===b.id).map(r=>button(r.task,names[r.displayState]||r.displayState,r.id===selected,()=>{choose(r.id);refresh();})));
+      group.append(tasks);
+    }
+    return group;
+  }));
+  const run=data.runs.find(r=>r.id===selected);
+  if(run){
+    const finished=['passed','failed','error','cancelled','needs_recovery'].includes(run.state);
+    $('terminal-status').textContent=finished?'任务已结束 · 判题'+(label[run.grading]||run.grading)+' · 下方为保存的终端画面':run.state==='verifying'?'Agent 已停止作答，正在自动判题。':'终端实时更新';
+    $('attach').textContent='证据目录：'+run.evidencePath+'\n'+(finished?'任务已结束；当前显示保存的终端内容。':run.container?.attach||'容器尚未启动');
+    $('title').textContent=run.task;$('detail').textContent=run.id+' · '+(run.note||names[run.displayState]||'正在准备');
+    $('statuses').replaceChildren(...[['执行',run.execution],['判题',run.grading],['数据',run.collection]].map(([name,value])=>{const e=document.createElement('span');e.textContent=name+' · '+(label[value]||value);e.dataset.state=value;return e;}));
+    $('preparation-title').textContent='执行阶段 · '+(run.preparation?.phase||'等待开始');
+    if($('terminal-shell').hidden){$('terminal-empty').textContent=run.state==='queued'?'正在排队，前面的任务结束后自动开始。':run.state==='preparing'?'正在准备工作目录和运行环境。':finished?'没有保存的终端画面，可展开证据目录检查日志。':'等待终端输出…';}
+    const current=generation, id=selected;
+    const prep=await api('preparation?run='+id);
+    if(current===generation){const text=(prep.truncated?'（仅展示末尾日志，完整内容已保存）\n':'')+prep.text;if($('preparation').textContent!==text)$('preparation').textContent=text||'暂无准备日志。';}
+    const packet=await api('terminal?run='+id+'&revision='+encodeURIComponent(revision));
+    if(current===generation&&packet.screen!==undefined){
+      const old=terminal.buffer.active;const bottom=old.viewportY>=old.baseY;const scroll=old.viewportY;
+      const visible=Boolean(packet.screen.trim());$('terminal-shell').hidden=!visible;$('terminal-empty').hidden=visible;
+      terminal.reset();
+      await new Promise(resolve=>terminal.write(packet.screen.replace(/\r?\n/g,'\r\n'),resolve));
+      if(current===generation){revision=packet.revision;if(bottom)terminal.scrollToBottom();else terminal.scrollToLine(scroll);}
+    }
+  }
+}catch(e){$('connection').textContent='连接暂不可用';$('error').textContent=e.message;}finally{ticking=false;if(refreshPending){refreshPending=false;void tick();}else timer=setTimeout(tick,1500);}}
+tick();

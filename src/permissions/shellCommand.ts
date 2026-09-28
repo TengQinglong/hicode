@@ -88,37 +88,157 @@ const READ_ONLY_GIT_SUBCOMMANDS = new Set([
     "describe", "diff", "grep", "log", "ls-files", "rev-parse", "show", "status",
 ]);
 
-/**
- * Detect an unquoted shell background operator. `&&` and redirections such as
- * `&>`/`>&` are not background execution; quoted or escaped ampersands are
- * literal data. BashTool rejects this syntax because background processes must
- * be owned by TaskRuntime instead of escaping through an ordinary shell call.
- */
+/** This syntax guard is not a permission parser or a process-isolation boundary. */
 export function hasShellBackgroundOperator(command: string): boolean {
-    let quote: "single" | "double" | undefined;
-    for (let index = 0; index < command.length; index += 1) {
-        const char = command[index];
-        if (char === "\\" && quote !== "single") {
-            index += 1;
-            continue;
-        }
-        if (char === "'" && quote !== "double") {
-            quote = quote === "single" ? undefined : "single";
-            continue;
-        }
-        if (char === '"' && quote !== "single") {
-            quote = quote === "double" ? undefined : "double";
-            continue;
-        }
-        if (char !== "&" || quote) continue;
+    function scan(text: string, expansionsOnly = false): boolean {
+        let index = 0;
+        let background = false;
+        type HereDoc = {delimiter: string; quoted: boolean; stripTabs: boolean};
 
-        const previous = command[index - 1];
-        const next = command[index + 1];
-        if (previous === "&" || next === "&") continue;
-        if (previous === ">" || next === ">") continue;
-        return true;
+        function quoted(quote: "'" | '"', ansi = false): void {
+            index++;
+            while (index < text.length) {
+                if (text[index] === quote) { index++; return; }
+                if (text[index] === "\\" && (quote === '"' || ansi)) {
+                    // Within double quotes only these characters can be escaped.
+                    if (ansi || /[$`"\\\n]/.test(text[index + 1] ?? "")) { index += 2; continue; }
+                }
+                if (quote === '"' && expansion()) continue;
+                index++;
+            }
+        }
+
+        function arithmetic(): void {
+            let depth = 2;
+            index += 2;
+            while (index < text.length && depth > 0) {
+                if (expansion()) continue;
+                const char = text[index];
+                if (char === "'" || char === '"') { quoted(char); continue; }
+                if (char === "\\") { index += 2; continue; }
+                if (char === "(") depth++;
+                if (char === ")") depth--;
+                index++;
+            }
+        }
+
+        function parameter(): void {
+            index += 2;
+            let depth = 1;
+            while (index < text.length && depth > 0) {
+                if (expansion()) continue;
+                const char = text[index];
+                if (char === "'" || char === '"') { quoted(char); continue; }
+                if (char === "\\") { index += 2; continue; }
+                if (char === "{") depth++;
+                if (char === "}") depth--;
+                index++;
+            }
+        }
+
+        function expansion(): boolean {
+            if (text.startsWith("$((", index)) { index++; arithmetic(); return true; }
+            if (text.startsWith("$(", index)) { index += 2; shell(")"); return true; }
+            if (text.startsWith("${", index)) { parameter(); return true; }
+            if (text[index] === "`") { index++; shell("`"); return true; }
+            return false;
+        }
+
+        function hereDoc(): HereDoc | undefined {
+            index += 2;
+            const stripTabs = text[index] === "-";
+            if (stripTabs) index++;
+            while (text[index] === " " || text[index] === "\t") index++;
+            let delimiter = "", quote: "'" | '"' | undefined, wasQuoted = false, started = false;
+            while (index < text.length) {
+                const char = text[index]!;
+                if (!quote && (text.startsWith("$'", index) || text.startsWith('$"', index))) {
+                    throw new SyntaxError("Use a plain or simply quoted heredoc delimiter");
+                }
+                if (!quote && /[ \t\n;|&<>()]/.test(char)) break;
+                started = true;
+                if ((char === "'" || char === '"') && (!quote || quote === char)) {
+                    wasQuoted = true; quote = quote ? undefined : char; index++; continue;
+                }
+                if (char === "\\" && quote !== "'") {
+                    const next = text[index + 1];
+                    if (next !== undefined && (!quote || /[$`"\\\n]/.test(next))) {
+                        wasQuoted = true; index += 2;
+                        if (next !== "\n") delimiter += next;
+                        continue;
+                    }
+                }
+                delimiter += char; index++;
+            }
+            return started ? {delimiter, quoted: wasQuoted, stripTabs} : undefined;
+        }
+
+        function bodies(documents: HereDoc[]): void {
+            for (const doc of documents) {
+                let body = "", terminated = false;
+                while (index < text.length) {
+                    let line = "";
+                    for (;;) {
+                        const end = text.indexOf("\n", index);
+                        const part = text.slice(index, end < 0 ? text.length : end);
+                        index = end < 0 ? text.length : end + 1;
+                        line += part;
+                        // Unquoted heredocs join escaped newlines before checking the delimiter.
+                        const slashes = /\\+$/.exec(part)?.[0].length ?? 0;
+                        if (!doc.quoted && end >= 0 && slashes % 2 === 1) { line = line.slice(0, -1); continue; }
+                        break;
+                    }
+                    if ((doc.stripTabs ? line.replace(/^\t+/, "") : line) === doc.delimiter) { terminated = true; break; }
+                    body += line + "\n";
+                }
+                if (!terminated) throw new SyntaxError("Heredoc terminator is missing or unsupported");
+                if (!doc.quoted && scan(body, true)) background = true;
+            }
+        }
+
+        function shell(stop?: ")" | "`"): void {
+            const documents: HereDoc[] = [];
+            let wordStart = true;
+            while (index < text.length && !background) {
+                const char = text[index]!;
+                if (char === stop) { index++; return; }
+                if (char === "\\") {
+                    if (text[index + 1] !== "\n") wordStart = false;
+                    index += 2; continue;
+                }
+                if (char === "#" && wordStart) {
+                    while (index < text.length && text[index] !== "\n") index++;
+                    continue;
+                }
+                if (char === "\n") { index++; bodies(documents.splice(0)); wordStart = true; continue; }
+                if (text.startsWith("$'", index)) { index++; quoted("'", true); wordStart = false; continue; }
+                if (char === "'" || char === '"') { quoted(char); wordStart = false; continue; }
+                if (expansion()) { wordStart = false; continue; }
+                if (text.startsWith("((", index)) { arithmetic(); wordStart = false; continue; }
+                if (text.startsWith("<<<", index)) { index += 3; wordStart = true; continue; }
+                if (text.startsWith("<<", index)) {
+                    const doc = hereDoc(); if (doc) documents.push(doc);
+                    wordStart = false; continue;
+                }
+                if (char === "(") { index++; shell(")"); wordStart = true; continue; }
+                if (text.startsWith("&&", index) || text.startsWith("|&", index) || text.startsWith(";&", index) || text.startsWith("&>", index) || text.startsWith(">&", index) || text.startsWith("<&", index)) {
+                    index += 2; wordStart = true; continue;
+                }
+                if (char === "&") { background = true; return; }
+                wordStart = /[ \t;|<>()]/.test(char);
+                index++;
+            }
+        }
+
+        if (expansionsOnly) {
+            while (index < text.length && !background) {
+                if (text[index] === "\\" && /[$`\\\n]/.test(text[index + 1] ?? "")) index += 2;
+                else if (!expansion()) index++;
+            }
+        } else shell();
+        return background;
     }
-    return false;
+    return scan(command);
 }
 
 function unsafeOption(tokens: readonly string[], short: string, long: readonly string[]): boolean {

@@ -35,3 +35,23 @@ for (const inherited of [false, true]) {
         });
     }, 7000);
 }
+
+test.skipIf(process.platform === "win32")("finite foreground test can signal and await its own child", async () => {
+    await withTempProject(async cwd => {
+        const script = join(cwd, "signal-test.mjs");
+        const childCode = `process.on('SIGINT',()=>{setTimeout(()=>{console.log('CLEANUP_COMPLETE');process.exit(0)},30)});console.log('READY');setInterval(()=>{},1000);`;
+        await writeFile(script, `import {spawn} from 'node:child_process';
+const child=spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{stdio:['ignore','pipe','pipe']});
+const closed=new Promise((resolve,reject)=>{child.on('error',reject);child.on('close',(code)=>resolve(code))});
+let output=''; let sent=false;
+child.stdout.on('data',data=>{output+=data; if(!sent&&output.includes('READY')){sent=true;child.kill('SIGINT')}});
+const timeout=setTimeout(()=>child.kill('SIGKILL'),1500);
+try {const code=await closed;if(code!==0||!output.includes('CLEANUP_COMPLETE'))throw Error('Child cleanup did not finish');console.log('VERIFIED_CLEANUP_COMPLETE')}
+finally {clearTimeout(timeout);if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await closed}}
+`);
+        const result = await runShellCommand({command: `${quote(process.execPath)} ${quote(script)}`, cwd,
+            signal: AbortSignal.timeout(4000), timeoutMs: 3000});
+        expect(result.termination).toMatchObject({kind: "exit", code: 0});
+        expect(result.stdout).toContain("VERIFIED_CLEANUP_COMPLETE");
+    });
+}, 5000);

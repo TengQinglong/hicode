@@ -411,21 +411,47 @@ describe("bash tool contract", () => {
     });
   });
 
-  test("拒绝 shell 后台操作符并引导使用受管任务", async () => {
-    await withTempProject(async (cwd) => {
-      const result = await executeToolResult(
-        "bash",
-        JSON.stringify({
-          command: "node server.js &",
-          run_in_background: true,
-        }),
-        createTestContext(cwd, {permissionMode: "full-access"}),
-        "unmanaged-background"
-      );
-      expect(result.outcome).toBe("denied");
-      expect(result.modelContent).toContain("cannot contain shell background operator &");
+  test("unsupported background syntax fails without execution or approval", async () => {
+    await withTempProject(async cwd => {
+      const {runner, calls} = networkCaptureRunner();
+      let approvals = 0;
+      const ctx = createTestContext(cwd, {permissionMode: "ask", shellRunner: runner,
+        canUseTool: async () => { approvals++; return {behavior: "allow"}; }});
+      for (const command of ["node server.js &", "sleep 1 & pid=$!; wait $pid", "cat <<'EOF'\nunclosed"]) {
+        const result = await executeToolResult("bash", JSON.stringify({command}), ctx, "unsupported");
+        expect(result.outcome).toBe("failed");
+        expect(result.modelContent).toContain("Unsupported Bash command");
+        expect(result.modelContent).toContain("not executed");
+        expect(result.modelContent).not.toContain("Permission denied");
+      }
+      expect(approvals).toBe(0);
+      expect(calls).toEqual([]);
+      ctx.permissionRules.deny.push({toolName: "bash", source: "project"});
+      const denied = await executeToolResult("bash", JSON.stringify({command: "sleep 1 &"}), ctx, "denied");
+      expect(denied.outcome).toBe("denied");
+      expect(denied.modelContent).toContain("Denied by rule");
+    });
+  });
+
+  test("background syntax guidance separates services from finite child tests", async () => {
+    await withTempProject(async cwd => {
+      const result = await executeToolResult("bash", JSON.stringify({command: "node server.js &", run_in_background: true}),
+        createTestContext(cwd, {permissionMode: "full-access"}), "background");
+      expect(result.outcome).toBe("failed");
       expect(result.modelContent).toContain("run_in_background=true");
-      expect(result.modelContent).toContain("task stop");
+      expect(result.modelContent).toContain("foreground test program");
+      expect(result.modelContent).toContain("task status/stop");
+    });
+  });
+
+  test("literal heredoc ampersands execute normally through Bash", async () => {
+    await withTempProject(async cwd => {
+      const result = await executeToolResult("bash", JSON.stringify({
+        command: "cat <<'EOF'\nvalue = 1 & 3\nEOF\necho $((1 & 3)) # a & b"
+      }), createTestContext(cwd), "literal-ampersand");
+      expect(result.outcome).toBe("ok");
+      expect(result.modelContent).toContain("value = 1 & 3");
+      expect(result.modelContent).toContain("1");
     });
   });
 

@@ -1,0 +1,12 @@
+{
+  "name": "Terminal-Bench \u00b7 Python and regex",
+  "tasks": [
+    "cancel-async-tasks",
+    "log-summary-date-ranges",
+    "regex-log"
+  ],
+  "concurrency": 2,
+  "budget": {
+    "agentSeconds": 1800
+  }
+}

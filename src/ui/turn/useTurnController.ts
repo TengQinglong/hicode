@@ -1,9 +1,10 @@
+import {InteractiveEvents} from "../interactiveEvents.js";
 import type {McpToolPolicy} from "../../mcp/types.js";
 import {FileSuggestions} from "../../runtime/fileSuggestions.js";
 import {importSelectedImages} from "../../runtime/imageInput.js";
 import {supportsToolImages} from "../../images/capability.js";
 import {imageReferences, type MessageContent} from "../../images/content.js";
-import {useCallback, useEffect, useRef, useState, useSyncExternalStore,} from "react";
+import {useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore,} from "react";
 import {updateInitialHistoryModel} from "../../prompt/index.js";
 import {createSlashCommandProcessor} from "../../slash/index.js";
 import {
@@ -79,6 +80,8 @@ export function useTurnController({
                                           openPermissions,
                                       }: UseTurnControllerOptions) {
         const {cwd, model, toolRuntime} = resources;
+        const interactiveHost = useContext(InteractiveEvents);
+        const observe = interactiveHost?.emit;
         const messageQueue = rootSession.messageQueue;
         const taskSession = rootSession.taskSession;
         const sessionInitializationRef = useRef<Promise<void> | null>(null);
@@ -145,6 +148,10 @@ export function useTurnController({
             eventStoreRef.current = store;
         }
         const eventStore = eventStoreRef.current;
+        const handleEvent = useCallback((event: Parameters<typeof eventStore.handleEvent>[0]) => {
+            observe?.({type: "agent_event", sessionId: rootSession.sessionId, event});
+            eventStore.handleEvent(event);
+        }, [observe, rootSession, eventStore]);
 
         const sessionHookControllerRef = useRef<AbortController | null>(null);
         if (sessionHookControllerRef.current === null) {
@@ -163,7 +170,7 @@ export function useTurnController({
             sessionStartPromiseRef.current ??= rootSession.runSessionStart(
                 initialSession ? "resume" : "startup",
                 sessionHookControllerRef.current!.signal,
-                eventStore.handleEvent
+                handleEvent
             ).then((result) => {
                 recordHookIssues(result);
                 sessionStartContextsRef.current = formatHookContext(
@@ -239,7 +246,9 @@ export function useTurnController({
             let active = true;
             void initializeSession()
                 .then(() => {
-                    return persistSnapshot();
+                    return persistSnapshot().then(() => {
+                        if (active) observe?.({type: "ready", sessionId: rootSession.sessionId});
+                    });
                 })
                 .catch((error) => {
                     const message = error instanceof Error
@@ -325,12 +334,12 @@ export function useTurnController({
                 getHistory: () => rootSession.history,
                 createContext: (signal) => rootSession.createContext({
                     signal,
-                    onEvent: eventStore.handleEvent,
+                    onEvent: handleEvent,
                     host: toolContextHost,
                     getSnapshotState: () => { const state = createSnapshot(); return {...state, uiEvents: state.uiEvents ?? []}; },
                 }),
                 onUserInput: (input) => eventStore.appendUser(input),
-                onEvent: eventStore.handleEvent,
+                onEvent: handleEvent,
                 onUnexpectedError: (error) => eventStore.appendError(error),
                 denyPendingPermission: (message) => {
                     permissionRequests.denyPending(message);
@@ -356,13 +365,13 @@ export function useTurnController({
                 setCollaborationMode,
                 runTurn: async (input, signal) => {
                     await startSessionHooks();
-                    await runRootTurn({
+                    const turnResult = await runRootTurn({
                         resources,
                         session: rootSession,
                         prompt: input,
                         signal,
                         host: toolContextHost,
-                        onEvent: eventStore.handleEvent,
+                        onEvent: handleEvent,
                         onHookResult: (result) => {
                             recordHookIssues(result);
                         },
@@ -388,9 +397,22 @@ export function useTurnController({
                             }
                         ),
                     });
+                    if (observe) {
+                        const tasks = await taskSession.list();
+                        const pending = await taskSession.pendingNotifications();
+                        const agentIds = new Set(tasks.filter(task => task.kind === "agent").map(task => task.id));
+                        const queued = messageQueue.list().filter(message => message.type === "agent_message" ||
+                            (message.type === "task_notification" && agentIds.has(message.taskId)));
+                        const runningAgents = tasks.filter(task => task.kind === "agent" && task.status === "running").length;
+                        const pendingAgentMessages = queued.length + pending.filter(message => message.kind === "agent").length;
+                        const sealed = interactiveHost?.singleTask === true && runningAgents === 0 && pendingAgentMessages === 0;
+                        if (sealed) turnControllerRef.current!.seal();
+                        observe({type: "settled", sessionId: rootSession.sessionId, reason: turnResult.reason,
+                            runningAgents, pendingAgentMessages, sealed});
+                    }
                 },
                 importImages: (paths, signal) => importSelectedImages(paths, resources, rootSession.createContext({signal, host: toolContextHost,
-                    onEvent: eventStore.handleEvent, getSnapshotState: () => ({...createSnapshot(), uiEvents: eventStore.getPersistedUIEvents()})})),
+                    onEvent: handleEvent, getSnapshotState: () => ({...createSnapshot(), uiEvents: eventStore.getPersistedUIEvents()})})),
                 validateImages: content => {
                     if (!(typeof content === "string" && content.trim().startsWith("/")) &&
                         !resources.primaryModel.isConfigured) {
@@ -431,6 +453,11 @@ export function useTurnController({
             messageQueue.getSnapshot
         );
 
+        useEffect(() => {
+            observe?.({type: "state", sessionId: rootSession.sessionId,
+                busy: turnStatus.busy, waitingForApproval: confirmRequest !== null});
+        }, [observe, rootSession, turnStatus.busy, confirmRequest]);
+
         const shutdown = useCallback((): Promise<void> => {
             if (shutdownPromiseRef.current) return shutdownPromiseRef.current;
             shutdownPromiseRef.current = (async () => {
@@ -440,7 +467,7 @@ export function useTurnController({
                 await turnController.waitForSettled();
                 sessionHookControllerRef.current?.abort("shutdown");
                 await sessionStartPromiseRef.current?.catch(() => undefined);
-                await rootSession.runSessionEnd("shutdown", eventStore.handleEvent)
+                await rootSession.runSessionEnd("shutdown", handleEvent)
                     .catch(() => undefined);
                 await persistSnapshot();
                 await rootSession.flushSnapshots();

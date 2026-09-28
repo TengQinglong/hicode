@@ -1,0 +1,65 @@
+import { constants } from 'node:fs';
+import { open, mkdir, rename, lstat, readdir, realpath, rm } from 'node:fs/promises';
+import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { z } from 'zod';
+
+export async function readJson<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>, max = 4 * 1024 * 1024): Promise<T> {
+  if (await realpath(dirname(path)) !== resolve(dirname(path))) throw Error('Symlinked storage parent');
+  const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stat = await fd.stat();
+    if (!stat.isFile() || stat.size > max) throw Error('Invalid JSON file size/type');
+    return schema.parse(JSON.parse(await fd.readFile('utf8')));
+  } finally { await fd.close(); }
+}
+export async function save(path: string, value: unknown): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  if (await realpath(dirname(path)) !== resolve(dirname(path))) throw Error('Symlinked storage parent');
+  const tmp = `${path}.${randomUUID()}.tmp`;
+  const fd = await open(tmp, 'wx', 0o600);
+  try { await fd.writeFile(JSON.stringify(value, null, 2) + '\n'); await fd.sync(); }
+  finally { await fd.close(); }
+  try { await rename(tmp, path); } finally { await rm(tmp, { force: true }); }
+}
+export async function exists(path: string): Promise<boolean> {
+  try { await lstat(path); return true; } catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false; throw error; }
+}
+export function contained(root: string, path: string): boolean {
+  const p = relative(root, path); return p === '' || (!p.startsWith('..') && !isAbsolute(p));
+}
+export async function directory(path: string): Promise<string> {
+  const absolute = resolve(path);
+  await mkdir(absolute, { recursive: true, mode: 0o700 });
+  const canonical = await realpath(absolute);
+  if (canonical !== absolute) throw Error('Directory must use its canonical path');
+  return canonical;
+}
+export async function tree(root: string): Promise<Record<string, { bytes: number; sha256: string }>> {
+  const result: Record<string, { bytes: number; sha256: string }> = {};
+  let bytes = 0;
+  async function walk(path: string): Promise<void> {
+    const stat = await lstat(path);
+    if (stat.isSymbolicLink()) throw Error('Symlinks are not allowed in snapshots');
+    if (stat.isDirectory()) { for (const name of (await readdir(path)).sort()) await walk(join(path, name)); }
+    else if (stat.isFile()) {
+      bytes += stat.size;
+      if (bytes > 1024 ** 3 || Object.keys(result).length >= 20000) throw Error('Snapshot budget exceeded');
+      const hash = createHash('sha256');
+      const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { const buffer = Buffer.alloc(65536); for (;;) { const { bytesRead } = await fd.read(buffer); if (!bytesRead) break; hash.update(buffer.subarray(0, bytesRead)); } } finally { await fd.close(); }
+      result[relative(root, path)] = { bytes: stat.size, sha256: hash.digest('hex') };
+    } else throw Error('Only regular files may be collected');
+  }
+  await walk(root); return result;
+}
+export async function run(command: string[], options: { cwd?: string; env?: Record<string, string>; timeout?: number } = {}): Promise<string> {
+  const proc = Bun.spawn(command, { cwd: options.cwd, env: options.env, stdout: 'pipe', stderr: 'pipe' });
+  const timer = setTimeout(() => proc.kill('SIGKILL'), options.timeout ?? 30000);
+  try {
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    if (code) throw Error(`${command[0]} failed (exit ${code}): ${stderr.slice(-1000)}`);
+    if (stdout.length > 4 * 1024 * 1024) throw Error('Command output exceeds budget');
+    return stdout.trim();
+  } finally { clearTimeout(timer); }
+}

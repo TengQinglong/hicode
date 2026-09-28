@@ -115,3 +115,17 @@ test("storage maintenance is an explicit standalone command", () => {
   expect(() => parseCliArgs(["--storage", "unknown"])).toThrow();
   expect(() => parseCliArgs(["--storage", "clean", "-p", "hello"])).toThrow("on its own");
 });
+
+test("interactive event export is explicit and cannot be used with headless", () => {
+  expect(parseCliArgs(["--event-log", "/tmp/run/events.jsonl"]).eventLog).toBe("/tmp/run/events.jsonl");
+  expect(parseCliArgs(["--event-log=/tmp/run/events.jsonl"]).eventLog).toBe("/tmp/run/events.jsonl");
+  expect(() => parseCliArgs(["--event-log=relative.jsonl"])).toThrow("absolute");
+  expect(() => parseCliArgs(["--event-log=/tmp/a", "--event-log=/tmp/b"])).toThrow();
+  expect(() => parseCliArgs(["--event-log=/tmp/a", "-p", "hello"])).toThrow("interactive");
+});
+
+test("single-task is explicit and requires interactive event export", () => {
+  expect(() => parseCliArgs(["--single-task"])).toThrow("requires --event-log");
+  expect(parseCliArgs(["--single-task", "--event-log", "/tmp/task.jsonl"]).singleTask).toBe(true);
+  expect(() => parseCliArgs(["--single-task", "--event-log", "/tmp/task.jsonl", "-p", "test"])).toThrow("interactive");
+});

@@ -77,7 +77,7 @@ Configuration is saved automatically and reusable across projects. Model usage i
 
 ## Develop from source
 
-To develop HiCode itself, install Git first. To test Linux on a Mac, you can use the optional [Ubuntu development container](.devcontainer/README.md).
+To develop HiCode itself, install Git first. To test Linux on a Mac, you can use the optional [Ubuntu development container](.devcontainer/README.en.md).
 
 ```bash
 git clone https://github.com/peihanm/hicode.git
@@ -104,6 +104,8 @@ bun run check     # TypeScript checks
 ```
 
 Full validation: `bun run verify` adds SDK package verification and requires Node.js 22.12+.
+
+To run public benchmark tasks with a live TUI and automatic grading, see [HiCode Eval](hicode-eval/README.en.md).
 
 ## Contributing
 

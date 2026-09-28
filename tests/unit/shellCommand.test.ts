@@ -38,6 +38,47 @@ describe("shell command permissions", () => {
     expect(isShellCommandReadOnly("echo ready &")).toBe(false);
   });
 
+  test("background syntax distinguishes data from executable substitutions", () => {
+    const allowed = [
+      "echo ok # a & b\necho done",
+      "echo $((1 & 3)); (( x = 1 & 3 ))",
+      "echo ${value//&/and}",
+      "echo $'it\\'s & data'",
+      "cat <<'PY'\nvalue = 1 & 3\nprint('$(sleep 1 &)')\nPY",
+      'cat <<"PY"\nx & y\nPY',
+      "cat <<\\PY\nx & y\nPY",
+      "cat <<-EOF\n\tx & y\n\tEOF\necho done",
+      "cat <<A <<'B'\na & b\nA\n$(sleep 1 &)\nB\necho ok",
+      "cat <<EOF\ntext & data\n$(printf '%s' '&')\nEOF",
+      "cat <<EOF\n\\$(sleep 1 &)\nEOF",
+      "cat <<EOF\nEO\\\nF\necho done",
+      "cat <<< 'x & y'",
+      "echo fd <&0 >&1 &>out",
+      "echo ok |& cat",
+      "case x in x) echo a ;& y) echo b ;; esac",
+    ];
+    const blocked = [
+      "echo ok # ignored &\nsleep 1 &",
+      "echo word#not-comment &",
+      "echo escaped\\ #not-comment &",
+      'echo "$(sleep 1 & wait)"',
+      'echo "`sleep 1 & wait`"',
+      "echo $((1 + $(sleep 1 & wait)))",
+      "echo ${value:-$(sleep 1 & wait)}",
+      "cat <(sleep 1 & wait)",
+      "cat <<EOF\n$(sleep 1 & wait)\nEOF",
+      "cat <<EOF\n'$(sleep 1 & wait)'\nEOF",
+      "cat <<EOF\n` sleep 1 & wait `\nEOF",
+      "cat <<'EOF'\nx & y\nEOF\nsleep 1 &",
+      "cat <<EOF\nEO\\\nF\nsleep 1 &",
+      "cat <<'A' <<B\nignore &\nA\n$(sleep 1 & wait)\nB",
+    ];
+    for (const command of allowed) expect({command, found: hasShellBackgroundOperator(command)}).toEqual({command, found: false});
+    for (const command of blocked) expect({command, found: hasShellBackgroundOperator(command)}).toEqual({command, found: true});
+    expect(() => hasShellBackgroundOperator("cat <<'EOF'\nunclosed")).toThrow("terminator");
+    expect(() => hasShellBackgroundOperator("cat <<$'EOF'\ntext\nEOF")).toThrow("delimiter");
+  });
+
   test("拆分组合命令并生成逐段 allow pattern", () => {
     expect(splitShellSubCommands("npm test && git status | head")).toEqual([
       "npm test",

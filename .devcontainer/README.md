@@ -1,5 +1,7 @@
 # Ubuntu 开发容器
 
+[English](README.en.md)
+
 在 macOS 上用 Ubuntu 24.04 开发、调试 HiCode，或运行独立测试项目。已验证 Apple Silicon + Colima；这是可选的开发环境，日常使用 HiCode 不需要安装容器。
 
 ## 首次启动
@@ -101,3 +103,9 @@ docker --context colima-hicode compose -f .devcontainer/compose.yaml --profile m
 ```
 
 服务地址为 `http://127.0.0.1:8787/mcp`，示例源码见 `tooling/examples/mcp/http-demo.ts`。Skill、浏览器依赖及实际 MCP 配置由使用者按需安装，不预装个人测试数据。
+
+## 专用长期评测机
+
+`bash .devcontainer/linux.sh eval-start` 启动独立的 `hicode-eval-linux`；`eval-shell`进入、`eval-status`查看、`eval-stop`停止。它与开发容器共用Linux基础环境方案，但不挂载源码、个人Home或Docker socket，只挂独立评测卷。首次镜像构建安装tmux、Python3.13及固定验收依赖，后续任务不重复安装。
+
+已有兼容预装镜像可通过 `HICODE_EVAL_IMAGE` 指定。评测器会核查机器工具与验收依赖，不能把缺依赖当成可用。运行期间不要重建/停止机器。具体公开题适配和运行命令见 [HiCode Eval](../hicode-eval/README.md)。

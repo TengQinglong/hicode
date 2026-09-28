@@ -109,7 +109,16 @@ async function commandWorkspace(ctx: ToolContext, cwd: string | undefined): Prom
 }
 
 function backgroundSyntaxMessage(): string {
-    return "Bash command cannot contain shell background operator &. Start a long-running service in a separate bash call with run_in_background=true; use task stop before restarting a managed task.";
+    return "Unsupported Bash command: shell background operator & is not supported. The command was not executed; additional permission will not enable this syntax. For a persistent service, omit & and use run_in_background=true; manage its Task ID with task status/stop. For a finite subprocess or signal test, run a foreground test program that creates, signals, waits for and cleans up its own children, including on failure. Sandbox and permission rules still apply.";
+}
+
+function commandSyntaxIssue(command: string): string | undefined {
+    try {
+        return hasShellBackgroundOperator(command) ? backgroundSyntaxMessage() : undefined;
+    } catch (error) {
+        if (error instanceof SyntaxError) return `Unsupported Bash command: ${error.message}. The command was not executed.`;
+        throw error;
+    }
 }
 
 function runningOutput(task: ShellTaskSnapshot): string {
@@ -215,7 +224,7 @@ export const bashTool: Tool<typeof inputSchema> = {
 - Each call is a separate process: pass cwd rather than relying on a previous cd. Run tests/builds directly; the runtime preserves and budgets output. Do not add tail/head/grep just to shorten results or mask failures with || echo. Search returned saved paths with rg, then read_file at relevant lines; rerun only after a relevant change or for a new check. Avoid byte truncation of non-ASCII text.
 - Access uses the runtime's current sandbox and approval policy. Network authorization follows actual domains/ports; dependency downloads do not inherently require leaving the sandbox. For a necessary command blocked by sandbox permissions, request require_escalated for that operation rather than changing implementation to evade the restriction. A denial or unavailable approval channel is not permission to bypass it.
 - Local search uses rg --files (paths), ls (directory entries), rg -n (content) and rg -F (literal text). Quote globs and paths; use -e for the pattern. Recognized read commands run with no writes or network, trusted host programs, no rg config/global-ignore files, and exact authorized read scopes. Read-only roles support literal rg/ls/pwd/cat/head/tail/wc/echo commands and safe combinations, not shell expansion, redirection, preprocessing or arbitrary programs. Search saved output using its exact provided path; private storage directory scans are forbidden. Use read_file before editing: Bash output does not establish a file read version. Missing rg is a host setup issue, not a reason to install during the task.
-- Run a minimal existing syntax/build/test check before starting a server. Use run_in_background for services, GUIs and watchers, omit timeout_ms, and manage the returned task ID with task. Do not use shell &. A foreground timeout terminates the process and its children. Reuse an existing managed service; stop it before restarting and do not overlap instances or take over unrelated processes with lsof/kill.
+- Run a minimal existing syntax/build/test check before starting a server. Use run_in_background for services, GUIs and watchers, omit timeout_ms, and manage the returned task ID with task. Do not use shell &. For finite subprocess/signal tests, use one foreground test program to create, signal, wait for and clean up its own children in a finally block; keep normal Sandbox and permission checks. A foreground timeout terminates the process and its children. Reuse an existing managed service; stop it before restarting and do not overlap instances or take over unrelated processes with lsof/kill.
 - For a port conflict, use supported temporary CLI/env options without changing project defaults or stopping unrelated processes. A genuine permission denial must not be bypassed by switching ports.
 - Local HTTP probes verify endpoints only: use bounded readiness retries and fail on HTTP errors (for example --fail-with-body); inspect required status/fields. Do not use fixed sleeps or treat HTTP 200 as browser verification. Do not create missing browser capability; existing E2E runs unchanged, and new automation infrastructure requires an explicit user request.
 - Git: inspect status/diff/log. Commit and push each require authorization; check staged, unstaged and untracked changes before committing. Stage exact paths with git add -- <paths>. Do not use git add . or git add -A, skip hooks, change Git config, auto-stash/reset/clean or amend without authorization. Check branch, remote and outgoing commits before pushing; verify actual results.`,
@@ -234,9 +243,8 @@ export const bashTool: Tool<typeof inputSchema> = {
             ? {kind: "sandboxed"}
             : undefined,
     async checkPermissions({command, cwd, sandbox_permissions, run_in_background, yield_time_ms}, ctx) {
-        if (hasShellBackgroundOperator(command)) {
-            return {behavior: "deny", message: backgroundSyntaxMessage()};
-        }
+        const syntaxIssue = commandSyntaxIssue(command);
+        if (syntaxIssue) throw new ToolInputError(syntaxIssue);
         let workspace;
         try {workspace = await commandWorkspace(ctx, cwd);} catch (error) {
             if (error instanceof Error && "code" in error && error.code === "ENOTDIR") {
@@ -326,12 +334,8 @@ export const bashTool: Tool<typeof inputSchema> = {
                         sandbox_permissions,
                     }, ctx, invocation) => {
         if (run_in_background && yield_time_ms !== undefined) return {content: "yield_time_ms and run_in_background=true cannot be combined", outcome: "failed" as const};
-        if (hasShellBackgroundOperator(command)) {
-            return {
-                content: backgroundSyntaxMessage(),
-                outcome: "failed" as const,
-            };
-        }
+        const syntaxIssue = commandSyntaxIssue(command);
+        if (syntaxIssue) return {content: syntaxIssue, outcome: "failed" as const};
         const workspace = await commandWorkspace(ctx, cwd);
         if (workspace && !workspace.writable && !analyzeReadCommand(command)) return {content: "Read-only Memory commands cannot modify files or execute arbitrary programs", outcome: "failed" as const};
         if (workspace && (sandbox_permissions === "require_escalated" || run_in_background || yield_time_ms !== undefined)) return {content: "Memory file commands must run in the foreground inside their Sandbox", outcome: "failed" as const};

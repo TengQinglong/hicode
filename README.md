@@ -105,6 +105,8 @@ bun run check     # TypeScript 检查
 
 完整验证：`bun run verify`，额外包含 SDK 打包验证，需要 Node.js 22.12+。
 
+公开题批量评测、TUI 观察和自动判题见 [HiCode Eval](hicode-eval/README.md)。
+
 ## 参与共建
 
 欢迎一起共建 HiCode，无论是反馈问题、提出想法，还是贡献代码。

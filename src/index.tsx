@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 import {render} from "ink";
+import {InteractiveEvents} from "./ui/interactiveEvents.js";
+import {createInteractiveEventLog} from "./cli/interactiveEventLog.js";
 import {InteractiveShutdown, bindInteractiveSignals} from "./cli/interactiveShutdown.js";
 import {Root} from "./ui/Root.js";
 import {type CliOptions, loadEnv, parseCliArgs, printHelp} from "./cli/index.js";
@@ -114,8 +116,18 @@ if (cliOptions.printPrompt !== undefined) {
         try {unmount?.();} catch {}
     });
     const stdout = createTerminalCursorOutput(process.stdout);
+    let eventLog: ReturnType<typeof createInteractiveEventLog> | undefined;
     try {
+        if (cliOptions.eventLog) eventLog = createInteractiveEventLog(cliOptions.eventLog, cwd, () => {
+            process.exitCode = 1;
+            process.stderr.write("Interactive event export failed; stopping this session.\n");
+            exitRequested = true;
+            notifyExit();
+            void shutdown.close();
+            try {unmount?.();} catch {}
+        });
         const app = render(
+            <InteractiveEvents.Provider value={eventLog ? {emit: eventLog.emit, singleTask: cliOptions.singleTask === true} : undefined}>
             <TerminalSizeProvider>
                 <TerminalCursorAnchorProvider enabled>
                     <Root
@@ -127,7 +139,8 @@ if (cliOptions.printPrompt !== undefined) {
                         resumeMode={cliOptions.resumeMode}
                     />
                 </TerminalCursorAnchorProvider>
-            </TerminalSizeProvider>,
+            </TerminalSizeProvider>
+            </InteractiveEvents.Provider>,
             {patchConsole: false, exitOnCtrlC: false, stdout}
         );
         unmount = app.unmount;
@@ -139,6 +152,7 @@ if (cliOptions.printPrompt !== undefined) {
             process.exit(process.exitCode || 1);
         }, 10_000);
         await shutdown.close();
+        eventLog?.close();
         clearTimeout(timeout);
         try {stdout.disposeCursorOutput();} catch {}
         removeSignals();
