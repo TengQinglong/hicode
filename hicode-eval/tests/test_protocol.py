@@ -44,3 +44,13 @@ class ProtocolTest(unittest.TestCase):
         stream.accept(self.record(1,type='agent_event',event={'type':'turn_end','input':{'persistence_status':'saved'}}))
         stream.accept(self.record(2,type='settled',reason='completed',runningAgents=0,pendingAgentMessages=0,sealed=False))
         self.assertFalse(stream.complete())
+
+    def test_missing_tool_result_cannot_claim_saved_completion(self):
+        stream=Events()
+        stream.accept(self.record(1,type='agent_event',event={'type':'tool_call_start','toolCallId':'a'}))
+        stream.accept(self.record(2,type='agent_event',event={'type':'turn_end','input':{'persistence_status':'saved'}}))
+        stream.accept(self.record(3,type='settled',reason='interrupted',runningAgents=0,pendingAgentMessages=0,sealed=True))
+        self.assertFalse(stream.complete())
+        self.assertEqual(stream.pending_tools, {'a'})
+        stream.accept(self.record(4,type='agent_event',event={'type':'tool_call_end','toolCallId':'a'}))
+        self.assertTrue(stream.complete())

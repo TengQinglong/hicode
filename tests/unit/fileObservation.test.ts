@@ -12,7 +12,7 @@ test.each(["\n", "\r\n"])("局部读取后连续修改保留未改区间并映�
         await executeTool("read_file", JSON.stringify({path: "file.txt", limit: 2}), ctx);
         expect(await executeTool("edit_file", JSON.stringify({path: "file.txt", edits: [{old_string: "first中文", new_string: "longer中文\nnew line"}]}), ctx)).toContain("Modified");
         expect(await executeTool("edit_file", JSON.stringify({path: "file.txt", edits: [{old_string: "second😀", new_string: "changed😀"}]}), ctx)).toContain("Modified");
-        expect(await executeTool("edit_file", JSON.stringify({path: "file.txt", edits: [{old_string: "UNREAD", new_string: "blind"}]}), ctx)).toContain("did not show");
+        expect(await executeTool("write_file", JSON.stringify({path: "file.txt", content: "blind"}), ctx)).toContain("read it fully");
         expect(await readFile(join(cwd, "file.txt"), "utf8")).toBe(["longer中文", "new line", "changed😀", "UNREAD", ""].join(lineEnding));
     });
 });

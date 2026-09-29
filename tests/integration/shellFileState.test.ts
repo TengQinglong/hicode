@@ -4,7 +4,6 @@ import {join} from "node:path";
 import {withTempProject} from "../helpers/tempProject.js";
 import {createTestContext} from "../helpers/testContext.js";
 import {createTestToolResultStore} from "../helpers/toolResultStore.js";
-import {executeDeliveredTool} from "../helpers/executeTool.js";
 import {createToolRuntime} from "../../src/tools/runtime.js";
 import {runShellCommand} from "../../src/tools/bash/process.js";
 import {createFileStateTracker} from "../../src/tools/shared/fileState.js";
@@ -29,16 +28,17 @@ test("大安装缓存不扫描，也不清空源码已读范围", async () => {
     });
 });
 
-test("Bash 改源码仍要求重读；同 Turn 外部修改不被后续 Edit 掩盖", async () => {
+test("Bash 修改后按当前目标编辑，过期目标失败且整体覆盖仍需重读", async () => {
     await withTempProject(async cwd => {
         const fileState = createFileStateTracker();
         const ctx = createTestContext(cwd, {fileState, shellRunner: {sandboxStatus: {kind: "ready", networkMode: "restricted", platform: "macos", warnings: []}, run: runShellCommand}});
         const tools = createToolRuntime();
         await tools.executeTool("write_file", JSON.stringify({path: "app.txt", content: "B"}), ctx, "first");
         expect((await tools.executeTool("bash", JSON.stringify({command: "printf C > app.txt"}), ctx, "external")).outcome).toBe("ok");
+        const stale = {path: "app.txt", edits: [{old_string: "B", new_string: "D"}]};
+        expect((await tools.executeTool("edit_file", JSON.stringify(stale), ctx, "stale")).outcome).toBe("failed");
+        expect((await tools.executeTool("write_file", JSON.stringify({path:"app.txt",content:"blind"}), ctx, "overwrite")).outcome).toBe("failed");
         const edit = {path: "app.txt", edits: [{old_string: "C", new_string: "D"}]};
-        expect((await tools.executeTool("edit_file", JSON.stringify(edit), ctx, "stale")).outcome).toBe("failed");
-        await executeDeliveredTool(tools, "read_file", JSON.stringify({path: "app.txt"}), ctx, "read");
         expect((await tools.executeTool("edit_file", JSON.stringify(edit), ctx, "second")).outcome).toBe("ok");
         expect(await readFile(join(cwd, "app.txt"), "utf8")).toBe("D");
     });

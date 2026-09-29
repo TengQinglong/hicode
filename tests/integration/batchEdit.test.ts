@@ -47,7 +47,7 @@ describe("单文件批量编辑", () => {
         });
     });
 
-    test("多段局部读取的观察范围在乱序、变长编辑后正确移动，隐藏文本仍不可写", async () => {
+    test("多段局部读取在变长编辑后仍不足以授权整文件覆盖", async () => {
         await withTempProject(async cwd => {
             const path = join(cwd, "file.txt");
             await writeFile(path, "一A\nSECRET\n三B\nEND\n");
@@ -59,13 +59,9 @@ describe("单文件批量编辑", () => {
                 {old_string: "三B", new_string: "三🙂加长"},
                 {old_string: "一A", new_string: "首"},
             ]}), ctx)).toContain("replaced 2 matches");
-            const hidden = await executeToolResult("edit_file", JSON.stringify({path, edits: [
-                {old_string: "首", new_string: "changed"},
-                {old_string: "SECRET", new_string: "hidden"},
-            ]}), ctx, "hidden-batch");
+            const hidden = await executeToolResult("write_file", JSON.stringify({path, content: "blind"}), ctx, "whole-file-unread");
             expect(hidden.outcome).toBe("failed");
-            expect(hidden.modelContent).toContain("Item 2");
-            expect(hidden.modelContent).toContain("did not show");
+            expect(hidden.modelContent).toContain("read it fully");
             const all = await executeToolResult("edit_file", JSON.stringify({path, edits: [
                 {old_string: "首", new_string: "changed", replace_all: true},
             ]}), ctx, "full-read-required");

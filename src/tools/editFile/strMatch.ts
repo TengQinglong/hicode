@@ -17,7 +17,7 @@ export function findMatches(content: string, target: string): MatchSpan[] {
     let start = haystack.indexOf(needle);
     while (start >= 0) {
         spans.push({start, end: start + needle.length});
-        start = haystack.indexOf(needle, start + needle.length);
+        start = haystack.indexOf(needle, start + 1);
     }
     return spans;
 }

@@ -57,7 +57,8 @@ describe("English prompt contracts", () => {
         expect(toolDescription("bash")).toContain("omit timeout_ms");
         expect(toolDescription("bash")).toContain("stop it before restarting");
         expect(toolDescription("bash")).toContain("Do not use git add . or git add -A");
-        expect(toolDescription("edit_file")).toContain("same previously read original version");
+        expect(toolDescription("edit_file")).toContain("same original version");
+        expect(toolDescription("edit_file")).toContain("no prior read_file receipt is required for local edits");
         expect(toolDescription("read_file")).toContain("a log does not establish the current source-file version");
     });
     test("worker gets shared safety and evidence rules without Root coordination", () => {

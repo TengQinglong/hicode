@@ -60,7 +60,7 @@ test.each(["pages", "partial", "stale-source", "tampered", "save-failure"])("结
                 return assistantToolCall("write_file", {path: "a.txt", content: "KNOWN"}, "known");
             }
             if (last?.tool_call_id === "hidden") {
-                expect(last.content).toContain("did not show");
+                expect(last.content).toContain("Modified");
                 return assistantToolCall("edit_file", {path: "a.txt", edits: [{old_string: "a0:", new_string: "visible:"}]}, "visible");
             }
             if (last?.tool_call_id === "visible") expect(last.content).toContain("Modified");
@@ -71,7 +71,7 @@ test.each(["pages", "partial", "stale-source", "tampered", "save-failure"])("结
         const content = await readFile(join(cwd, "a.txt"), "utf8");
         if (mode === "pages") expect(content).toBe("KNOWN");
         else if (mode === "stale-source") expect(content).toBe("external");
-        else expect(content).toContain("a899:");
+        else expect(content).toContain(mode === "partial" ? "hidden:" : "a899:");
         if (mode === "partial") expect(content.startsWith("visible:")).toBe(true);
     });
 });

@@ -6,14 +6,14 @@ import {executeDeliveredTool} from "../helpers/executeTool.js";
 import {createTestMemoryRuntime,memoryOwner} from "../helpers/memory.js";
 import {createTestContext} from "../helpers/testContext.js";
 import {withTempProject} from "../helpers/tempProject.js";
-test("ordinary Memory file writes validate format, protect workflow/index and require rereads",async()=>withTempProject(async cwd=>{
+test("ordinary Memory file writes validate format, protect workflow/index and preserve unrelated external content",async()=>withTempProject(async cwd=>{
  const memory=createTestMemoryRuntime(cwd);let prompts=0;const ctx=createTestContext(cwd,{permissionMode:"ask",memoryFiles:memory.fileAccess(memoryOwner()),canUseTool:async()=>{prompts++;return {behavior:"deny",message:"unexpected"};}});const tools=createToolRuntime();let call=0;const execute=(name:string,input:object)=>executeDeliveredTool(tools,name,JSON.stringify(input),ctx,`file-${++call}`);const path=join(memory.directory,"topics/brief.md");
  const bad=await execute("write_file",{path,content:"---\nname: x\n---\n简洁"});expect(bad.outcome).toBe("failed");expect(bad.modelContent).toContain("type");
  expect((await execute("write_file",{path,content:"保持简洁"})).outcome).toBe("ok");
  expect((await execute("write_file",{path:join(memory.directory,"state.json"),content:"{}"})).outcome).toBe("denied");
  expect((await execute("write_file",{path:join(memory.directory,"MEMORY.md"),content:"假的"})).outcome).toBe("denied");
  await writeFile(path,"保持简洁，请勿长篇大论");
- expect((await execute("edit_file",{path,edits:[{old_string:"简洁",new_string:"详细"}]})).outcome).not.toBe("ok");
+ expect((await execute("write_file",{path,content:"blind"})).outcome).not.toBe("ok");
  expect((await execute("read_file",{path})).outcome).toBe("ok");
  expect((await execute("edit_file",{path,edits:[{old_string:"简洁",new_string:"详细"}]})).outcome).toBe("ok");
  expect((await memory.read("brief"))?.content).toBe("保持详细，请勿长篇大论");expect(prompts).toBe(0);await memory.close();

@@ -4,7 +4,7 @@ from pathlib import Path
 from protocol import Events,atomic_json,namespace_argv,package_install_argv
 from verifier import verify
 from terminal import capture,settle,submit_prompt
-from cleanup import stop_task_processes,finalize_task
+from cleanup import stop_task_processes,finalize_task,open_task_cli,terminate_task_cli
 from recovery import process_start
 
 run_id=sys.argv[1]
@@ -63,8 +63,36 @@ def tmux(*args,**kwargs):return command(['tmux','-S',socket,*args],**kwargs)
 def stop_user():
     stop_task_processes(uid)
 
-terminal_started=False
+terminal_started=False;cli_fd=None;shutdown_attempted=False
 model=config['model'];release=config['release'];status='failed';grade='unavailable';events=Events();offset=0
+
+def drain_events():
+    global offset
+    event_path=logs/'events.jsonl'
+    if event_path.exists():
+        if event_path.is_symlink():raise ValueError('Event file replaced with symlink')
+        with event_path.open('rb') as f:f.seek(offset);data=f.read(256*1024)
+        offset+=len(data)
+        if data:events.accept(data);emit('events',data=base64.b64encode(data).decode())
+        return bool(data)
+    return False
+
+def shutdown_cli():
+    global shutdown_attempted
+    if shutdown_attempted or cli_fd is None:return
+    shutdown_attempted=True
+    emit('phase',phase='Stopping HiCode: '+status)
+    started=time.monotonic();exited=False;error=None
+    try:exited=terminate_task_cli(cli_fd,drain_events)
+    except (OSError,RuntimeError,ValueError) as exc:error=str(exc)[-2000:]
+    receipt={'version':1,'reason':status,'graceSeconds':10,'elapsedSeconds':round(time.monotonic()-started,3),
+        'cliExited':exited,'turnSaved':events.ending is not None and events.ending.get('persistence_status')=='saved',
+        'pendingToolCallIds':sorted(events.pending_tools),'eventStreamComplete':not bool(events.partial.strip()),'error':error}
+    atomic_json(root/'shutdown.json',receipt)
+    if error or not exited:emit('error',message='Graceful shutdown incomplete; forcing task cleanup. '+(error or 'CLI did not exit within 10 seconds.'))
+    elif events.started and (not receipt['turnSaved'] or receipt['pendingToolCallIds'] or not receipt['eventStreamComplete']):
+        emit('error',message='CLI exited, but execution records did not close completely; see shutdown.json.')
+
 try:
     # Approval is granted for this disposable assignment, inside the outer namespace.
     config['permissionMode']='full-access'
@@ -110,12 +138,7 @@ try:
     while start is None or time.monotonic()-start<config['agentSeconds']:
         if (logs/'terminal.overflow').exists():raise RuntimeError('Terminal recording exceeds limit')
         if cancelled or (root/'cancel').exists():status='cancelled';break
-        event_path=logs/'events.jsonl'
-        if event_path.exists():
-            if event_path.is_symlink():raise ValueError('Event file replaced with symlink')
-            with event_path.open('rb') as f:f.seek(offset);data=f.read(256*1024)
-            offset+=len(data)
-            if data:events.accept(data);emit('events',data=base64.b64encode(data).decode())
+        drain_events()
         if time.monotonic()-last_screen>=2:
             screen=tmux('capture-pane','-p','-e','-S','-20000','-t','hicode:0.0')
             if len(screen.encode())>8*1024*1024:raise ValueError('Terminal exceeds budget')
@@ -125,6 +148,7 @@ try:
             start=time.monotonic()
             emit('phase',phase='Running HiCode')
         if events.ready and submitted is None:
+            cli_fd=open_task_cli(uid,release+'/src/index.tsx',logs/'events.jsonl')
             prompt=control/'prompt.txt';prompt.write_text((root/'instruction.md').read_text());prompt.chmod(0o644)
             submit_prompt(tmux,prompt);submitted=time.monotonic()
         if events.complete():
@@ -135,6 +159,7 @@ try:
         if tmux('display-message','-p','-t','hicode:0.0','#{pane_dead}').strip()=='1':raise RuntimeError('HiCode exited before completion')
         time.sleep(.5)
     else:status='timeout'
+    if status in ['timeout','cancelled']:shutdown_cli()
     if terminal_started:
         try:
             if status=='completed':
@@ -175,11 +200,20 @@ except BaseException as error:
     if cancelled or (root/'cancel').exists():status='cancelled'
     emit('error',message=str(error)[-2000:])
 finally:
-    # Verification can take longer than the final UI paint. Refresh once more before teardown.
-    if terminal_started:
-        try:capture(tmux,emit)
-        except (OSError,RuntimeError,ValueError,subprocess.TimeoutExpired) as error:
-            emit('error',message='Final terminal capture failed: '+str(error)[-1000:])
-    result={'execution':status,'grading':grade,'uid':uid}
-    finalize_task(root,result)
+    try:
+        try:
+            if terminal_started and status!='completed':shutdown_cli()
+        except (OSError,RuntimeError,ValueError) as error:
+            emit('error',message='Could not finish graceful shutdown: '+str(error)[-1000:])
+        # Keep the final cancellation frame, independently of live sampling.
+        if terminal_started:
+            try:capture(tmux,emit)
+            except (OSError,RuntimeError,ValueError,subprocess.TimeoutExpired) as error:
+                emit('error',message='Final terminal capture failed: '+str(error)[-1000:])
+    finally:
+        # Even a broken output pipe or failed shutdown receipt must clean the UID.
+        result={'execution':status,'grading':grade,'uid':uid}
+        try:finalize_task(root,result)
+        finally:
+            if cli_fd is not None:os.close(cli_fd)
     emit('result',**result)

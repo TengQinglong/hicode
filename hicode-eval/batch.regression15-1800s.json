@@ -1,0 +1,23 @@
+{
+  "name": "Passed-15 regression \u00b7 unified file editing \u00b7 1800s",
+  "tasks": [
+    "cancel-async-tasks",
+    "log-summary-date-ranges",
+    "regex-log",
+    "sqlite-db-truncate",
+    "code-from-image",
+    "constraints-scheduling",
+    "gcode-to-text",
+    "git-leak-recovery",
+    "llm-inference-batching-scheduler",
+    "openssl-selfsigned-cert",
+    "merge-diff-arc-agi-task",
+    "sparql-university",
+    "model-extraction-relu-logits",
+    "db-wal-recovery"
+  ],
+  "concurrency": 3,
+  "budget": {
+    "agentSeconds": 1800
+  }
+}

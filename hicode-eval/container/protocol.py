@@ -54,6 +54,7 @@ class Events:
         self.ending = None
         self.last_type = None
         self.session_id = None
+        self.pending_tools = set()
 
     def accept(self, data):
         self.partial += data
@@ -93,10 +94,20 @@ class Events:
                 self.last_type = event['event']['type']
                 if self.last_type == 'model_stream_start': self.started = True; self.settled = None; self.ending = None
                 if self.last_type == 'turn_end': self.ending = event['event']['input']
+                if self.last_type in {'tool_call_start', 'tool_call_end'}:
+                    tool_id = event['event'].get('toolCallId')
+                    if not isinstance(tool_id, str) or not tool_id:
+                        raise ValueError('Missing tool call identity')
+                    if self.last_type == 'tool_call_start':
+                        if tool_id in self.pending_tools: raise ValueError('Duplicate tool call start')
+                        self.pending_tools.add(tool_id)
+                    else:
+                        if tool_id not in self.pending_tools: raise ValueError('Unpaired tool call result')
+                        self.pending_tools.remove(tool_id)
 
     def complete(self):
         return (self.settled is not None and self.settled.get('sealed') is True and not self.busy and self.settled['runningAgents'] == 0 and self.settled.get('pendingAgentMessages') == 0
-                and self.ending is not None and self.ending['persistence_status'] == 'saved')
+                and not self.pending_tools and self.ending is not None and self.ending['persistence_status'] == 'saved')
 
 
 def namespace_argv(args, project, home, logs, control, tests=None):

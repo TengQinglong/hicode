@@ -450,7 +450,7 @@ describe("tool registry contract", () => {
       );
       expect(approvals).toBe(1);
       expect(result.outcome).toBe("failed");
-      expect(result.modelContent).toContain("has changed since the last read_file");
+      expect(result.modelContent).toContain("old_string was not found");
       expect(result.uiData).toBeUndefined();
       expect(await readFile(path, "utf8")).toBe("external\n");
     });
@@ -514,7 +514,7 @@ describe("tool registry contract", () => {
     });
   });
 
-  test("edit_file 的部分读取只授权可见片段，且状态不跨 Runtime 泄漏", async () => {
+  test("局部编辑使用当前内容匹配，完整覆盖凭证不跨 Runtime 泄漏", async () => {
     await withTempProject(async (cwd) => {
       const path = join(cwd, "partial.txt");
       await writeFile(path, "alpha\nbeta\ngamma\n");
@@ -536,8 +536,8 @@ describe("tool registry contract", () => {
         first,
         "edit-unobserved"
       );
-      expect(hidden.outcome).toBe("failed");
-      expect(hidden.modelContent).toContain("did not show all content to edit");
+      expect(hidden.outcome).toBe("ok");
+      expect(hidden.modelContent).toContain("Modified");
 
       const visible = await executeTool(
         "edit_file",
@@ -560,8 +560,10 @@ describe("tool registry contract", () => {
         second,
         "edit-unread"
       );
-      expect(leaked.outcome).toBe("failed");
-      expect(leaked.modelContent).toContain("Use read_file to read");
+      expect(leaked.outcome).toBe("ok");
+      const overwrite = await executeToolResult("write_file", JSON.stringify({path: "partial.txt", content: "blind"}), second, "overwrite-unread");
+      expect(overwrite.outcome).toBe("failed");
+      expect(await readFile(path, "utf8")).toBe("ALPHA\nBeta\ngamma\n");
     });
   });
 
@@ -608,7 +610,7 @@ describe("tool registry contract", () => {
     });
   });
 
-  test("edit_file 用内容哈希拒绝读取后发生的外部修改", async () => {
+  test("edit_file 接受当前唯一目标并报告读取后的外部变化", async () => {
     await withTempProject(async (cwd) => {
       const path = join(cwd, "stale.txt");
       await writeFile(path, "before\n");
@@ -630,8 +632,8 @@ describe("tool registry contract", () => {
         }),
         ctx
       );
-      expect(result).toContain("has changed since the last read_file");
-      expect(await readFile(path, "utf8")).toBe("changed elsewhere\n");
+      expect(result).toContain("changed since its last recorded read");
+      expect(await readFile(path, "utf8")).toBe("edited\n");
     });
   });
 

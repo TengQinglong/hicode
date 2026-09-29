@@ -1,21 +1,21 @@
 import {z} from "zod";
-import {readFile} from "node:fs/promises";
 import type {Tool, ToolContext} from "../types.js";
 import {displayToolPath, resolveToolPath} from "../shared/paths.js";
 import {findMatches, type MatchSpan} from "./strMatch.js";
 import {normalizeFileText} from "../shared/fileState.js";
 import {createFileChange} from "../../fileChanges/index.js";
 import {commitFileWrite} from "../shared/fileWrite.js";
+import {readFileSnapshot} from "../shared/fileSnapshot.js";
 
 const editSchema = z.object({
-    old_string: z.string().min(1).describe("Exact text to replace in the current read version."),
+    old_string: z.string().min(1).describe("Exact text to replace in the current file. Include enough context to identify one location."),
     new_string: z.string().describe("Replacement text."),
     replace_all: z.boolean().default(false).describe("Replace every match; requires a full file read."),
 }).strict();
 
 const inputSchema = z.object({
     path: z.string().describe("Path of the file to edit."),
-    edits: z.array(editSchema).min(1).max(100).describe("Non-overlapping replacements against the same read version. Use one item for a single replacement."),
+    edits: z.array(editSchema).min(1).max(100).describe("Non-overlapping replacements against the same current file version. Use one item for a single replacement."),
 }).strict();
 
 type Edit = z.infer<typeof editSchema>;
@@ -26,28 +26,42 @@ interface Replacement extends MatchSpan {
 interface EditValidation {
     originalContent: string;
     normalizedContent: string;
-    lineEnding: "\n" | "\r\n";
+    changedSinceRead: boolean;
     replacements: Replacement[];
 }
 
-function restoreLineEndings(
-    content: string,
-    lineEnding: "\n" | "\r\n"
-): string {
-    return lineEnding === "\r\n" ? content.replace(/\n/g, "\r\n") : content;
+/** Match normalized lines, but change only the selected bytes in the original file. */
+function applyReplacements(original: string, replacements: readonly Replacement[]): string {
+    let raw = 0, normalized = 0, previousEnd = 0;
+    const parts: string[] = [];
+    const offset = (target: number): number => {
+        while (normalized < target) {
+            raw += original[raw] === "\r" && original[raw + 1] === "\n" ? 2 : 1;
+            normalized++;
+        }
+        return raw;
+    };
+    for (const span of replacements) {
+        const start = offset(span.start), end = offset(span.end);
+        const newline = /\r\n|\r|\n/g;
+        newline.lastIndex = start;
+        const following = newline.exec(original);
+        const previous = Math.max(original.lastIndexOf("\n", start - 1), original.lastIndexOf("\r", start - 1));
+        const ending = following?.[0] ?? (previous < 0 ? "\n" : original[previous] === "\r"
+            ? "\r" : original[previous - 1] === "\r" ? "\r\n" : "\n");
+        const replacement = normalizeFileText(original.slice(start, end)) === span.newString
+            ? original.slice(start, end) : span.newString.replace(/\n/g, ending);
+        parts.push(original.slice(previousEnd, start), replacement);
+        previousEnd = end;
+    }
+    parts.push(original.slice(previousEnd));
+    return parts.join("");
 }
 
-function readStateMessage(
-    path: string,
-    reason: "not_read" | "partial_read" | "stale"
-): string {
-    if (reason === "partial_read") {
-        return `read_file did not show all content to edit. Read the range in ${path} containing old_string; replace_all requires reading the entire file first.`;
-    }
-    if (reason === "stale") {
-        return `File ${path} has changed since the last read_file; read it again.`;
-    }
-    return `Use read_file to read ${path} before editing (to prevent stale writes). Bash cat and other tools do not establish this read record.`;
+function lineRange(content: string, span: MatchSpan): string {
+    const start = content.slice(0, span.start).split("\n").length;
+    const end = content.slice(0, Math.max(span.start, span.end - 1)).split("\n").length;
+    return start === end ? String(start) : `${start}-${end}`;
 }
 
 async function validateEdits(
@@ -57,7 +71,11 @@ async function validateEdits(
 ): Promise<{ ok: true; value: EditValidation } | { ok: false; message: string }> {
     let originalContent: string;
     try {
-        originalContent = await readFile(path, "utf-8");
+        const snapshot = await readFileSnapshot(path);
+        originalContent = snapshot.content.toString("utf8");
+        if (snapshot.content.includes(0) || !Buffer.from(originalContent).equals(snapshot.content)) {
+            throw new Error("edit_file requires valid UTF-8 text without NUL bytes");
+        }
     } catch (err) {
         return {
             ok: false,
@@ -66,7 +84,7 @@ async function validateEdits(
     }
 
     const state = ctx.fileState.check(path, originalContent);
-    if (!state.ok) return {ok: false, message: readStateMessage(path, state.reason)};
+
 
     const normalizedContent = normalizeFileText(originalContent);
     const replacements: Replacement[] = [];
@@ -77,16 +95,12 @@ async function validateEdits(
             return fail(`In ${path}, old_string was not found in the original version. Verify the target file and exact text with targeted search/read_file; do not retry unchanged. All items must match this file's original contents, not another file or content generated by earlier items.`);
         }
         if (!edit.replace_all && spans.length > 1) {
-            return fail(`old_string in ${path} matched ${spans.length} locations, but replace_all=false. Provide unique context or explicitly set replace_all=true.`);
+            return fail(`old_string in ${path} matched ${spans.length} locations at lines ${spans.slice(0, 8).map(span => lineRange(normalizedContent, span)).join(", ")}${spans.length > 8 ? ", …" : ""}. Provide unique context, or use replace_all=true after reading the whole current file.`);
         }
-        const observed = ctx.fileState.check(path, originalContent, {
-            replaceAll: edit.replace_all,
-            ranges: spans.map(span => [
-                Buffer.byteLength(normalizedContent.slice(0, span.start)),
-                Buffer.byteLength(normalizedContent.slice(0, span.end)),
-            ] as const),
-        });
-        if (!observed.ok) return fail(readStateMessage(path, observed.reason));
+        if (edit.replace_all) {
+            const observed = ctx.fileState.check(path, originalContent, {requireFullRead: true});
+            if (!observed.ok) return fail(`replace_all requires reading the entire file in its current version with read_file (${observed.reason}). Use a unique local replacement to modify only one location.`);
+        }
         const newString = normalizeFileText(edit.new_string);
         for (const span of spans) replacements.push({...span, newString, editIndex});
     }
@@ -96,7 +110,7 @@ async function validateEdits(
         const previous = replacements[i - 1]!;
         const current = replacements[i]!;
         if (current.start < previous.end) {
-            return {ok: false, message: `Item ${previous.editIndex + 1} overlaps item ${current.editIndex + 1} . Combine them into one unambiguous replacement.`};
+            return {ok: false, message: `Item ${previous.editIndex + 1} (lines ${lineRange(normalizedContent, previous)}) overlaps item ${current.editIndex + 1} (lines ${lineRange(normalizedContent, current)}). Combine them into one unambiguous replacement.`};
         }
     }
     return {
@@ -104,7 +118,7 @@ async function validateEdits(
         value: {
             originalContent,
             normalizedContent,
-            lineEnding: originalContent.includes("\r\n") ? "\r\n" : "\n",
+            changedSinceRead: !state.ok && state.reason === "stale",
             replacements,
         },
     };
@@ -113,7 +127,7 @@ async function validateEdits(
 export const editFileTool: Tool<typeof inputSchema> = {
     name: "edit_file",
     description:
-        "Apply one or more exact replacements to a single file using the edits array. All old_string values match the same previously read original version; later edits cannot target text created by earlier edits, and ranges must not overlap. Validate every replacement before one atomic write; any validation failure leaves the file unchanged. Partial reads permit editing only observed content. old_string must match uniquely unless replace_all=true, which requires a full read. Preserve indentation and exclude read_file line-number prefixes. Group known related changes in one call instead of making a model round trip per replacement.",
+        "Apply exact, non-overlapping replacements to one current file using the edits array. Each old_string must identify one location; no prior read_file receipt is required for local edits. Use read_file or Bash to inspect unfamiliar code before choosing changes. All items target the same original version, never text created by earlier items. replace_all=true requires a full read_file of the current file. Matching normalizes line endings and, only if exact matching fails, typographic quotes; indentation is significant. Every item is validated before one atomic write, and a concurrent file change aborts the write. Preserve context and exclude displayed line numbers. Group related non-overlapping changes in one call.",
     parameters: inputSchema,
     isReadOnly: () => false,
     getDefaultApprovalScope: ({path}) => ({kind: "workspace", path}),
@@ -148,17 +162,12 @@ export const editFileTool: Tool<typeof inputSchema> = {
         const {
             originalContent,
             normalizedContent,
-            lineEnding,
+            changedSinceRead,
             replacements,
         } = validation.value;
         const count = replacements.length;
 
-        let normalizedNewContent = normalizedContent;
-        for (const span of [...replacements].reverse()) {
-            normalizedNewContent = normalizedNewContent.slice(0, span.start) +
-                span.newString + normalizedNewContent.slice(span.end);
-        }
-        const newContent = restoreLineEndings(normalizedNewContent, lineEnding);
+        const newContent = applyReplacements(originalContent, replacements);
         const edits = replacements.map(span => ({start: Buffer.byteLength(normalizedContent.slice(0, span.start)),
             end: Buffer.byteLength(normalizedContent.slice(0, span.end)), insertedBytes: Buffer.byteLength(span.newString)}));
 
@@ -193,7 +202,8 @@ export const editFileTool: Tool<typeof inputSchema> = {
             edits,
         });
         const result =
-            `Modified ${path} (replaced ${count} matches)`;
+            `Modified ${path} (replaced ${count} matches)` + (changedSinceRead
+                ? "\nThe file changed since its last recorded read. Only the requested matches were replaced; other current content was preserved. Inspect surrounding code before changes that depend on it." : "");
         return {
             content: result,
             displayContent: result,

@@ -82,7 +82,7 @@ describe("synchronous subagent", () => {
     });
   });
 
-  test("子 Agent 不能复用父 Agent 的文件读取授权", async () => {
+  test("子 Agent 可局部编辑但不继承父 Agent 的完整读取凭证", async () => {
     await withTempProject(async (cwd) => {
       const path = `${cwd}/owned-by-parent.ts`;
       const original = "export const value = 1;\n";
@@ -90,40 +90,32 @@ describe("synchronous subagent", () => {
       const ctx = createTestContext(cwd, {permissionMode: "ask"});
       await executeToolResult("read_file", JSON.stringify({path}), ctx, "parent-read");
       const child = createFakeLLM([
-        assistantToolCall("edit_file", {
-          path: "owned-by-parent.ts",
-          edits: [{old_string: "value = 1",
-          new_string: "value = 2"}],
-        }, "child-edit-without-read"),
-        (options) => {
-          const result = options.messages.find((message) =>
-            message.role === "tool" &&
-            message.tool_call_id === "child-edit-without-read"
-          );
-          expect(result?.content).toContain("Use read_file to read");
-          expect(result?.content).toContain("Edit failed");
-          return assistantText("子 Agent 没有自己的读取证据，因此未修改文件。");
+        assistantToolCall("write_file", {path: "owned-by-parent.ts", content: "blind"}, "child-overwrite"),
+        options => {
+          expect(options.messages.filter(message => message.role === "tool").at(-1)?.content).toContain("Write precondition failed");
+          return assistantToolCall("edit_file", {path: "owned-by-parent.ts", edits: [{old_string: "value = 1", new_string: "value = 2"}]}, "child-local");
+        },
+        options => {
+          expect(options.messages.filter(message => message.role === "tool").at(-1)?.content).toContain("Modified");
+          return assistantToolCall("write_file", {path: "owned-by-parent.ts", content: "blind again"}, "child-overwrite-after-edit");
+        },
+        options => {
+          expect(options.messages.filter(message => message.role === "tool").at(-1)?.content).toContain("Write precondition failed");
+          return assistantText("仅完成局部修改，整体覆盖缺少读取凭证。");
         },
       ]);
       const runner = createSubagentRunner({
-        registry: createWriterRegistry(),
-        parentContext: ctx,
-        onEvent: () => {},
-        agentOptions: {callLLM: child.callLLM},
-        toolResultStoreOptions: {hicodeHome: `${cwd}/tool-results`},
+        registry: createWriterRegistry(), parentContext: ctx, onEvent: () => {},
+        agentOptions: {callLLM: child.callLLM}, toolResultStoreOptions: {hicodeHome: `${cwd}/tool-results`},
       });
-
       const result = await runner({
-        agentType: "FixtureWriter",
-        description: "验证文件观察隔离",
-        prompt: "不要读取文件，直接修改 owned-by-parent.ts",
-        parentToolCallId: "parent-observation",
-        workspaceWriteApproved: true,
+        agentType: "FixtureWriter", description: "验证文件观察隔离",
+        prompt: "验证当前文本局部修改与完整覆盖的边界", parentToolCallId: "parent-observation", workspaceWriteApproved: true,
       });
-
-      expect(result.reply).toContain("未修改文件");
-      expect(child.calls).toHaveLength(2);
-      expect(await readFile(path, "utf8")).toBe(original);
+      expect(result.reply).toContain("仅完成局部修改");
+      expect(child.calls).toHaveLength(4);
+      expect(await readFile(path, "utf8")).toBe("export const value = 2;\n");
+      expect((await executeToolResult("write_file", JSON.stringify({path, content: original}), ctx, "parent-stale-overwrite")).outcome).toBe("failed");
     });
   });
 

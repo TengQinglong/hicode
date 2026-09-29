@@ -32,7 +32,7 @@ type FileStateCheck =
     | {ok: true}
     | {ok: false; reason: "not_read" | "partial_read" | "stale"};
 
-/** Session-owned delivered evidence. Disk reads alone never grant edit rights. */
+/** Session-owned delivered evidence for whole-file operations, independent of path permissions. */
 export class FileStateTracker {
     private readonly states = new Map<string, FileReadState>();
     private readonly pending = new Map<string, Evidence>();
@@ -71,14 +71,14 @@ export class FileStateTracker {
     }
 
     check(path: string, content: string | Buffer, options: {
-        requireFullRead?: boolean; replaceAll?: boolean; ranges?: readonly ByteRange[];
+        requireFullRead?: boolean;
     } = {}): FileStateCheck {
         const state = this.states.get(resolve(path));
         if (!state) return {ok: false, reason: "not_read"};
         if (state.hash !== hash(content)) {
             return {ok: false, reason: "stale"};
         }
-        const required = options.requireFullRead || options.replaceAll ? [[0, state.size] as const] : options.ranges ?? [];
+        const required = options.requireFullRead ? [[0, state.size] as const] : [];
         return required.every(([start, end]) => state.size === 0 || state.ranges.some(([a, b]) => a <= start && b >= end))
             ? {ok: true} : {ok: false, reason: "partial_read"};
     }

@@ -94,14 +94,17 @@ async function resolvePermissionInner(
     }
 
     const rules = ctx.permissionRules;
-    const patterns = [...rules.allow, ...rules.ask, ...rules.deny].filter(rule => rule.toolName === tool.name)
+    // Editing reads current source to validate and build the result. Read restrictions
+    // must remain effective even when local edits do not need an earlier read receipt.
+    const readsSource = tool.name === "edit_file" || tool.name === "write_file";
+    const patterns = [...rules.allow, ...rules.ask, ...rules.deny].filter(rule => rule.toolName === tool.name || (readsSource && rule.toolName === "read_file"))
         .flatMap(rule => rule.content === undefined ? [] : [rule.content]);
     const matcher = await getMatcher(tool, input, ctx.cwd, patterns);
     const defaultScope = tool.getDefaultApprovalScope?.(input, ctx);
 
     // 1. Explicit deny rules have highest priority.
     for (const rule of rules.deny) {
-        if (ruleMatches(rule, tool.name, matcher, "deny")) {
+        if (ruleMatches(rule, tool.name, matcher, "deny") || (readsSource && ruleMatches(rule, "read_file", matcher, "deny"))) {
             return {
                 behavior: "deny",
                 message: `Denied by rule: ${rule.toolName}(${rule.content ?? "*"})`,
@@ -133,7 +136,7 @@ async function resolvePermissionInner(
 
     // 3. Explicit ask still goes to the current reviewer.
     for (const rule of rules.ask) {
-        if (ruleMatches(rule, tool.name, matcher, "ask")) {
+        if (ruleMatches(rule, tool.name, matcher, "ask") || (readsSource && ruleMatches(rule, "read_file", matcher, "ask"))) {
             return {
                 behavior: "ask",
                 message: `Rule requires approval: ${rule.toolName}(${rule.content ?? "*"})`,

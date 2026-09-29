@@ -136,3 +136,5 @@ Evaluation assignments use `full-access` inside their own UID and outer read-onl
 Pre-download pinned Python wheels and their dependencies into `/opt/hicode-eval/wheels/<package>-<version>/` on the evaluation machine. When these directories exist, the runner installs offline with `--no-index` into the task directory; an incomplete cache fails without network fallback. Agent and verifier versions are installed separately.
 
 Prompt pasting and Enter are sent separately. Execution and the agent budget begin only after `model_stream_start`; a submission with no acknowledgment within 15 seconds fails as a startup error instead of idling through the task budget.
+
+At the evaluation deadline, the runner sends SIGTERM to the identified HiCode CLI and allows up to 10 seconds for cancellation and persistence while draining events, then force-cleans remaining processes for that task UID. This window is for teardown, not continued solving: execution remains timeout even if grading passes. `evidence/shutdown.json` records CLI exit, saved-turn status, and pending tool calls; missing events are never fabricated.
