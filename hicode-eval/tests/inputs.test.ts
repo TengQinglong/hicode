@@ -8,7 +8,7 @@ import { tree } from '../lib/store.js';
 
 const content = Buffer.from([0, 255, 10, 128, 42]);
 const hash = createHash('sha256').update(content).digest('hex');
-const profile = { hashes: { 'environment/input.bin': hash }, inputs: [{ source: 'environment/input.bin', target: 'input.bin' }], initializer: null, directories: [], packages: [], verifierPrelude: 'none' as const };
+const profile = { hashes: { 'environment/input.bin': hash }, inputs: [{ source: 'environment/input.bin', target: 'input.bin' }], initializer: null, directories: [], packages: [], verifierPackages: [], verifierPrelude: 'none' as const };
 async function fixture(run: (root: string, task: string) => Promise<void>) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'hicode-eval-inputs-'))), task = join(root, 'task');
   try {
@@ -58,9 +58,9 @@ test('manifest refuses path escapes, undeclared files, hidden test sources, and 
   });
 });
 
-test('catalog includes six reviewed tasks with the exact newly required inputs', async () => {
+test('catalog includes reviewed tasks with the exact newly required inputs', async () => {
   const available = await profiles();
-  expect(Object.keys(available)).toHaveLength(12);
+  expect(Object.keys(available)).toHaveLength(17);
   expect(available['sqlite-db-truncate']!.inputs.map(file => file.target)).toEqual(['trunc.db']);
   expect(available['code-from-image']!.inputs.map(file => file.target)).toEqual(['code.png']);
   expect(available['constraints-scheduling']!.inputs.map(file => file.target)).toEqual(['alice_calendar.ics', 'bob_calendar.ics', 'carol_calendar.ics']);
@@ -72,4 +72,10 @@ test('catalog includes six reviewed tasks with the exact newly required inputs',
   expect(available['raman-fitting']!.packages).toEqual(['numpy==2.3.3','scipy==1.16.2']);
   expect(available['schemelike-metacircular-eval']!.inputs.some(file => file.target === 'test/y_combinator.scm')).toBe(true);
   expect(available['schemelike-metacircular-eval']!.inputs.some(file => file.target.includes('shadow_test'))).toBe(false);
+  expect(available['merge-diff-arc-agi-task']!.inputs.map(file => file.target)).toEqual(['bundle1.bundle','bundle2.bundle','examples.json']);
+  expect(available['sparql-university']!.packages).toEqual(['rdflib==7.1.4']);
+  expect(available['model-extraction-relu-logits']!.packages).toEqual(['numpy==2.2.5']);
+  expect(available['model-extraction-relu-logits']!.verifierPackages).toEqual(['numpy==2.3.1']);
+  expect(available['db-wal-recovery']!.inputs.map(file => file.target)).toEqual(['main.db','main.db-wal']);
+  expect(available['chess-best-move']!.inputs.map(file => file.target)).toEqual(['chess_board.png']);
 });

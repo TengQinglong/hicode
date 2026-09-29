@@ -1,7 +1,23 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
+
+
+def package_install_argv(packages, target, cache=Path('/opt/hicode-eval/wheels')):
+    if not packages or any(not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.+-]*', p) for p in packages):
+        raise ValueError('Expected pinned Python packages')
+    wheels = [cache / p.replace('==', '-') for p in packages]
+    # A prepared wheelhouse is resolved entirely offline, including dependencies.
+    offline = all(path.is_dir() for path in wheels)
+    args = ['/opt/python313/bin/python3.13', '-m', 'pip', 'install', '--no-input', '--disable-pip-version-check', '--only-binary=:all:', '--target', target]
+    if offline:
+        args += ['--no-index']
+        for path in wheels: args += ['--find-links', str(path)]
+    else:
+        args += ['--timeout', '15', '--retries', '1']
+    return args + packages, offline
 
 
 def atomic_json(path, value):
@@ -31,6 +47,7 @@ class Events:
         self.partial = b''
         self.sequence = 0
         self.ready = False
+        self.started = False
         self.busy = False
         self.waiting = False
         self.settled = None
@@ -74,7 +91,7 @@ class Events:
             elif kind == 'settled': self.settled = event
             elif kind == 'agent_event':
                 self.last_type = event['event']['type']
-                if self.last_type == 'turn_start': self.settled = None; self.ending = None
+                if self.last_type == 'model_stream_start': self.started = True; self.settled = None; self.ending = None
                 if self.last_type == 'turn_end': self.ending = event['event']['input']
 
     def complete(self):
@@ -83,6 +100,6 @@ class Events:
 
 
 def namespace_argv(args, project, home, logs, control, tests=None):
-    result=['bwrap','--unshare-user','--unshare-pid','--die-with-parent','--ro-bind','/','/','--proc','/proc','--dev','/dev','--tmpfs','/tmp','--bind',str(project),'/app','--bind',str(home),str(home),'--bind',str(logs),str(logs),'--bind',str(control),str(control),'--chdir','/app']
+    result=['bwrap','--unshare-user','--unshare-pid','--die-with-parent','--ro-bind','/','/','--proc','/proc','--dev','/dev','--tmpfs','/tmp','--bind',str(project),'/app','--bind',str(home),str(home),'--bind',str(logs),str(logs),'--ro-bind',str(control),str(control),'--chdir','/app']
     if tests is not None:result+=['--ro-bind',str(tests),'/tests','--bind',str(Path(logs)/'verifier'),'/logs/verifier']
     return result+args

@@ -72,7 +72,7 @@ export class LinuxMachine {
     if (profile.initializer) await run(this.docker('cp', join(task, 'environment', profile.initializer.file), this.config.machine + ':' + remote + '/project/' + profile.initializer.file));
     await run(this.docker('cp', join(task, 'instruction.md'), this.config.machine + ':' + remote + '/instruction.md'));
     const spec = taskSchema.parse(Bun.TOML.parse(await Bun.file(join(task, 'task.toml')).text()));
-    await save(join(path, 'job.json'), { model: this.config.model, release: this.release, agentSeconds: state.budget.agentSeconds, originalAgentSeconds: spec.agent.timeout_sec, verifierSeconds: spec.verifier.timeout_sec, initializer: profile.initializer, packages: profile.packages, verifierPrelude: profile.verifierPrelude });
+    await save(join(path, 'job.json'), { model: this.config.model, release: this.release, agentSeconds: state.budget.agentSeconds, originalAgentSeconds: spec.agent.timeout_sec, verifierSeconds: spec.verifier.timeout_sec, initializer: profile.initializer, packages: profile.packages, verifierPackages: profile.verifierPackages, verifierPrelude: profile.verifierPrelude });
     await run(this.docker('cp', join(path, 'job.json'), this.config.machine + ':' + remote + '/job.json'));
     if (await exists(join(path, 'cancel'))) await this.cancel(state.id);
     await mkdir(join(path, 'live'), { recursive: true });
@@ -83,7 +83,7 @@ export class LinuxMachine {
     const proc = Bun.spawn(this.docker('exec', '--env', this.config.model.apiKeyEnv, this.config.machine, 'python3', '/opt/hicode-eval/runner.py', state.id), { env, stdout: 'pipe', stderr: 'pipe' });
     let result: LinuxResult | undefined, note = '', verificationSent = false;
     const stderr = new Response(proc.stderr).text();
-    const setupAllowance = profile.packages.length ? 360 : 240;
+    const setupAllowance = profile.verifierPackages.length ? 660 : profile.packages.length ? 360 : 240;
     const timer = setTimeout(() => { void this.cancel(state.id).catch(() => {}); }, (state.budget.agentSeconds + spec.verifier.timeout_sec + setupAllowance) * 1000);
     let buffer = '', lastCopy = Date.now();
     try {

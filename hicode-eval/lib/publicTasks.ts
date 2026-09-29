@@ -11,6 +11,7 @@ const profileSchema = z.object({
   initializer: z.object({kind:z.enum(['python','bash','gzip']),file:z.string().regex(/^[A-Za-z0-9_.-]+$/)}).strict().nullable(),
   directories: z.array(inputPath).max(64),
   packages: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.+-]*$/)).max(16),
+  verifierPackages: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.+-]*$/)).max(16).default([]),
   verifierPrelude: z.enum(['copy-test-helper','none'])
 }).strict().superRefine((profile, ctx) => {
   const targets = new Set<string>();
@@ -25,6 +26,8 @@ const profileSchema = z.object({
     ctx.addIssue({code:z.ZodIssueCode.custom,message:'Output directories must not collide with input files'});
   if (profile.packages.some((value, index) => profile.packages.indexOf(value) !== index))
     ctx.addIssue({code:z.ZodIssueCode.custom,message:'Task-local package pins must be unique'});
+  if (profile.verifierPackages.some((value, index) => profile.verifierPackages.indexOf(value) !== index))
+    ctx.addIssue({code:z.ZodIssueCode.custom,message:'Verifier package pins must be unique'});
 });
 export async function profiles() {
   return readJson(join(import.meta.dir, '../public-tasks.json'), z.record(profileSchema));

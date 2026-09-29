@@ -2,6 +2,14 @@
 import time
 
 
+def submit_prompt(tmux, path):
+    tmux('load-buffer', str(path))
+    tmux('paste-buffer', '-p', '-t', 'hicode:0.0')
+    # Keep Enter out of the PTY paste burst. The runner still requires model_stream_start.
+    time.sleep(.5)
+    tmux('send-keys', '-t', 'hicode:0.0', 'Enter')
+
+
 def read_screen(tmux):
     screen = tmux('capture-pane', '-p', '-e', '-S', '-20000', '-t', 'hicode:0.0', timeout=2)
     if len(screen.encode()) > 8 * 1024 * 1024:

@@ -1,9 +1,17 @@
 import unittest
 from unittest.mock import patch
-from terminal import capture, settle
+from terminal import capture, settle, submit_prompt
 
 
 class TerminalTest(unittest.TestCase):
+    def test_prompt_enter_is_separated_from_paste_and_sent_only_once(self):
+        calls=[]
+        with patch('terminal.time.sleep',side_effect=lambda seconds:calls.append(('delay',seconds))):
+            submit_prompt(lambda *args:calls.append(args),'/run/test/prompt.txt')
+        self.assertEqual([c[0] for c in calls],['load-buffer','paste-buffer','delay','send-keys'])
+        self.assertGreaterEqual(calls[2][1],.5)
+        self.assertEqual(calls[-1][-1],'Enter')
+
     def test_completion_waits_for_delayed_paint_and_keeps_last_frame(self):
         clock = [0.0]
         packets = []

@@ -4,7 +4,9 @@
 
 Run public programming tasks through HiCode on a persistent Linux container. Submit batches from the CLI, watch the full TUI in a browser, and automatically collect test results and logs. Each task gets one independent attempt, with no corrective follow-up prompts or automatic retries.
 
-Currently supports **6 Terminal-Bench 2.0 tasks**: `cancel-async-tasks`, `log-summary-date-ranges`, `regex-log`, `sqlite-db-truncate`, `code-from-image`, and `constraints-scheduling`. The remaining 83 tasks require individual adaptation and cannot be submitted yet. This is a development regression tool: the shared system, ARM64 environment, and configurable time limits differ from official benchmark conditions. Results are not official leaderboard scores.
+Currently supports **17 Terminal-Bench 2.0 tasks**. This is a development regression tool: the shared system, ARM64 environment, and configurable time limits differ from official benchmark conditions. Results are not official leaderboard scores.
+
+See [TASK-STATUS.md](TASK-STATUS.md) for passed, failed, and pending tasks.
 
 ## 1. Prepare the environment and dataset
 
@@ -128,3 +130,9 @@ bun run check
 ```
 
 The Python runner helpers use only the standard library; verifier dependencies live in the evaluation image. `web/vendor/` includes xterm.js under the MIT license; retain its license file. Keep run data, payloads, datasets, and credentials outside the repository and out of Git.
+
+Evaluation assignments use `full-access` inside their own UID and outer read-only mount namespace, allowing workspace Git writes without interactive approvals. This does not change normal HiCode permissions. Control files are read-only, and assignment processes stop before original tests are uploaded and executed. The outer boundary continues to protect system paths and other assignments.
+
+Pre-download pinned Python wheels and their dependencies into `/opt/hicode-eval/wheels/<package>-<version>/` on the evaluation machine. When these directories exist, the runner installs offline with `--no-index` into the task directory; an incomplete cache fails without network fallback. Agent and verifier versions are installed separately.
+
+Prompt pasting and Enter are sent separately. Execution and the agent budget begin only after `model_stream_start`; a submission with no acknowledgment within 15 seconds fails as a startup error instead of idling through the task budget.

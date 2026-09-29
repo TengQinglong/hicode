@@ -526,5 +526,135 @@
     ],
     "directories": [],
     "packages": []
+  },
+  "merge-diff-arc-agi-task": {
+    "hashes": {
+      "environment/Dockerfile": "4a03ae6f0c60b9c2f45c33f0413b5aa75c9811870254e3ff1968fd0119173fc6",
+      "environment/task-deps/bundle1.bundle": "a759f9b6ffc1a2eee50778d72a1899ad7d724becab84fa30e7aac71ee9e443a5",
+      "environment/task-deps/bundle2.bundle": "75e3e3916a01c980a03715de67b16c729e03661d94a694b5f4223d229bd6593a",
+      "environment/task-deps/examples.json": "5426569e4ea078bbb74039ec712a2d4d35f1f9fa3a5f26bf2a0de4a2c8ef5db8",
+      "instruction.md": "2d826479873e5ac1c94c1f802763bf85c22bb04624384685ebdf6b153fe0278e",
+      "solution/solve.sh": "48d4becc41fda5b6063fe96947474ffe778a29d6924d7b2bb235eb61e5ce555d",
+      "task.toml": "32696fcfedf2df9a089b97a7fb4dcb6f757b7bb438e5bff5c8c0076ea622af3a",
+      "tests/test.json": "20f116a6b718bbf4874bbe203d15a5c0f85a1d88cb622e2d7529c7e4fb2d4c28",
+      "tests/test.sh": "c9052954cd6ce25c4a375a2fb48e765b1efa5b39f7991b93993cc793af8ab9d2",
+      "tests/test_outputs.py": "2754ba6c5c5f75c9db5ed2c5729d9f5d7e21cb7fdb18aa0c65abdc3e7e85c149"
+    },
+    "initializer": null,
+    "verifierPrelude": "none",
+    "inputs": [
+      {
+        "source": "environment/task-deps/bundle1.bundle",
+        "target": "bundle1.bundle"
+      },
+      {
+        "source": "environment/task-deps/bundle2.bundle",
+        "target": "bundle2.bundle"
+      },
+      {
+        "source": "environment/task-deps/examples.json",
+        "target": "examples.json"
+      }
+    ],
+    "directories": [],
+    "packages": []
+  },
+  "chess-best-move": {
+    "hashes": {
+      "environment/Dockerfile": "d5697e7a11399e45f105bf43f40e5c95746d6a8601965ea6935a52b59bbbfa2b",
+      "environment/chess_board.png": "d7661ad33a69ac05b61d801819e3f882ffc93aac4a87bf9a1636d36b626b7e13",
+      "environment/make.py": "46b95008df62fac7ca7fd7260baf36519de5718b91a4bde485c8d9b7d37f17c1",
+      "instruction.md": "6ba25be4e291a4ad04ae42b2dddefcdaef67ca45ca9d5dce661a2e517b19ce7a",
+      "solution/solve.sh": "53b5c5e2278ca915b0930eedfd44565ca84ef21c7346fd6601434484cf76151f",
+      "task.toml": "d02acae26d6238e2c05d34424258a2053f076eb88d31703348d3ac3403f963ef",
+      "tests/test.sh": "4770437ea96c3cc84684b4f99d55fb148fcac09f9ea1e8ef49de487716e6c334",
+      "tests/test_outputs.py": "a540714e0156fc14564badedcb48d1f7b69a4b457d876036535439b30cb8f286"
+    },
+    "initializer": null,
+    "verifierPrelude": "none",
+    "inputs": [
+      {
+        "source": "environment/chess_board.png",
+        "target": "chess_board.png"
+      }
+    ],
+    "directories": [],
+    "packages": []
+  },
+  "sparql-university": {
+    "hashes": {
+      "environment/Dockerfile": "dd0abcd64e90ab16141169bcbf88a8e5f52732f207cb37765d351cc7a48916a9",
+      "environment/university_graph.ttl": "0b0b1f2c0ee7ea7ddc9382f94ff8181996ffa7be60a1651111c1f57b49e09a85",
+      "instruction.md": "22eeab47d3b27b06df2627b3c21cfbd579ed7dcc85ebcb7c4b3a241c3c35f449",
+      "solution/solve.sh": "d17995a8f29c6d656c749271fd28e10d31afee6aa75f40ad28fea1c907f2a791",
+      "task.toml": "21a45de8a465d331d2bfbe2335c07315789f9b26f330bb74d768b223f34a494b",
+      "tests/test.sh": "45902b57bd0f1dd6959216bc9943ab27bb349edc7ff557035a1ecc8732e4cc6b",
+      "tests/test_outputs.py": "ecf15840fc14f1eeff2f3b6317d7f0febc8fa81f688d24e3054205ba13207b39",
+      "tests/university_graph_test.ttl": "368ce01d32513ee04dfe592784b0c976086e514c1eab9b3165a016ca7b0192cb"
+    },
+    "initializer": null,
+    "verifierPrelude": "none",
+    "inputs": [
+      {
+        "source": "environment/university_graph.ttl",
+        "target": "university_graph.ttl"
+      }
+    ],
+    "directories": [],
+    "packages": [
+      "rdflib==7.1.4"
+    ]
+  },
+  "model-extraction-relu-logits": {
+    "hashes": {
+      "environment/Dockerfile": "598b1f80d3b7194e97cbf02c8d245de30e303909e0cbe6465125d1d3179fddb5",
+      "environment/forward.py": "af1a23efd8e4390d16a29777c28116b2f8623ae3f7b628fe14db9f94dac26f5b",
+      "instruction.md": "c9e179dd099065a34c362a865b0eb9fab5f7d96be582cf117e7519580c036ebe",
+      "solution/solve.sh": "4cea5094f074ff21453d4423aa1b415a104ed90caa55a4acbb4f09941a3994ea",
+      "task.toml": "4d5c33f4172062d820a5444e9b104d9118ab6a7f12652c7b30e55e79a17e8596",
+      "tests/test.sh": "3b2d8f5e0353c2bab3515d6387468a863a4f9f241ee131c73f545f3fdf9e2d52",
+      "tests/test_outputs.py": "e5189c7eb9942ede55e1b48a80388590b80a486b75497613f257b3373ad9b2c9"
+    },
+    "initializer": null,
+    "verifierPrelude": "none",
+    "inputs": [
+      {
+        "source": "environment/forward.py",
+        "target": "forward.py"
+      }
+    ],
+    "directories": [],
+    "packages": [
+      "numpy==2.2.5"
+    ],
+    "verifierPackages": [
+      "numpy==2.3.1"
+    ]
+  },
+  "db-wal-recovery": {
+    "hashes": {
+      "environment/Dockerfile": "63a260531c62f4ae72060db17f295c0aa03cfc6321f8162c324b7aa6b3f81302",
+      "environment/main.db": "68cb288eb29e76d814b4e7ee6887b37c415675e644f88173bc191348e290d119",
+      "environment/main.db-wal.encrypted": "68753bdce26196a53194260d001544cc6bb8f9f38e2f2f6826d09798e31e6e26",
+      "instruction.md": "5a20375162921b8911c67035d1905df7fd335d1bed03044271e608b2c3c93b26",
+      "solution/solve.sh": "ed8530c94103bf19783a1d41bc63fe4db478cdd9629f22fee25c45a45699f5e8",
+      "task.toml": "2ff8fa659f95fd16932114f50d16c44229ffeb05f116c6f9e0c7b6b376e087e2",
+      "tests/test.sh": "4770437ea96c3cc84684b4f99d55fb148fcac09f9ea1e8ef49de487716e6c334",
+      "tests/test_outputs.py": "88dc5c2a3abba75bca0e0f9136223ae5bb585d5984b8d9eba51a7829c1d2ba49"
+    },
+    "initializer": null,
+    "verifierPrelude": "none",
+    "inputs": [
+      {
+        "source": "environment/main.db",
+        "target": "main.db"
+      },
+      {
+        "source": "environment/main.db-wal.encrypted",
+        "target": "main.db-wal"
+      }
+    ],
+    "directories": [],
+    "packages": []
   }
 }

@@ -1,3 +1,0 @@
-# Keep local lab and intentionally incomplete case fixtures out of HiCode test discovery.
-[test]
-pathIgnorePatterns = ["hicode-test-lab/**", "hicode-test-cases/**"]

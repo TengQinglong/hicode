@@ -16,7 +16,3 @@ coverage/
 # Keep pre-rename local configuration out of Git.
 .pillar/
 PILLAR.local.md
-
-# Local test tooling and case library; not published to GitHub.
-/hicode-test-lab/
-/hicode-test-cases/

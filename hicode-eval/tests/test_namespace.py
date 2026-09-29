@@ -1,5 +1,7 @@
 import unittest
-from protocol import namespace_argv
+import tempfile
+from pathlib import Path
+from protocol import namespace_argv, package_install_argv
 
 class NamespaceTest(unittest.TestCase):
     def test_task_keeps_app_path_and_does_not_mount_tests(self):
@@ -19,3 +21,22 @@ class NamespaceTest(unittest.TestCase):
         a=namespace_argv(['python','-m','pytest'],'/eval/a/project','/eval/a/home','/eval/a/logs','/run/a','/eval/a/tests')
         i=a.index('/eval/a/tests');self.assertEqual(a[i-1],'--ro-bind');self.assertEqual(a[i+1],'/tests')
         self.assertIn('/eval/a/logs/verifier',a)
+
+    def test_control_is_read_only_even_for_preauthorized_commands(self):
+        a=namespace_argv(['git','status'],'/eval/a/project','/eval/a/home','/eval/a/logs','/run/a')
+        i=a.index('/run/a')
+        self.assertEqual(a[i-1], '--ro-bind')
+
+    def test_cached_pins_install_without_network_and_validate_requirements(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache=Path(tmp)
+            (cache/'numpy-2.2.5').mkdir()
+            argv,offline=package_install_argv(['numpy==2.2.5'],'/app/.eval-python',cache)
+            self.assertTrue(offline)
+            self.assertIn('--no-index',argv)
+            self.assertIn(str(cache/'numpy-2.2.5'),argv)
+            argv,offline=package_install_argv(['numpy==2.3.1'],'/app/.eval-verifier-python',cache)
+            self.assertFalse(offline)
+            self.assertIn('--timeout',argv)
+            for invalid in ['numpy','../../outside==1','numpy==1/../../outside']:
+                with self.assertRaises(ValueError): package_install_argv([invalid],'/app/x',cache)

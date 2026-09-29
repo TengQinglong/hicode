@@ -1,9 +1,9 @@
 """One assignment, one Linux user, one tmux session. No installs or per-task containers."""
 import base64,fcntl,json,os,pwd,signal,subprocess,sys,time
 from pathlib import Path
-from protocol import Events,atomic_json,namespace_argv
+from protocol import Events,atomic_json,namespace_argv,package_install_argv
 from verifier import verify
-from terminal import capture,settle
+from terminal import capture,settle,submit_prompt
 from cleanup import stop_task_processes,finalize_task
 from recovery import process_start
 
@@ -66,15 +66,24 @@ def stop_user():
 terminal_started=False
 model=config['model'];release=config['release'];status='failed';grade='unavailable';events=Events();offset=0
 try:
+    # Approval is granted for this disposable assignment, inside the outer namespace.
+    config['permissionMode']='full-access'
+    atomic_json(root/'job.json',config)
     emit('phase',phase='Deploying task on shared Linux')
-    settings={'sources':{model['source']:{'baseUrl':model['baseUrl'],'apiKeyEnv':model['apiKeyEnv'],'models':[{'id':model['model'],'label':model['model'],'imageInput':model.get('imageInput',False)}]}},'models':{'primary':{'source':model['source'],'model':model['model']}},'memory':{'enabled':False},'permissions':{'defaultMode':'auto-review','deny':[f'{t}({p}/**)' for t in ['write_file','edit_file'] for p in [str(logs),str(control)]]},'sandbox':{'network':{'mode':'open'},'filesystem':{'denyWrite':[str(logs),str(control)]}}}
+    settings={'sources':{model['source']:{'baseUrl':model['baseUrl'],'apiKeyEnv':model['apiKeyEnv'],'models':[{'id':model['model'],'label':model['model'],'imageInput':model.get('imageInput',False)}]}},'models':{'primary':{'source':model['source'],'model':model['model']}},'memory':{'enabled':False},'permissions':{'defaultMode':config['permissionMode'],'deny':[f'{t}({p}/**)' for t in ['write_file','edit_file'] for p in [str(logs),str(control)]]},'sandbox':{'network':{'mode':'open'},'filesystem':{'denyWrite':[str(logs),str(control)]}}}
     conf=home/'.hicode';conf.mkdir(exist_ok=True);atomic_json(conf/'settings.json',settings)
     subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(home)],check=True)
     extra={'HICODE_EVAL_SOURCE':release,'HICODE_EVAL_HOME':str(conf)}
     packages=config.get('packages',[])
     if packages:
-        emit('phase',phase='Installing pinned task-local Python packages')
-        command(namespace(['/opt/python313/bin/python3.13','-m','pip','install','--no-input','--disable-pip-version-check','--only-binary=:all:','--target','/app/.eval-python',*packages]),timeout=300)
+        argv,offline=package_install_argv(packages,'/app/.eval-python')
+        emit('phase',phase='Installing task packages from local wheels' if offline else 'Downloading pinned task packages')
+        command(namespace(argv),timeout=300,output_path=logs/'package-install.txt')
+    verifier_packages=config.get('verifierPackages',[])
+    if verifier_packages:
+        argv,offline=package_install_argv(verifier_packages,'/app/.eval-verifier-python')
+        emit('phase',phase='Installing verifier packages from local wheels' if offline else 'Downloading pinned verifier packages')
+        command(namespace(argv),timeout=300,output_path=logs/'verifier-package-install.txt')
     initializer=config['initializer']
     if initializer:
         script=project/initializer['file']
@@ -85,10 +94,10 @@ try:
         command(namespace(argv),timeout=30)
         script.unlink(missing_ok=True)
     command(namespace(['bun','/opt/hicode-eval/preflight.ts']),timeout=30,extra=extra)
-    emit('phase',phase='Running HiCode')
+    emit('phase',phase='Starting HiCode')
     launch=control/'launch.sh'
     import shlex
-    launch.write_text('#!/bin/bash\nset -eu\nexec '+shlex.join(namespace(['bun',release+'/src/index.tsx','--single-task','--event-log',str(logs/'events.jsonl'),'--permission-mode','auto-review','--source',model['source'],'--model',model['model']]))+'\n')
+    launch.write_text('#!/bin/bash\nset -eu\nexec '+shlex.join(namespace(['bun',release+'/src/index.tsx','--single-task','--event-log',str(logs/'events.jsonl'),'--permission-mode',config['permissionMode'],'--source',model['source'],'--model',model['model']]))+'\n')
     launch.chmod(0o755)
     secret={model['apiKeyEnv']:os.environ[model['apiKeyEnv']]}
     tmux('new-session','-d','-s','hicode','-x','140','-y','40','bash --noprofile --norc',extra=secret)
@@ -97,8 +106,8 @@ try:
     tmux('set-option','-t','hicode','history-limit','20000')
     tmux('pipe-pane','-O','-t','hicode:0.0',shlex.join(['python3','/opt/hicode-eval/record.py',str(logs/'terminal.bin')]))
     tmux('send-keys','-t','hicode:0.0','-l','exec bash '+shlex.quote(str(launch)));tmux('send-keys','-t','hicode:0.0','Enter')
-    start=time.monotonic();sent=False;last_screen=0;old_screen=None
-    while time.monotonic()-start<config['agentSeconds']:
+    startup=time.monotonic();start=None;submitted=None;last_screen=0;old_screen=None
+    while start is None or time.monotonic()-start<config['agentSeconds']:
         if (logs/'terminal.overflow').exists():raise RuntimeError('Terminal recording exceeds limit')
         if cancelled or (root/'cancel').exists():status='cancelled';break
         event_path=logs/'events.jsonl'
@@ -112,13 +121,17 @@ try:
             if len(screen.encode())>8*1024*1024:raise ValueError('Terminal exceeds budget')
             if screen!=old_screen:emit('screen',screen=screen);old_screen=screen
             last_screen=time.monotonic()
-        if events.ready and not sent:
+        if events.started and start is None:
+            start=time.monotonic()
+            emit('phase',phase='Running HiCode')
+        if events.ready and submitted is None:
             prompt=control/'prompt.txt';prompt.write_text((root/'instruction.md').read_text());prompt.chmod(0o644)
-            tmux('load-buffer',str(prompt));tmux('paste-buffer','-p','-t','hicode:0.0');tmux('send-keys','-t','hicode:0.0','Enter');sent=True
+            submit_prompt(tmux,prompt);submitted=time.monotonic()
         if events.complete():
             if events.settled['reason']!='completed':raise RuntimeError('Agent stopped: '+events.settled['reason'])
             status='completed';break
-        if not sent and time.monotonic()-start>40:raise RuntimeError('TUI ready event missing')
+        if submitted is None and time.monotonic()-startup>40:raise RuntimeError('TUI ready event missing')
+        if submitted is not None and not events.started and time.monotonic()-submitted>15:raise RuntimeError('Prompt submission was not acknowledged; no model request started')
         if tmux('display-message','-p','-t','hicode:0.0','#{pane_dead}').strip()=='1':raise RuntimeError('HiCode exited before completion')
         time.sleep(.5)
     else:status='timeout'
@@ -131,7 +144,8 @@ try:
         except (OSError,RuntimeError,ValueError,subprocess.TimeoutExpired) as error:
             emit('error',message='Final terminal capture failed: '+str(error)[-1000:])
     if status in ['completed','timeout']:
-        if status=='timeout':stop_user();terminal_started=False
+        # Stop all assignment processes before exposing the original verifier.
+        stop_user();terminal_started=False
         emit('phase',phase='Awaiting local verification')
         # Host uploads checks only after the assignment is sealed.
         deadline=time.monotonic()+30
@@ -147,7 +161,7 @@ try:
                     command(namespace(['cp','/tests/test.py','/app/test.py'],verifier=True))
                 grade,output=verify(namespace(['/opt/hicode-verifier/bin/python','-m','pytest','--ctrf','/logs/verifier/ctrf.json','/tests/test_outputs.py','-rA'],verifier=True),
                     timeout=config['verifierSeconds'],output_path=verifier_log/'output.txt',report_path=verifier_log/'ctrf.json',cwd=project,
-                    env={'PATH':'/opt/hicode-verifier/bin:/opt/python313/bin:'+os.environ['PATH'],'HOME':str(home),'LANG':'C.UTF-8'},
+                    env={'PATH':'/opt/hicode-verifier/bin:/opt/python313/bin:'+os.environ['PATH'],'HOME':str(home),'LANG':'C.UTF-8',**({'PYTHONPATH':'/app/.eval-verifier-python'} if config.get('verifierPackages') else {'PYTHONPATH':'/app/.eval-python'} if config.get('packages') else {})},
                     preexec_fn=demote,cancelled=lambda:cancelled or (root/'cancel').exists())
             except (OSError,RuntimeError,subprocess.TimeoutExpired) as e:
                 output='Verifier setup failed: '+str(e);grade='unavailable'
