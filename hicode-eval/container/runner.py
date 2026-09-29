@@ -48,6 +48,9 @@ def namespace(args,verifier=False):
 
 def command(args,timeout=15,extra=None,cwd=None,output_path=None):
     env={'PATH':'/opt/python313/bin:'+os.environ['PATH'],'HOME':str(home),'TERM':'xterm-256color','COLORTERM':'truecolor','LANG':'C.UTF-8'}
+    if config.get('packages'):
+        env['PYTHONPATH']='/app/.eval-python'
+        env['PIP_CACHE_DIR']='/tmp/pip-cache'
     if extra:env.update(extra)
     r=subprocess.run(args,cwd=cwd or project,env=env,preexec_fn=demote,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=timeout)
     if output_path is not None:output_path.write_text(r.stdout+'\n'+r.stderr)
@@ -68,9 +71,19 @@ try:
     conf=home/'.hicode';conf.mkdir(exist_ok=True);atomic_json(conf/'settings.json',settings)
     subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(home)],check=True)
     extra={'HICODE_EVAL_SOURCE':release,'HICODE_EVAL_HOME':str(conf)}
-    if config['initializer']:
-        command(namespace(['/opt/python313/bin/python3.13','/app/'+config['initializer']]),timeout=30)
-        (project/config['initializer']).unlink()
+    packages=config.get('packages',[])
+    if packages:
+        emit('phase',phase='Installing pinned task-local Python packages')
+        command(namespace(['/opt/python313/bin/python3.13','-m','pip','install','--no-input','--disable-pip-version-check','--only-binary=:all:','--target','/app/.eval-python',*packages]),timeout=300)
+    initializer=config['initializer']
+    if initializer:
+        script=project/initializer['file']
+        app_script='/app/'+initializer['file']
+        if initializer['kind']=='python':argv=['/opt/python313/bin/python3.13',app_script]
+        elif initializer['kind']=='bash':argv=['bash',app_script]
+        else:argv=['gzip','-d','--',app_script]
+        command(namespace(argv),timeout=30)
+        script.unlink(missing_ok=True)
     command(namespace(['bun','/opt/hicode-eval/preflight.ts']),timeout=30,extra=extra)
     emit('phase',phase='Running HiCode')
     launch=control/'launch.sh'

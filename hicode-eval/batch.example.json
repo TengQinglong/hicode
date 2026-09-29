@@ -1,12 +1,12 @@
 {
-  "name": "Terminal-Bench · Six public tasks",
+  "name": "Terminal-Bench 2.0 · newly adapted six tasks",
   "tasks": [
-    "cancel-async-tasks",
-    "log-summary-date-ranges",
-    "regex-log",
-    "sqlite-db-truncate",
-    "code-from-image",
-    "constraints-scheduling"
+    "gcode-to-text",
+    "git-leak-recovery",
+    "llm-inference-batching-scheduler",
+    "openssl-selfsigned-cert",
+    "raman-fitting",
+    "schemelike-metacircular-eval"
   ],
   "concurrency": 3,
   "budget": {

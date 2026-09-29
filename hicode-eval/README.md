@@ -4,7 +4,7 @@
 
 在一台长期运行的 Linux 容器中，批量测试 HiCode 完成公开编程任务的能力。CLI 提交任务，网页查看完整 TUI 和进度，结束后自动运行原题测试并保存日志。每题独立尝试一次，不追加纠错提示、不自动重跑。
 
-目前适配 Terminal-Bench 2.0 的 **6 道题**：`cancel-async-tasks`、`log-summary-date-ranges`、`regex-log`、`sqlite-db-truncate`、`code-from-image`、`constraints-scheduling`。其余 83 题仍需逐题适配，不能直接提交。此工具用于研发回归；共享系统、ARM64 环境和可调时限与官方环境存在差异，结果不等同于官方榜单成绩。
+目前适配 Terminal-Bench 2.0 的 **12 道题**。新一批新增 G-code 文本识别、Git 历史修复、推理批处理规划、自签名证书、谱线拟合和 Scheme 元循环解释器任务。此工具用于研发回归；共享系统、ARM64 环境和可调时限与官方环境存在差异，结果不等同于官方榜单成绩。
 
 ## 1. 准备环境与数据
 
@@ -61,7 +61,7 @@ bash hicode-eval/eval.sh status --batch BATCH_ID
 bash hicode-eval/eval.sh wait --batch BATCH_ID --wait-seconds 30
 ```
 
-将 `BATCH_ID` 替换为提交返回的 ID。示例批次包含上述 6 题，并发 3、每题 30 分钟。修改批次文件的 `tasks`、`concurrency`、`budget.agentSeconds` 即可调整；并发最多 3，不能超过服务上限；时限为 30–7200 秒。实际预算和原题预算均会记录，加长时限属于研发评测条件。
+将 `BATCH_ID` 替换为提交返回的 ID。示例批次配置 6 道回归题，并发 3、每题 30 分钟；新增题目通过单独批次提交。修改批次文件的 `tasks`、`concurrency`、`budget.agentSeconds` 即可调整；并发最多 3，不能超过服务上限；时限为 30–7200 秒。实际预算和原题预算均会记录，加长时限属于研发评测条件。
 
 `--source` 和 `--model` 可成对覆盖已配置模型；自定义连接使用 `--model-config`。更换端口时，所有 CLI 命令都传同一个 `--port`。同一评测机只运行一个服务，不在任务期间部署另一个版本。
 
@@ -119,7 +119,7 @@ bash hicode-eval/eval.sh recover --run RUN_ID
 
 新增题目需审核原始初始化、依赖、路径和判题脚本，补齐 runner 适配与离线测试，再登记完整哈希。不要仅添加题目 ID 或删除原测试来获得通过结果。
 
-任务各有独立 UID、Home 和 `/app` 挂载，但共享系统、网络和端口；这是可信的本地研发环境，不是面向陌生用户的安全隔离服务。当前不接要求修改系统配置、全局安装依赖或特殊硬件的题。
+任务各有独立 UID、Home 和 `/app` 挂载，但共享系统、网络和端口；这是可信的本地研发环境，不是面向陌生用户的安全隔离服务。任务清单可声明固定版本的 Python 包，runner 只装进该题的 `/app/.eval-python`；增加依赖会改变该题环境，诊断分数须与原始环境分开记录。当前不接要求修改系统配置、全局安装依赖或特殊硬件的题。
 
 ```bash
 bun test hicode-eval/tests

@@ -8,14 +8,23 @@ const inputPath = z.string().max(256).regex(/^(?:[A-Za-z0-9_][A-Za-z0-9_.-]*\/)*
 const profileSchema = z.object({
   hashes: z.record(z.string().regex(/^[a-f0-9]{64}$/)),
   inputs: z.array(z.object({ source: inputPath.refine(path => path.startsWith('environment/')), target: inputPath }).strict()).max(256),
-  initializer: z.string().nullable(), verifierPrelude: z.enum(['copy-test-helper','none'])
+  initializer: z.object({kind:z.enum(['python','bash','gzip']),file:z.string().regex(/^[A-Za-z0-9_.-]+$/)}).strict().nullable(),
+  directories: z.array(inputPath).max(64),
+  packages: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.+-]*$/)).max(16),
+  verifierPrelude: z.enum(['copy-test-helper','none'])
 }).strict().superRefine((profile, ctx) => {
   const targets = new Set<string>();
   for (const input of profile.inputs) {
-    if (!profile.hashes[input.source] || targets.has(input.target) || input.target === profile.initializer)
+    if (!profile.hashes[input.source] || targets.has(input.target) || input.target === profile.initializer?.file)
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Inputs must have reviewed hashes and unique destinations' });
     targets.add(input.target);
   }
+  if (profile.initializer && !profile.hashes['environment/' + profile.initializer.file])
+    ctx.addIssue({code:z.ZodIssueCode.custom,message:'Initializer must be a reviewed environment file'});
+  if (profile.directories.some(path => targets.has(path) || profile.initializer?.file === path))
+    ctx.addIssue({code:z.ZodIssueCode.custom,message:'Output directories must not collide with input files'});
+  if (profile.packages.some((value, index) => profile.packages.indexOf(value) !== index))
+    ctx.addIssue({code:z.ZodIssueCode.custom,message:'Task-local package pins must be unique'});
 });
 export async function profiles() {
   return readJson(join(import.meta.dir, '../public-tasks.json'), z.record(profileSchema));
@@ -32,6 +41,7 @@ export async function prepareTaskInputs(task: string, destination: string, input
   const profile = profileSchema.parse(input);
   if (await realpath(dirname(destination)) !== resolve(dirname(destination))) throw Error('Symlinked input parent');
   await mkdir(destination, { mode: 0o700 });
+  for (const directory of profile.directories) await mkdir(join(destination, directory), {recursive:true, mode:0o700});
   for (const input of profile.inputs) {
     const target = join(destination, input.target);
     await mkdir(dirname(target), { recursive: true, mode: 0o700 });

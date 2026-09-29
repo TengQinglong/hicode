@@ -60,7 +60,7 @@ async function main() {
     server=serve(lab,port);await save(join(data,'config.json'),config);
     let closing=false;const shutdown=async()=>{if(closing)return;closing=true;server?.stop();await lab?.close();await release();process.exit(0);};
     process.on('SIGTERM',()=>{void shutdown();});process.on('SIGINT',()=>{void shutdown();});
-    console.log(`HiCode Eval: http://127.0.0.1:${port}\nMachine: ${config.machine} · Concurrency: ${config.concurrency} · No per-task installation`);
+    console.log(`HiCode Eval: http://127.0.0.1:${port}\nMachine: ${config.machine} · Concurrency: ${config.concurrency} · Task-local dependencies only`);
   } catch(error){server?.stop();await lab?.close();await release();throw error;}
 }
 main().catch(error=>{console.error(error instanceof Error?error.message:'Evaluation failed');process.exitCode=1;});

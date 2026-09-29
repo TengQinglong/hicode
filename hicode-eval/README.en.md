@@ -119,7 +119,7 @@ Others can reuse the CLI, TUI monitoring, automated grading, and evidence collec
 
 Before adding a task, review its initialization, dependencies, paths, and verifier, implement the adapter and offline tests, then register full file hashes. Do not merely add a task ID or remove original tests to obtain a passing result.
 
-Each task has its own UID, home directory, and `/app` mount, but shares the system, network, and ports. This is a trusted local development environment, not a hosted isolation service for untrusted users. Tasks requiring system configuration changes, global package installation, or special hardware are not currently supported.
+Each task has its own UID, home directory, and `/app` mount, but shares the system, network, and ports. This is a trusted local development environment, not a hosted isolation service for untrusted users. An adapter may declare pinned Python packages, which the runner installs only under that task’s `/app/.eval-python`; adding dependencies changes the task environment, so diagnostic scores must be kept separate from the upstream environment. Tasks requiring system configuration changes, global package installation, or special hardware are not currently supported.
 
 ```bash
 bun test hicode-eval/tests

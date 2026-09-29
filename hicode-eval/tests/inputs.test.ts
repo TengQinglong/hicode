@@ -8,7 +8,7 @@ import { tree } from '../lib/store.js';
 
 const content = Buffer.from([0, 255, 10, 128, 42]);
 const hash = createHash('sha256').update(content).digest('hex');
-const profile = { hashes: { 'environment/input.bin': hash }, inputs: [{ source: 'environment/input.bin', target: 'input.bin' }], initializer: null, verifierPrelude: 'none' as const };
+const profile = { hashes: { 'environment/input.bin': hash }, inputs: [{ source: 'environment/input.bin', target: 'input.bin' }], initializer: null, directories: [], packages: [], verifierPrelude: 'none' as const };
 async function fixture(run: (root: string, task: string) => Promise<void>) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'hicode-eval-inputs-'))), task = join(root, 'task');
   try {
@@ -60,8 +60,16 @@ test('manifest refuses path escapes, undeclared files, hidden test sources, and 
 
 test('catalog includes six reviewed tasks with the exact newly required inputs', async () => {
   const available = await profiles();
-  expect(Object.keys(available)).toHaveLength(6);
+  expect(Object.keys(available)).toHaveLength(12);
   expect(available['sqlite-db-truncate']!.inputs.map(file => file.target)).toEqual(['trunc.db']);
   expect(available['code-from-image']!.inputs.map(file => file.target)).toEqual(['code.png']);
   expect(available['constraints-scheduling']!.inputs.map(file => file.target)).toEqual(['alice_calendar.ics', 'bob_calendar.ics', 'carol_calendar.ics']);
+  expect(available['gcode-to-text']!.initializer).toEqual({kind:'gzip',file:'text.gcode.gz'});
+  expect(available['git-leak-recovery']!.initializer).toEqual({kind:'bash',file:'challenge-setup.sh'});
+  expect(available['llm-inference-batching-scheduler']!.directories).toEqual(['task_file/output_data']);
+  expect(available['llm-inference-batching-scheduler']!.inputs.map(file => file.target)).toContain('task_file/scripts/cost_model.py');
+  expect(available['llm-inference-batching-scheduler']!.inputs.every(file => !file.target.startsWith('environment/'))).toBe(true);
+  expect(available['raman-fitting']!.packages).toEqual(['numpy==2.3.3','scipy==1.16.2']);
+  expect(available['schemelike-metacircular-eval']!.inputs.some(file => file.target === 'test/y_combinator.scm')).toBe(true);
+  expect(available['schemelike-metacircular-eval']!.inputs.some(file => file.target.includes('shadow_test'))).toBe(false);
 });
