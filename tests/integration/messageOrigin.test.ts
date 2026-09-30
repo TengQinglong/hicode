@@ -36,7 +36,7 @@ test("三条后台通知不抢占长用户原话，重复压缩/Resume 保持来
     });
 });
 
-test.each(["user", "task_notification", "runtime", "compaction", "agent"] satisfies UserMessageOrigin[])("Memory 用户陈述校验真实来源 %s", async origin => {
+test.each(["user", "hook_rejected", "task_notification", "runtime", "compaction", "agent"] satisfies UserMessageOrigin[])("Memory 用户陈述校验真实来源 %s", async origin => {
     await withTempProject(async (cwd, storage) => {
         const id = "a".repeat(64);
         const fake = createFakeLLM([assistantText(JSON.stringify({facts: [{key: "preference", type: "user", content: "偏好简洁", basis: "user-stated", sources: [id]}]}))]);

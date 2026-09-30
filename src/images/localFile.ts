@@ -5,7 +5,7 @@ import {isPathInside} from "../permissions/pathGuard.js";
 import type {HiCodeStorageLayout} from "../persistence/index.js";
 
 /** Already-authorized local selection. Resolve once, reject private storage, then open without following a leaf symlink. */
-export async function readLocalImage(path: string, storage: HiCodeStorageLayout): Promise<Buffer> {
+export async function readLocalImage(path: string, storage: HiCodeStorageLayout, signal: AbortSignal): Promise<Buffer> {
     const canonical = await realpath(path);
     if (canonical !== resolve(path)) throw new Error("Image path changed after authorization; select it again");
     const storageRoot = await realpath(storage.hicodeHome).catch(error => {
@@ -13,5 +13,5 @@ export async function readLocalImage(path: string, storage: HiCodeStorageLayout)
         throw error;
     });
     if (isPathInside(storageRoot, canonical)) throw new Error("Images in managed storage must be read through an image_id in the current branch");
-    return (await readFileSnapshot(canonical)).content;
+    return (await readFileSnapshot(canonical, signal)).content;
 }

@@ -6,10 +6,38 @@ import {createSessionPersistence} from "../../src/session/storage.js";
 import {createToolResultStore} from "../../src/toolResults/store.js";
 import {importUserInput} from "../../src/images/input.js";
 import {getProjectStorageDirectory} from "../../src/persistence/layout.js";
-import {acquireProjectActivity} from "../../src/persistence/projectState.js";
+import {acquireProjectActivity, ensureSessionIdentity} from "../../src/persistence/projectState.js";
 import {inspectStorage,cleanStorage} from "../../src/runtime/storageMaintenance.js";
 import {withTempProject} from "../helpers/tempProject.js";
-import {SubagentTranscriptWriter} from "../../src/subagents/transcript.js";
+import {SubagentTranscriptWriter, readSubagentTranscriptReferences} from "../../src/subagents/transcript.js";
+import {createSubagentThreadForTest} from "../helpers/subagent.js";
+import {createTestContext} from "../helpers/testContext.js";
+import {assistantText, createFakeLLM} from "../helpers/fakeLLM.js";
+import {EMPTY_AGENT_INPUT_CHANNEL} from "../../src/agent/index.js";
+
+test("real completed and continued child transcripts validate and retain referenced artifacts", async () => {
+ await withTempProject(async (cwd, storage) => {
+  const parent = "parent";
+  await ensureSessionIdentity(storage, cwd, parent);
+  const store = createToolResultStore(storage, cwd, parent);
+  const artifact = await store.persistText({toolCallId: "evidence", toolName: "bash", content: "child evidence"});
+  const fake = createFakeLLM([assistantText(`done: ${artifact.path}`), assistantText("followup done")]);
+  const thread = await createSubagentThreadForTest({agentId: "maintenance-child", parentContext: createTestContext(cwd, {sessionId: parent}),
+   onEvent() {}, agentOptions: {callLLM: fake.callLLM}, toolResultStoreOptions: {hicodeHome: storage.hicodeHome}},
+   {agentType: "Explore", description: "test", prompt: "inspect", parentToolCallId: "agent"});
+  for (const input of ["inspect", "continue"]) {
+   const result = await thread.run({prompt: input, signal: new AbortController().signal, inputChannel: EMPTY_AGENT_INPUT_CHANNEL});
+   expect(result.reason).toBe("completed");
+   expect(result.transcriptPath).toBeDefined();
+   expect(readSubagentTranscriptReferences(storage, dirname(result.transcriptPath!), parent).length).toBeGreaterThan(0);
+   const preview = await inspectStorage(storage, cwd, true);
+   expect(preview.issues).toEqual([]);
+   expect(preview.candidates.some(candidate => candidate.path === artifact.path)).toBe(false);
+  }
+  await cleanStorage(storage, cwd);
+  expect(await readFile(artifact.path, "utf8")).toBe("child evidence");
+ });
+});
 
 test("cleanup preserves referenced text and image source/view dependencies, removing unused outputs",async()=>{
  await withTempProject(async(cwd,storage)=>{

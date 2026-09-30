@@ -152,7 +152,8 @@ function runGitCommand(
         };
 
         try {
-            child = spawn("git", ["-C", cwd, ...args], {
+            // Read-only status can otherwise execute a repository-configured fsmonitor.
+            child = spawn("git", ["-c", "core.fsmonitor=false", "-C", cwd, ...args], {
                 shell: false,
                 detached: process.platform !== "win32",
                 windowsHide: true,

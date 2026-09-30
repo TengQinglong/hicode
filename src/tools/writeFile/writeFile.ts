@@ -1,16 +1,18 @@
 import {z} from "zod";
-import {readFile, stat} from "node:fs/promises";
+import {lstat} from "node:fs/promises";
 import type {Tool} from "../types.js";
 import {displayToolPath, resolveToolPath} from "../shared/paths.js";
 import {createFileChange} from "../../fileChanges/index.js";
 import {commitFileWrite} from "../shared/fileWrite.js";
+import {readFileSnapshot} from "../shared/fileSnapshot.js";
 
 async function fileExists(path: string): Promise<boolean> {
     try {
-        await stat(path);
+        await lstat(path);
         return true;
-    } catch {
-        return false;
+    } catch (error) {
+        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+        throw error;
     }
 }
 
@@ -65,8 +67,10 @@ export const writeFileTool: Tool<
         if (ctx.memoryFiles?.classify(absPath)) {
             ctx.memoryFiles.validateWrite(absPath, content);
         }
+        ctx.signal.throwIfAborted();
         const exists = await fileExists(absPath);
-        const oldContent = exists ? await readFile(absPath, "utf-8") : "";
+        const oldContent = exists ? (await readFileSnapshot(absPath, ctx.signal)).content.toString("utf8") : "";
+        ctx.signal.throwIfAborted();
         if (exists) {
             const state = ctx.fileState.check(absPath, oldContent, {
                 requireFullRead: true,

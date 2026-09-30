@@ -144,6 +144,7 @@ export async function requestApproval(
             signal.throwIfAborted();
             if (decision.behavior === "allow") ctx.approvalBudget.record(false);
             await emit("end", decision.behavior === "allow" ? "allow" : "deny");
+            signal.throwIfAborted();
             return {source: "user", decision};
         } catch (error) {await emit("end", "error"); throw error;}
     };
@@ -182,6 +183,7 @@ export async function requestApproval(
         return human("review_failed", message);
     } finally { release?.(); }
     if (verdict.decision === "needs_user") return human("approval_required", verdict.reason);
+    signal.throwIfAborted();
     return verdict.decision === "allow" ? {source: "auto-review", decision: {behavior: "allow"}}
         : {source: "auto-review", code: "policy_denied", decision: {behavior: "deny",
             message: `${verdict.reason}. Do not switch tools or rewrite commands to bypass this; use a materially safer approach or explain the limit to the user.`}};

@@ -1,11 +1,67 @@
 import {expect, test} from "bun:test";
-import {chmod, mkdir, readFile, readdir, realpath, rename, stat, symlink, writeFile} from "node:fs/promises";
+import {chmod, mkdir, open, readFile, readdir, realpath, rename, stat, symlink, writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import {FileCommitCoordinator, prepareFileCommit} from "../../src/tools/shared/fileCommit.js";
 import {createToolRuntime} from "../../src/tools/runtime.js";
 import {withTempProject} from "../helpers/tempProject.js";
 import {createTestContext} from "../helpers/testContext.js";
 import {executeDeliveredTool} from "../helpers/executeTool.js";
+import {spawn} from "node:child_process";
+
+test("write_file rejects a FIFO without blocking execution or cancellation", async () => {
+    await withTempProject(async cwd => {
+        const fifo = join(cwd, "pipe");
+        const make = Bun.spawn(["mkfifo", fifo], {stdout: "pipe", stderr: "pipe"});
+        expect(await make.exited).toBe(0);
+        const program = `
+            import {createTestContext} from ${JSON.stringify(new URL("../helpers/testContext.ts", import.meta.url).pathname)};
+            import {createToolRuntime} from ${JSON.stringify(new URL("../../src/tools/runtime.ts", import.meta.url).pathname)};
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort('user-cancel'), 100);
+            const result = await createToolRuntime().executeTool('write_file', '{"path":"pipe","content":"x"}',
+                createTestContext(${JSON.stringify(cwd)}, {signal: controller.signal}), 'fifo');
+            clearTimeout(timer);
+            console.log(JSON.stringify({outcome: result.outcome, content: result.modelContent}));
+        `;
+        const child = spawn(process.execPath, ["--eval", program], {cwd, stdio: ["ignore", "pipe", "pipe"]});
+        let output = "", errors = "";
+        child.stdout.on("data", data => {output += data;});
+        child.stderr.on("data", data => {errors += data;});
+        const timer = setTimeout(() => child.kill("SIGKILL"), 2500);
+        try {
+            const code = await new Promise<number | null>(resolve => child.on("close", resolve));
+            expect(code).toBe(0);
+            expect(errors).toBe("");
+            expect(JSON.parse(output)).toMatchObject({outcome: "failed"});
+            expect(output).toContain("Only regular files");
+        } finally {clearTimeout(timer); child.kill("SIGKILL");}
+        expect((await stat(fifo)).isFIFO()).toBe(true);
+    });
+});
+
+test("write_file rejects directories, symlinks and oversized targets before overwriting", async () => {
+    await withTempProject(async cwd => {
+        await mkdir(join(cwd, "directory"));
+        await writeFile(join(cwd, "target"), "original");
+        await symlink(join(cwd, "target"), join(cwd, "link"));
+        const large = await open(join(cwd, "large"), "w");
+        try {await large.truncate(20 * 1024 * 1024 + 1);} finally {await large.close();}
+        const tools = createToolRuntime();
+        const ctx = createTestContext(cwd);
+        for (const path of ["directory", "link", "large"]) {
+            const result = await tools.executeTool("write_file", JSON.stringify({path, content: "replacement"}), ctx, path);
+            expect(result.outcome).toBe("failed");
+            expect(result.uiData).toBeUndefined();
+        }
+        expect(await readFile(join(cwd, "target"), "utf8")).toBe("original");
+        expect((await stat(join(cwd, "large"))).size).toBe(20 * 1024 * 1024 + 1);
+        const device = await tools.executeTool("write_file", '{"path":"/dev/null","content":"replacement"}',
+            createTestContext(cwd, {permissionMode: "full-access"}), "device");
+        expect(device.outcome).toBe("failed");
+        expect(device.modelContent).toContain("Only regular files");
+        expect((await stat("/dev/null")).isCharacterDevice()).toBe(true);
+    });
+});
 
 const calls = [
     {name: "edit_file", input: {path: "file.txt", edits: [{old_string: "before", new_string: "after"}]}},

@@ -64,7 +64,7 @@ export function threadsFromHistory(
         if (message.role === "user") {
             const text = textFromUserMessage(message);
             if (message.origin === "agent" && text.trim()) threads.push({id: createId(), role: "coordination_message", text});
-            if (message.origin === "user" && text.trim().length > 0) {
+            if ((message.origin === "user" || message.origin === "hook_rejected") && text.trim().length > 0) {
                 threads.push(createUserThread(text, createId));
             }
             continue;

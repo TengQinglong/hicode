@@ -12,6 +12,92 @@ import type {AgentRunner} from "../../src/agent/index.js";
 import {NetworkAccessSession} from "../../src/permissions/networkAccess.js";
 import {createTaskRuntimeForTest} from "../helpers/taskRuntime.js";
 import type {ShellRunnerLike} from "../../src/tools/bash/shellRunner.js";
+import {SandboxNetworkApproval} from "../../src/sandbox/networkApproval.js";
+import type {ReviewVerdict} from "../../src/permissions/approval.js";
+import type {PermissionDecision} from "../../src/permissions/types.js";
+
+for (const automatic of [false, true]) for (const change of ["permission", "collaboration"] as const) {
+    test(`pending network ${automatic ? "review" : "human approval"} is invalidated by ${change} changes`, async () => {
+        await withTempProject(async cwd => {
+            const broker = new SandboxNetworkApproval();
+            let entered!: () => void;
+            const ready = new Promise<void>(resolve => {entered = resolve;});
+            let allowReview!: (value: ReviewVerdict) => void;
+            const review = new Promise<ReviewVerdict>(resolve => {allowReview = resolve;});
+            let allowHuman!: (value: PermissionDecision) => void;
+            const human = new Promise<PermissionDecision>(resolve => {allowHuman = resolve;});
+            let approvalSignal: AbortSignal | undefined;
+            let allowed = true;
+            const ctx = createTestContext(cwd, {permissionMode: automatic ? "auto-review" : "ask",
+                canUseTool: async (_name, _message, _input, options) => {approvalSignal = options?.signal; entered(); return human;},
+                shellRunner: {sandboxStatus: {kind: "ready", platform: "macos", networkMode: "restricted", warnings: []}, async run(request) {
+                    const lease = broker.register(request.networkAccess, request.signal);
+                    try {allowed = await broker.ask({host: "example.com", port: 443});
+                        return {stdout: String(allowed), stderr: "", termination: {kind: "exit", code: 0, signal: null}};
+                    } finally {lease.release();}
+                }}});
+            ctx.networkAccess = new NetworkAccessSession();
+            ctx.approvalReviewer = async (_request, _context, signal) => {approvalSignal = signal; entered(); return review;};
+            try {
+                const execution = createToolRuntime().executeTool("bash", '{"command":"printf test"}', ctx, "network-policy");
+                await ready;
+                if (change === "permission") ctx.setPermissionMode(automatic ? "ask" : "auto-review");
+                else ctx.setCollaborationMode("plan");
+                expect(approvalSignal?.aborted).toBe(true);
+                allowReview({decision: "allow", risk: "low", reason: "late review"});
+                allowHuman({behavior: "allow", networkScope: "session"});
+                await execution;
+                expect(allowed).toBe(false);
+                expect(ctx.networkAccess.allows("example.com", 443)).toBe(false);
+            } finally {broker.close();}
+        });
+    });
+}
+
+test("background network review survives Turn cancellation but stops on Session policy invalidation", async () => {
+    await withTempProject(async cwd => {
+        const broker = new SandboxNetworkApproval();
+        let entered!: () => void;
+        const ready = new Promise<void>(resolve => {entered = resolve;});
+        let allow!: (value: ReviewVerdict) => void;
+        const verdict = new Promise<ReviewVerdict>(resolve => {allow = resolve;});
+        let reviewSignal: AbortSignal | undefined;
+        let allowed = true;
+        const runner: ShellRunnerLike = {sandboxStatus: {kind: "ready", platform: "macos", networkMode: "restricted", warnings: []},
+            async run(request) {
+                const lease = broker.register(request.networkAccess, request.signal);
+                try {allowed = await broker.ask({host: "example.com", port: 443});
+                    return {stdout: String(allowed), stderr: "", termination: {kind: "exit", code: 0, signal: null}};
+                } finally {lease.release();}
+            }};
+        const controller = new AbortController();
+        const ctx = createTestContext(cwd, {permissionMode: "auto-review", signal: controller.signal, shellRunner: runner});
+        ctx.networkAccess = new NetworkAccessSession();
+        ctx.approvalReviewer = async (_request, _context, signal) => {reviewSignal = signal; entered(); return verdict;};
+        const tasks = createTaskRuntimeForTest(cwd, runner);
+        ctx.tasks = tasks.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
+        try {
+            const execution = createToolRuntime().executeTool("bash", '{"command":"fixture","run_in_background":true}', ctx, "background-policy");
+            await ready;
+            controller.abort("user-cancel");
+            expect(reviewSignal?.aborted).toBe(false);
+            ctx.setCollaborationMode("plan");
+            expect(reviewSignal?.aborted).toBe(true);
+            allow({decision: "allow", risk: "low", reason: "late approval"});
+            await execution;
+            expect(allowed).toBe(false);
+        } finally {broker.close(); await tasks.close();}
+    });
+});
+
+test.each(["ask", "auto-review"] as const)("%s cannot return allow after its final event invalidates policy", async mode => {
+    await withTempProject(async cwd => {
+        const ctx = createTestContext(cwd, {permissionMode: mode, canUseTool: async () => ({behavior: "allow"})});
+        ctx.approvalReviewer = async () => ({decision: "allow", risk: "low", reason: "reviewed"});
+        ctx.onApprovalEvent = event => {if (event.phase === "end" && event.outcome === "allow") ctx.setCollaborationMode("plan");};
+        await expect(requestApproval(ctx, "bash", {command: "true"}, "approve", "event-policy")).rejects.toBeDefined();
+    });
+});
 
 const verdict = (decision: "allow" | "deny" | "needs_user") => assistantText(JSON.stringify({decision, risk: "low", reason: "fixture decision"}));
 function reviewer(fake: ReturnType<typeof createFakeLLM>) {

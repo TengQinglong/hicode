@@ -122,16 +122,20 @@ export function createRootTurnRunnerFactory(
             const ctx = session.createContext({signal, host, onEvent: emitEvent, turnId, getSnapshotState});
             const promptHooks = await ctx.runHook!({hook_event_name: "UserPromptSubmit", session_id: session.sessionId,
                 turn_id: turnId, prompt: contentText(prompt), permission_mode: initialState.permissionMode});
-            await onHookResult(promptHooks);
-
-            result = promptHooks.error ? {reply: `UserPromptSubmit Hook error: ${promptHooks.error}`, reason: "hook_error", iterations: 0}
+            const rejected: AgentResult | undefined = promptHooks.error ? {reply: `UserPromptSubmit Hook error: ${promptHooks.error}`, reason: "hook_error", iterations: 0}
                 : promptHooks.blocked
                 ? {
                     reply: `UserPromptSubmit Hook blocked the request: ${promptHooks.blockReason ?? "No reason provided"}`,
                     reason: "hook_blocked",
                     iterations: 0,
                 }
-                : await resources.agentRuntime.runAgent(
+                : undefined;
+            if (rejected) {
+                session.history.push({role: "user", origin: "hook_rejected", content: prompt},
+                    {role: "assistant", content: rejected.reply});
+            }
+            await onHookResult(promptHooks);
+            result = rejected ?? await resources.agentRuntime.runAgent(
                     prompt,
                     session.history,
                     emitEvent,
@@ -148,7 +152,7 @@ export function createRootTurnRunnerFactory(
                         ],
                     }
                 );
-            if (promptHooks.blocked || promptHooks.error) {
+            if (rejected) {
                 await emitEvent({type: "assistant_text", content: result.reply});
             }
 

@@ -3,7 +3,9 @@ import {createImageAccess} from "../images/access.js";
 import {HookControlError, formatHookContext} from "../hooks/index.js";
 import {ResponseDraft} from "./draft.js";
 import type {ToolContext} from "../tools/types.js";
-import type {LLMCaller, Message} from "../llm/types.js";
+import type {LLMCaller, Message, ToolCall} from "../llm/types.js";
+import {hasCompleteToolPairs} from "../session/codec.js";
+import {formatInterruptedToolResult} from "../tools/registry.js";
 import {getTokenWarningState} from "../context/index.js";
 import {isTurnInterruptedError, normalizeTurnAbortReason, throwIfTurnAborted,} from "../runtime/abort.js";
 import type {AgentEvent, AgentResult} from "./types.js";
@@ -89,6 +91,10 @@ function assertFreshToolCallIds(
     }
 }
 
+function assertCompleteToolPairs(history: readonly Message[]): void {
+    if (!hasCompleteToolPairs(history)) throw new Error("History contains incomplete Tool Call pairs; model request stopped");
+}
+
 // Agent loop: call LLM, execute tools, feed results back, repeat until a final answer.
 //
 // onEvent streams progress to the UI instead of console.log; the UI decides rendering.
@@ -103,6 +109,7 @@ async function runAgentCore(
     options: AgentRunOptions,
     dependencies: AgentRunnerDependencies
 ): Promise<AgentResult> {
+    assertCompleteToolPairs(history);
     const maxIterations = options.maxIterations === undefined
         ? undefined
         : Math.max(1, Math.floor(options.maxIterations));
@@ -140,6 +147,7 @@ async function runAgentCore(
     let providerContextWindow = ctx.contextUsage.contextWindow({model: ctx.model, provider: ctx.provider, compactCount: ctx.compactState.compactCount});
 
     let iterations = 0;
+    let pendingToolCalls: readonly ToolCall[] = [];
     const resultUsage = () => usageCalls === 0
         ? {}
         : {
@@ -230,6 +238,7 @@ async function runAgentCore(
             const offeredToolNames = new Set(tools.map(tool => tool.function.name));
 
             // Call the LLM with invokeMessages, not raw History.
+            assertCompleteToolPairs(invokeMessages);
             await onEvent({type: "model_stream_start"});
             let llmResult;
             try {
@@ -268,6 +277,7 @@ async function runAgentCore(
             assertFreshToolCallIds(history, toolCalls);
             // Append assistant messages and tool results as actual conversation content.
             history.push(message);
+            pendingToolCalls = toolCalls;
             const rawTextContent =
                 typeof message.content === "string" ? message.content : "";
             const textContent = rawTextContent.trim().length > 0
@@ -450,6 +460,7 @@ async function runAgentCore(
                     )),
                 isToolConcurrencySafe: (name, args) => offeredToolNames.has(name) && isToolConcurrencySafeImpl(name, args),
             });
+            pendingToolCalls = [];
             await ctx.commitToolBatch?.();
             if (batchResult.status === "interrupted" || ctx.signal.aborted) {
                 return interruptedResult();
@@ -497,6 +508,20 @@ async function runAgentCore(
             ...resultUsage(),
         };
     } catch (error) {
+        // The runner owns the gap between committing the assistant and entering the batch.
+        const unpaired = pendingToolCalls.filter(call => !history.some(message => message.role === "tool" && message.tool_call_id === call.id));
+        const outcome = isTurnInterruptedError(error, ctx.signal) ? "interrupted" as const : "failed" as const;
+        const content = outcome === "interrupted" ? formatInterruptedToolResult(ctx.signal)
+            : `Tool was not executed because the turn failed: ${error instanceof Error ? error.message : String(error)}`;
+        for (const call of unpaired) history.push({role: "tool", content, tool_call_id: call.id});
+        for (const call of unpaired) {
+            for (const event of [
+                {type: "tool_call_start" as const, turnId, toolCallId: call.id, name: call.function.name, args: call.function.arguments},
+                {type: "tool_call_end" as const, turnId, toolCallId: call.id, result: content, outcome},
+            ]) {
+                try {await onEvent(event);} catch { /* Keep the original failure after closing History. */ }
+            }
+        }
         if (isTurnInterruptedError(error, ctx.signal)) {
             return interruptedResult();
         }

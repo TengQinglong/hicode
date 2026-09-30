@@ -33,7 +33,7 @@ export async function importSelectedImages(paths: readonly string[], resources: 
             if (decision.behavior !== "allow") throw new Error("Image attachment read denied");
         }
         throwIfTurnAborted(ctx.signal);
-        const data = await readLocalImage(input.path!, ctx.storage);
+        const data = await readLocalImage(input.path!, ctx.storage, ctx.signal);
         const content = await importUserInput([{type: "image", data}], ctx.toolResultStore, supported, ctx.signal);
         if (Array.isArray(content)) for (const part of content) if (part.type === "image") references.push({...part, label: basename(selectedPath).slice(0, 256)});
     }

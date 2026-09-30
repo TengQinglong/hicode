@@ -2,7 +2,7 @@ import {RuntimeMessageQueue} from "../../src/runtime/messageQueue.js";
 import {contentText} from "../../src/images/content.js";
 import {createApprovalReviewer} from "../../src/permissions/reviewer.js";
 import {describe, expect, test} from "bun:test";
-import {readFile, writeFile} from "node:fs/promises";
+import {access, readFile, writeFile} from "node:fs/promises";
 import {join, resolve} from "node:path";
 import {createCompactState} from "../../src/context/index.js";
 import {createInitialHistory} from "../../src/prompt/index.js";
@@ -29,6 +29,33 @@ import {
     createTestSettings,
 } from "../helpers/runtimeResources.js";
 import {withTempProject} from "../helpers/tempProject.js";
+import {resolvedHooks} from "../helpers/hooks.js";
+
+test("HiCode.close cancels an initializing SessionStart and drains its process", async () => {
+    await withTempProject(async (cwd, storage) => {
+        const marker = join(cwd, "session-start-pid");
+        const settings = createTestSettings({hooks: resolvedHooks("SessionStart", [
+            {type: "command", purpose: "observe", command: `printf '%s' "$$" > '${marker}'; sleep 10`, timeoutMs: 12000},
+        ], 12000)});
+        const hicode = await HiCode.create({configuration: createTestRootConfiguration(cwd, settings, storage,
+            {settings: [], instructions: [], skills: [], agents: [], mcp: []}),
+            host: {onInteraction: async () => ({behavior: "allow", persistence: "once"})}});
+        const opening = hicode.startThread().then(() => null, (error: unknown) => error);
+        try {
+            for (let attempt = 0; attempt < 100; attempt++) {
+                try {await access(marker); break;} catch {await Bun.sleep(10);}
+            }
+            const pid = Number(await readFile(marker, "utf8"));
+            expect(pid).toBeGreaterThan(0);
+            const started = performance.now();
+            await Promise.all([hicode.close(), hicode.close()]);
+            expect(performance.now() - started).toBeLessThan(1500);
+            expect(await opening).toMatchObject({code: "hicode_closed"});
+            expect(() => process.kill(pid, 0)).toThrow();
+            await expect(hicode.startThread()).rejects.toMatchObject({code: "hicode_closed"});
+        } finally {await hicode.close(); await opening;}
+    });
+});
 
 function createFakeAgentRuntime(
     fake: ReturnType<typeof createFakeLLM>

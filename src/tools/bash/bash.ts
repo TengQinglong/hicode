@@ -1,7 +1,7 @@
 import {z} from "zod";
-import {ApprovalBudget, ApprovalEpoch, requestApproval} from "../../permissions/approval.js";
+import {ApprovalBudget, requestApproval} from "../../permissions/approval.js";
 import {realpath, stat} from "node:fs/promises";
-import {isAbsolute, relative, resolve} from "node:path";
+import {resolve} from "node:path";
 import {ToolInputError, type Tool, type ToolContext} from "../types.js";
 import {matchPattern} from "../../permissions/index.js";
 import {
@@ -18,6 +18,7 @@ import {selectUtf8Range} from "../../toolResults/utf8.js";
 import {prepareCommandReadAccess} from "./readAccess.js";
 import {checkMemoryStoragePath} from "../../memory/publicationAccess.js";
 import {analyzeReadCommand} from "../../permissions/shellRead.js";
+import {isPathInside} from "../../permissions/pathGuard.js";
 
 const inputSchema = z.object({
     command: z.string().describe(
@@ -64,8 +65,7 @@ async function resolveCommandCwd(
                 realpath(candidate),
                 stat(candidate),
             ]);
-        const rel = relative(projectRealPath, candidateRealPath);
-        if (!fullAccess && (rel.startsWith("..") || isAbsolute(rel))) {
+        if (!fullAccess && !isPathInside(projectRealPath, candidateRealPath)) {
             return {
                 ok: false,
                 outcome: "denied",
@@ -353,13 +353,12 @@ export const bashTool: Tool<typeof inputSchema> = {
             ? "require_escalated" as const : sandbox_permissions;
         const networkEvidence = structuredClone(ctx.approvalEvidence?.() ?? []);
         const detached = run_in_background === true || yield_time_ms !== undefined;
-        const networkEpoch = new ApprovalEpoch();
         const networkBudget = new ApprovalBudget();
         const networkAccess = ctx.networkAccess ? {
             session: ctx.networkAccess,
             canUseTool: async (_tool: string, message: string, input: unknown, options?: Parameters<ToolContext["canUseTool"]>[3]) => {
                 const requestSignal = options?.signal ?? ctx.signal;
-                const networkContext: ToolContext = {...ctx, signal: requestSignal, approvalEpoch: networkEpoch,
+                const networkContext: ToolContext = {...ctx, signal: requestSignal,
                     approvalBudget: networkBudget, approvalEvidence: () => networkEvidence,
                     onApprovalEvent: detached ? undefined : ctx.onApprovalEvent,
                     permissionPromptPolicy: detached || ctx.signal.aborted ? "never" : ctx.permissionPromptPolicy};

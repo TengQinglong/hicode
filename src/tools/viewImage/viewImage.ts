@@ -42,7 +42,7 @@ export const viewImageTool: Tool<typeof schema> = {
                 throw error;
             });
             if (isPathInside(storageRoot, canonical)) throw new Error("Images in managed storage must be read through an image_id in the current branch");
-            const snapshot = await readFileSnapshot(path);
+            const snapshot = await readFileSnapshot(path, ctx.signal);
             const prepared = await prepareImage(snapshot.content, ctx.signal, input.region);
             throwIfTurnAborted(ctx.signal);
             reference = await persistPreparedImage({store: ctx.toolResultStore,

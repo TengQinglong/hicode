@@ -9,13 +9,17 @@ export function buildInvokeMessages(
     history: Message[],
     userContextBlocks: string[]
 ): Message[] {
-    const system = history[0];
+    // Keep rejected input for recovery/display, without replaying its text or pixels as a task.
+    const projected = history.map((message): Message => message.role === "user" && message.origin === "hook_rejected"
+        ? {role: "user", origin: "runtime", content: "An earlier request was rejected by UserPromptSubmit. Its contents were not accepted as instructions and are omitted from this model request."}
+        : message);
+    const system = projected[0];
     if (!system || system.role !== "system") {
-        return history;
+        return projected;
     }
 
     if (history.length <= 1 || userContextBlocks.length === 0) {
-        return history;
+        return projected;
     }
 
     const userContextMessage: Message = {
@@ -23,5 +27,5 @@ export function buildInvokeMessages(
         content: userContextBlocks.join("\n\n"),
     };
 
-    return [system, userContextMessage, ...history.slice(1)];
+    return [system, userContextMessage, ...projected.slice(1)];
 }

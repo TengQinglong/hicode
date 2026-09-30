@@ -1,5 +1,5 @@
 import {describe, expect, test} from "bun:test";
-import {mkdir, rm, symlink, writeFile} from "node:fs/promises";
+import {mkdir, rm, stat, symlink, writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import {createGitCommandRunner} from "../../src/git/process.js";
 import {createChildProcessEnvironment} from "../../src/runtime/childEnvironment.js";
@@ -327,6 +327,25 @@ describe("Git NUL parser", () => {
 });
 
 describe("Git process", () => {
+    test("status and diff do not execute repository fsmonitor programs", async () => {
+        await withTempProject(async root => {
+            const cwd = join(root, "workspace");
+            await mkdir(cwd);
+            await initializeRepository(cwd);
+            await commitFile(cwd, "file.txt", "before\n", "initial");
+            await writeFile(join(cwd, "file.txt"), "after\n");
+            const marker = join(root, "outside-workspace");
+            const helper = join(cwd, ".git", "fsmonitor-test");
+            await writeFile(helper, `#!/bin/sh\nprintf touched > '${marker}'\nprintf 'token\\0'\n`, {mode: 0o700});
+            await git(cwd, "config", "--local", "core.fsmonitor", helper);
+            const runtime = createGitWorkspaceRuntime(cwd, testChildEnvironment);
+            expect((await runtime.status(new AbortController().signal)).status).toBe("available");
+            const diff = await runtime.diff(new AbortController().signal);
+            expect(diff.status).toBe("available");
+            if (diff.status === "available") expect(diff.snapshot.patch).toContain("+after");
+            await expect(stat(marker)).rejects.toMatchObject({code: "ENOENT"});
+        });
+    });
     test("Git 与其外部 helper 不继承 Provider Secret", async () => {
         await withTempProject(async (cwd) => {
             await initializeRepository(cwd);

@@ -3,6 +3,7 @@ import type {Message} from "../llm/types.js";
 import {findCompactTailStart} from "./compactTail.js";
 import {estimateMessageTokens, tokenCountWithEstimation} from "./tokens.js";
 import {labelHandoffSources, type HandoffSources} from "./handoff.js";
+import {buildInvokeMessages} from "../prompt/invokeMessages.js";
 
 export function selectCompactInput(input: {
     system: Extract<Message, {role: "system"}>;
@@ -12,7 +13,8 @@ export function selectCompactInput(input: {
     sources?: HandoffSources;
 }): {messages: Message[]; coverage: string} {
     const {system, conversation, prompt, budget, sources} = input;
-    const labelled = sources ? labelHandoffSources(conversation, sources) : conversation.map(message => {
+    const projected = buildInvokeMessages(conversation, []);
+    const labelled = sources ? labelHandoffSources(projected, sources) : projected.map(message => {
         if (message.role !== "assistant") return {...message, content: contentText(message.content)};
         const {reasoning: _reasoning, ...visible} = message;
         return visible;

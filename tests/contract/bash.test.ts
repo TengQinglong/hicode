@@ -22,6 +22,25 @@ const readySandboxRunner: ShellRunnerLike = {
   run: runShellCommand,
 };
 
+test("Bash accepts dot-prefixed child names while rejecting parent and symlink escapes", async () => {
+  await withTempProject(async root => {
+    const cwd = join(root, "project");
+    await mkdir(cwd);
+    for (const path of ["..cache", "..."]) await mkdir(join(cwd, path));
+    await symlink(root, join(cwd, "escape"));
+    const ctx = createTestContext(cwd);
+    for (const path of ["..cache", "..."]) {
+      const result = await executeToolResult("bash", JSON.stringify({command: "pwd", cwd: path}), ctx, path);
+      expect(result.outcome).toBe("ok");
+      expect(result.modelContent).toContain(path);
+    }
+    for (const path of ["..", "escape"]) {
+      const result = await executeToolResult("bash", JSON.stringify({command: "pwd", cwd: path}), ctx, path);
+      expect(result.outcome).toBe("denied");
+    }
+  });
+});
+
 function networkCaptureRunner(): {
   runner: ShellRunnerLike;
   calls: Array<{

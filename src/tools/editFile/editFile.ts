@@ -71,7 +71,7 @@ async function validateEdits(
 ): Promise<{ ok: true; value: EditValidation } | { ok: false; message: string }> {
     let originalContent: string;
     try {
-        const snapshot = await readFileSnapshot(path);
+        const snapshot = await readFileSnapshot(path, ctx.signal);
         originalContent = snapshot.content.toString("utf8");
         if (snapshot.content.includes(0) || !Buffer.from(originalContent).equals(snapshot.content)) {
             throw new Error("edit_file requires valid UTF-8 text without NUL bytes");

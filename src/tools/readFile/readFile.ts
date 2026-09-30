@@ -58,7 +58,7 @@ export const readFileTool: Tool<typeof inputSchema> = {
         if (archive) return readSavedOutput(archive, offset ?? 1, limit ?? DEFAULT_LIMIT, ctx.signal, "archive");
         const saved = await ctx.toolResultFiles.resolveFile(absPath);
         if (saved) return readSavedOutput(saved, offset ?? 1, limit ?? DEFAULT_LIMIT, ctx.signal);
-        const snapshot = await readFileSnapshot(absPath);
+        const snapshot = await readFileSnapshot(absPath, ctx.signal);
         const binary = !isUtf8(snapshot.content) || snapshot.content.includes(0);
         if (snapshot.content.length > MAX_FILE_SIZE || binary) {
             const output = [

@@ -225,13 +225,11 @@ export class HiCode {
     private async closeInternal(): Promise<void> {
         if (this.closed) return;
         this.closed = true;
+        if (!this.rootController.signal.aborted) this.rootController.abort("shutdown");
         try {
             await this.pendingThread?.catch(() => undefined);
             await this.activeThread?.close();
         } finally {
-            if (!this.rootController.signal.aborted) {
-                this.rootController.abort("shutdown");
-            }
             await this.resources.close();
         }
     }

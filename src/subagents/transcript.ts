@@ -18,9 +18,14 @@ const resultSchema = z.object({
     iterations: z.number().int().nonnegative(), toolUseCount: z.number().int().nonnegative(),
     durationMs: z.number().nonnegative(),
 }).passthrough();
+const systemMessageSchema = z.object({role: z.literal("system"), content: z.string()
+    .refine(value => Buffer.byteLength(value) <= 8 * 1024 * 1024)}).strict();
 const historySchema = z.array(z.unknown()).max(20_000).superRefine((messages, context) => {
-    for (const value of messages) {
-        try { decodeSessionContentBlock({kind: "message", value}); }
+    for (const [index, value] of messages.entries()) {
+        try {
+            if (index === 0 && systemMessageSchema.safeParse(value).success) continue;
+            decodeSessionContentBlock({kind: "message", value});
+        }
         catch { context.addIssue({code: "custom", message: "Invalid transcript message"}); break; }
     }
 });

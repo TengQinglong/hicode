@@ -224,7 +224,7 @@ class SDKThreadImpl implements SessionThread {
                 `Thread is closed: ${this.id}`
             );
         }
-        if (this.activeRun) {
+        if (this.activeRun || this.preparing) {
             throw new HiCodeSDKError(
                 "thread_busy",
                 `Thread already has an active Turn: ${this.id}`

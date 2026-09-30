@@ -8,7 +8,7 @@ import sharp from "sharp";
 import {withTempProject} from "../helpers/tempProject.js";
 import {createTestContext} from "../helpers/testContext.js";
 import {createTestRuntimeResources, createTestSettings} from "../helpers/runtimeResources.js";
-import {createSDKThread} from "../../src/sdk/thread.js";
+import {createSDKThread, createSDKThreadFactory} from "../../src/sdk/thread.js";
 import {collectTurnResult} from "../../src/sdk/resultCollector.js";
 import {createCompactState} from "../../src/context/state.js";
 import {createInitialHistory} from "../../src/prompt/index.js";
@@ -20,6 +20,38 @@ import {RuntimeMessageQueue, normalizeRuntimeQueuedMessages} from "../../src/run
 import {loadSession} from "../../src/session/storage.js";
 import {createUITurnSessionRuntime} from "../../src/ui/turn/sessionRuntime.js";
 import {getProjectStorageDirectory} from "../../src/persistence/layout.js";
+import {withFileLock} from "../../src/persistence/fileLock.js";
+
+test("an earlier lazy text stream cannot start while image preparation owns the Thread", async () => {
+    await withTempProject(async (cwd, storage) => {
+        const resources = createTestRuntimeResources(cwd, {storage, settings: settings()});
+        let turns = 0;
+        const open = createSDKThreadFactory({runTurn: async () => {
+            turns++;
+            return {reply: "offline", reason: "completed", iterations: 0};
+        }});
+        const thread = await open({resources, seed: {sessionId: "lazy-image", history: createInitialHistory(cwd, resources.model), compactState: createCompactState()},
+            state: {...state}, resumed: false, onClose() {}});
+        const store = createToolResultStore(storage, cwd, thread.id);
+        const capture = await store.createCapture();
+        await store.removeTemporaryFile(capture);
+        let unlock!: () => void, locked!: () => void;
+        const gate = new Promise<void>(resolve => {unlock = resolve;});
+        const acquired = new Promise<void>(resolve => {locked = resolve;});
+        const holding = withFileLock(join(store.sessionDir, ".store.lock"), async () => {locked(); await gate;});
+        await acquired;
+        try {
+            const text = await thread.runStreamed("text");
+            const preparing = thread.runStreamed([{type: "image", data: await png()}]);
+            await expect(collectTurnResult(text.events)).rejects.toMatchObject({code: "thread_busy"});
+            expect(turns).toBe(0);
+            unlock(); await holding;
+            const image = await preparing;
+            expect((await collectTurnResult(image.events)).stopReason).toBe("completed");
+            expect(turns).toBe(1);
+        } finally {unlock(); await holding; await thread.close(); await resources.close();}
+    });
+});
 
 const png = (red = 30) => sharp({create: {width: 32, height: 16, channels: 4, background: {r: red, g: 70, b: 100, alpha: 1}}}).png().toBuffer();
 const state = {todos: [], permissionMode: "ask" as const, collaborationMode: "build" as const, uiEvents: []};

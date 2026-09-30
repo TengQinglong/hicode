@@ -75,7 +75,7 @@ const toolCallSchema = z.object({
 const messageSchema = z.discriminatedUnion("role", [
     z.object({
         role: z.literal("user"),
-        origin: z.enum(["user", "task_notification", "runtime", "compaction", "agent", "assignment"]),
+        origin: z.enum(["user", "hook_rejected", "task_notification", "runtime", "compaction", "agent", "assignment"]),
         content: z.union([boundedString(MAX_MESSAGE_CONTENT_BYTES), z.array(z.union([z.object({type: z.literal("text"), text: boundedString(MAX_MESSAGE_CONTENT_BYTES)}).strict(), imageReferenceSchema])).min(1).max(32)]),
     }).strict(),
     z.object({
@@ -346,7 +346,7 @@ export function stripSystemMessage(history: Message[]): Message[] {
 }
 
 function getUserText(message: Message): string | null {
-    if (message.role !== "user" || message.origin !== "user") return null;
+    if (message.role !== "user" || (message.origin !== "user" && message.origin !== "hook_rejected")) return null;
     return normalizeText(contentText(message.content));
 }
 

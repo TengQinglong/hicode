@@ -9,13 +9,18 @@ import {createHookRuntimeFactory, type HookEnvelope, type HookInput, type Resolv
 import {createRootRuntimeResourcesFactory, type RootRuntimeResources} from "../../src/runtime/resources.js";
 import {createRootSessionRuntime} from "../../src/runtime/sessionRuntime.js";
 import {runRootTurn, createRootTurnRunnerFactory} from "../../src/runtime/turnRuntime.js";
-import {createTestRootConfiguration, createTestSettings} from "../helpers/runtimeResources.js";
+import {createTestRootConfiguration, createTestSettings, createRootRuntimeResourcesForTest} from "../helpers/runtimeResources.js";
 import {withTempProject} from "../helpers/tempProject.js";
 import {createTestContext} from "../helpers/testContext.js";
 import {createSubagentThreadForTest} from "../helpers/subagent.js";
 import {createEmptyResolvedHookSettings, resolvedHooks} from "../helpers/hooks.js";
 import {assistantText, assistantToolCall, createFakeLLM} from "../helpers/fakeLLM.js";
 import {loadHiCodeSettings} from "../../src/settings/index.js";
+import {resolveHiCodeSettings} from "../../src/settings/resolve.js";
+import {getUserSettingsPath} from "../../src/persistence/layout.js";
+import {loadSession} from "../../src/session/storage.js";
+import {threadsFromHistory} from "../../src/ui/conversation/threadReducer.js";
+import {selectCompactInput} from "../../src/context/compactInput.js";
 import type {HiCodeStorageLayout} from "../../src/persistence/index.js";
 import type {ToolContextHost} from "../../src/runtime/toolContext.js";
 import type {Message} from "../../src/llm/types.js";
@@ -40,6 +45,59 @@ async function resourcesFor(cwd: string, storage: HiCodeStorageLayout, hooks: Re
     })})({configuration: createTestRootConfiguration(cwd, createTestSettings({hooks}), storage, sources)});
 }
 const state = () => ({todos: [], permissionMode: "ask" as const, collaborationMode: "build" as const, uiEvents: []});
+
+test("a valid reviewer model has no unknown-field warning and permits Hook reload", async () => {
+    await withTempProject(async (cwd, storage) => {
+        const primary = resolveHiCodeSettings([]).values.models.primary;
+        await mkdir(storage.hicodeHome, {recursive: true});
+        await writeFile(getUserSettingsPath(storage), JSON.stringify({models: {reviewer: {source: primary.source, model: primary.model}}}));
+        const loaded = loadHiCodeSettings({cwd, storage, sources: ["user"]});
+        expect(loaded.issues).toEqual([]);
+        expect(loaded.values.models.reviewer?.model).toBe(primary.model);
+        const resources = await createRootRuntimeResourcesForTest({cwd, storage, settings: loaded.values,
+            fileSources: {settings: ["user"], instructions: [], skills: [], agents: [], mcp: []}});
+        try {await resources.reloadHooks(new AbortController().signal);} finally {await resources.close();}
+    });
+});
+
+for (const existing of [false, true]) for (const failure of ["block", "error"] as const) {
+    test(`UserPromptSubmit ${failure} persists rejected input and outcome in ${existing ? "existing" : "new"} Sessions`, async () => {
+        await withTempProject(async (cwd, storage) => {
+            let rejecting = true;
+            const resources = await resourcesFor(cwd, storage, resolvedHooks("UserPromptSubmit", [
+                {type: "command", purpose: "control", command: "policy"},
+            ]), () => rejecting ? failure === "block" ? {decision: "block", reason: "policy"} : {invalid_field: true} : {decision: "pass"});
+            const fake = createFakeLLM([assistantText("next accepted request")]);
+            resources.agentRuntime.runAgent = createAgentRunner({callLLM: fake.callLLM,
+                compactHistory: async ({preTokenCount}) => ({compacted: false, preTokenCount, threshold: Infinity})});
+            const session = sessionFor(resources);
+            if (existing) session.history.push({role: "user", origin: "user", content: "previous"}, {role: "assistant", content: "previous answer"});
+            const run = {resources, session, host, signal: new AbortController().signal,
+                onEvent() {}, onHookResult() {}, onLifecycleIssue(issue: {error: unknown}) {throw issue.error;}, getSnapshotState: state};
+            const rejected = "REJECTED_REQUEST_DO_NOT_EXECUTE";
+            try {
+                const result = await runRootTurn({...run, prompt: rejected});
+                expect(result.reason).toBe(failure === "block" ? "hook_blocked" : "hook_error");
+                expect(fake.calls).toHaveLength(0);
+                const loaded = loadSession(storage, cwd, session.sessionId, resources.model)!;
+                expect(loaded.history).toContainEqual({role: "user", origin: "hook_rejected", content: rejected});
+                expect(loaded.history).toContainEqual({role: "assistant", content: result.reply});
+                expect(loaded.history.slice(1)).toEqual(session.history.slice(1));
+                expect(threadsFromHistory(loaded.history).filter(thread => thread.role === "user").at(-1)?.text).toBe(rejected);
+                const compactInput = selectCompactInput({system: {role: "system", content: "summary"},
+                    conversation: loaded.history.slice(1), prompt: "summarize", budget: 10000});
+                expect(JSON.stringify(compactInput.messages)).not.toContain(rejected);
+                rejecting = false;
+                const resumed = createRootSessionRuntime({resources, seed: {sessionId: loaded.sessionId,
+                    history: loaded.history, compactState: loaded.compactState ?? createCompactState()}});
+                await runRootTurn({...run, session: resumed, prompt: "accepted"});
+                expect(fake.calls).toHaveLength(1);
+                expect(JSON.stringify(fake.calls[0]!.messages)).not.toContain(rejected);
+                expect(JSON.stringify(fake.calls[0]!.messages)).toContain("rejected by UserPromptSubmit");
+            } finally {await resources.close();}
+        });
+    });
+}
 
 for (const cancelled of [false, true]) test(`异常批次完整配对并记录结束，不启动观察脚本 cancelled=${cancelled}`, async () => {
     await withTempProject(async (cwd, storage) => {
