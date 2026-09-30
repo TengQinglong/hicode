@@ -4,9 +4,24 @@
 
 Run public programming tasks through HiCode on a persistent Linux container. Submit batches from the CLI, watch the full TUI in a browser, and automatically collect test results and logs. Each task gets one independent attempt, with no corrective follow-up prompts or automatic retries.
 
-Currently supports **17 Terminal-Bench 2.0 tasks**. This is a development regression tool: the shared system, ARM64 environment, and configurable time limits differ from official benchmark conditions. Results are not official leaderboard scores.
+Reviewed tasks are listed in the [catalog](config/terminal-bench.json). This is a development regression tool: the shared system, ARM64 environment, and configurable time limits differ from official benchmark conditions. Results are not official leaderboard scores.
 
-See [TASK-STATUS.md](TASK-STATUS.md) for passed, failed, and pending tasks.
+Query batch execution and scores with the CLI `status` command. Keep personal task reviews and environment preparation records outside the checkout.
+
+## Directory and records
+
+```text
+src/
+  cli.ts     Command-line entrypoint
+  host/      Host scheduling, state, Linux transport, and payload preparation
+  worker/    Linux execution, grading, terminal capture, and cleanup
+  web/       Read-only dashboard and terminal component
+config/      Task adapters, fixed regression groups, and configuration examples
+tests/       Offline regression tests
+skills/      Codex batch evaluation instructions
+```
+
+Task files, source payloads, credentials, and run records stay outside the checkout. `config/` contains shared declarations, fixed regression groups, and examples; the model, release, budget, and results for each actual submission are recorded under `<data-dir>/batches/` and `runs/`. Keep temporary task selections outside the checkout, for example in `../hicode-eval-data/batch-configs/`. Personal status and machine preparation notes can go under `../hicode-eval-data/records/`.
 
 ## 1. Prepare the environment and dataset
 
@@ -17,7 +32,7 @@ bun install --frozen-lockfile
 bash .devcontainer/linux.sh eval-start
 ```
 
-The first run builds the development base and a dedicated evaluation image with tmux, Python 3.13, pytest 8.4.1, and pytest-json-ctrf 0.3.5. Subsequent runs reuse the image; nothing is installed per task. The `hicode-eval-linux` container mounts only a dedicated data volume, without your checkout, home directory, or Docker socket. The development container does not need to be running.
+The first run builds the development base and a dedicated evaluation image with tmux, Python 3.13, pytest 8.4.1, and pytest-json-ctrf 0.3.5. Subsequent runs reuse the image and system tools; task-specific Python dependencies are installed into separate directories. The `hicode-eval-linux` container mounts only a dedicated data volume, without your checkout, home directory, or Docker socket. The development container does not need to be running.
 
 Download the dataset outside this repository and pin the reviewed revision:
 
@@ -26,13 +41,13 @@ git clone https://github.com/harbor-framework/terminal-bench-2.git ../terminal-b
 git -C ../terminal-bench-2 checkout --detach 69671fbaac6d67a7ef0dfec016cc38a64ef7a77c
 ```
 
-`public-tasks.json` verifies the full file hashes of supported tasks and rejects modified versions. Tasks and reference solutions are not distributed in this repository; follow the upstream dataset's license and usage conditions. Harbor is not required.
+`config/terminal-bench.json` verifies the full file hashes of supported tasks and rejects modified versions. Tasks and reference solutions are not distributed in this repository; follow the upstream dataset's license and usage conditions. Harbor is not required.
 
 ## 2. Configure a model and freeze the source
 
 Run `bun run start`, configure a connection, API key, and model with `/providers`, select the default with `/model`, then exit. The evaluation service reads settings from **this checkout and `~/.hicode`**, not from task directories or another project.
 
-Alternatively, copy [model.example.json](model.example.json) to `hicode-eval/model.local.json`, fill in the model ID, endpoint, and API key environment variable name, and pass `--model-config hicode-eval/model.local.json` to `serve`. The JSON **does not contain the API key value**. Credentials are resolved from the process environment, this checkout's `.env`, then `~/.hicode/.env`; `/providers` can save them without putting a key in command-line arguments. Supported `source` values are `qwen`, `deepseek`, `glm`, and `openrouter`.
+Alternatively, copy [config/example.model.json](config/example.model.json) to `../hicode-eval-data/model.local.json`, fill in the model ID, endpoint, and API key environment variable name, and pass `--model-config ../hicode-eval-data/model.local.json` to `serve`. The JSON **does not contain the API key value**. Credentials are resolved from the process environment, this checkout's `.env`, then `~/.hicode/.env`; `/providers` can save them without putting a key in command-line arguments. Supported `source` values are `qwen`, `deepseek`, `glm`, and `openrouter`.
 
 Freeze the version to evaluate:
 
@@ -58,12 +73,12 @@ Startup deploys the fixed source release. Production dependencies are reused whe
 
 ```bash
 bash hicode-eval/eval.sh catalog
-bash hicode-eval/eval.sh submit --file hicode-eval/batch.example.json
+bash hicode-eval/eval.sh submit --file hicode-eval/config/example.batch.json
 bash hicode-eval/eval.sh status --batch BATCH_ID
 bash hicode-eval/eval.sh wait --batch BATCH_ID --wait-seconds 30
 ```
 
-Replace `BATCH_ID` with the ID returned on submission. The example runs all six supported tasks, with concurrency 3 and 30 minutes per task. Adjust `tasks`, `concurrency`, and `budget.agentSeconds` in the batch file as needed. Concurrency is capped at 3 and cannot exceed the service limit; task budgets range from 30 to 7200 seconds. Actual and original task budgets are recorded separately; extended budgets are development evaluation conditions.
+Replace `BATCH_ID` with the ID returned on submission. The example runs three public tasks, with concurrency 3 and 30 minutes per task. Adjust `tasks`, `concurrency`, and `budget.agentSeconds` in the batch file as needed. Concurrency is capped at 3 and cannot exceed the service limit; task budgets range from 30 to 7200 seconds. Actual and original task budgets are recorded separately; extended budgets are development evaluation conditions.
 
 Use `--source` and `--model` together to override a configured model, or `--model-config` for an explicit connection. If changing the port, pass the same `--port` to every CLI command. Run only one service per evaluation machine, and do not deploy another version while tasks are active.
 
@@ -71,7 +86,7 @@ A person or an agent such as Codex can operate the CLI. **Scheduling and grading
 
 ## Grading, logs, and shutdown
 
-Database, image, and calendar inputs are copied individually from the reviewed `inputs` manifest in `public-tasks.json` and verified by hash, rather than copying the entire task directory. The image task requires a model with explicit image input support.
+Database, image, and calendar inputs are copied individually from the reviewed `inputs` manifest in `config/terminal-bench.json` and verified by hash, rather than copying the entire task directory. The image task requires a model with explicit image input support.
 
 Original tests are uploaded and run after execution finishes; the Agent does not receive tests or reference solutions during its attempt. The verifier preserves the original assertions and pytest arguments, moving installation steps from `test.sh` into environment preparation. `cancel-async-tasks` also retains the original test helper copy step.
 
@@ -125,7 +140,7 @@ Each task has its own UID, home directory, and `/app` mount, but shares the syst
 
 ```bash
 bun test hicode-eval/tests
-PYTHONPATH=hicode-eval/container python3 -B -m unittest discover -s hicode-eval/tests
+PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker python3 -B -m unittest discover -s hicode-eval/tests
 bun run check
 ```
 

@@ -1,0 +1,12 @@
+{
+  "name": "Terminal-Bench 2.0 · example batch",
+  "tasks": [
+    "cancel-async-tasks",
+    "log-summary-date-ranges",
+    "sqlite-db-truncate"
+  ],
+  "concurrency": 3,
+  "budget": {
+    "agentSeconds": 1800
+  }
+}

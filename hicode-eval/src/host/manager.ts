@@ -1,5 +1,5 @@
 import { mkdir, readdir, cp, rm } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { taskSchema, profiles, validatePublicTask } from './publicTasks.js';
@@ -8,7 +8,7 @@ import { readJson, save, exists, tree, contained } from './store.js';
 import { runSchema, done, liveSchema, containerSchema, batchSchema, submissionSchema } from './types.js';
 import type { Config, Run, Batch, Submission } from './types.js';
 
-export const ROOT = resolve(import.meta.dir, '..');
+import { REPOSITORY_ROOT } from '../paths.js';
 export function classify(error: string | undefined, rewards: Record<string, number> | null | undefined): Pick<Run, 'state' | 'execution' | 'grading'> {
   const grading = rewards && Object.keys(rewards).length ? (Object.values(rewards).every(x => x === 1) ? 'passed' : 'failed') : 'unavailable';
   return { execution: error ? (error === 'timeout' ? 'timeout' : 'failed') : 'completed', grading, state: error || grading === 'unavailable' ? 'error' : grading === 'passed' ? 'passed' : 'failed' };
@@ -27,7 +27,7 @@ export class Lab {
   constructor(readonly config: Config, private readonly credential: string) { }
   path(id: string): string { if (!this.runs.has(id)) throw Error('Unknown run'); return join(this.config.data, 'runs', id); }
   async init(): Promise<void> {
-    if (contained(resolve(ROOT, '..'), this.config.data)) throw Error('Run data must be outside checkout');
+    if (contained(REPOSITORY_ROOT, this.config.data)) throw Error('Run data must be outside checkout');
     await mkdir(join(this.config.data, 'runs'), { recursive: true, mode: 0o700 });
     await mkdir(join(this.config.data, 'batches'), { recursive: true, mode: 0o700 });
     for (const name of await readdir(join(this.config.data, 'batches'))) {

@@ -3,6 +3,7 @@ import { mkdir, copyFile, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { z } from 'zod';
 import { readJson, tree } from './store.js';
+import { EVAL_ROOT } from '../paths.js';
 export const taskSchema = z.object({ metadata: z.object({ category: z.string().optional() }).optional(), agent: z.object({ timeout_sec: z.number().positive() }), verifier: z.object({ timeout_sec: z.number().positive() }) });
 const inputPath = z.string().max(256).regex(/^(?:[A-Za-z0-9_][A-Za-z0-9_.-]*\/)*[A-Za-z0-9_][A-Za-z0-9_.-]*$/);
 const profileSchema = z.object({
@@ -30,7 +31,7 @@ const profileSchema = z.object({
     ctx.addIssue({code:z.ZodIssueCode.custom,message:'Verifier package pins must be unique'});
 });
 export async function profiles() {
-  return readJson(join(import.meta.dir, '../public-tasks.json'), z.record(profileSchema));
+  return readJson(join(EVAL_ROOT, 'config/terminal-bench.json'), z.record(profileSchema));
 }
 export async function validatePublicTask(id: string, path: string) {
   const profile = (await profiles())[id]; if (!profile) throw Error('Public task has not been adapted to the shared Linux machine');

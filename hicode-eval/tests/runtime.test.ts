@@ -2,11 +2,13 @@ import { test, expect, spyOn } from 'bun:test';
 import { mkdtemp, rm, mkdir, readFile, writeFile, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { classify, Lab } from '../lib/manager.js';
-import { save, tree } from '../lib/store.js';
-import { runSchema, configSchema, batchSchema } from '../lib/types.js';
-import { serve } from '../lib/server.js';
-import { LinuxMachine } from '../lib/linux.js';
+import { fileURLToPath } from 'node:url';
+import { REPOSITORY_ROOT } from '../src/paths.js';
+import { classify, Lab } from '../src/host/manager.js';
+import { save, tree } from '../src/host/store.js';
+import { runSchema, configSchema, batchSchema } from '../src/host/types.js';
+import { serve } from '../src/host/server.js';
+import { LinuxMachine } from '../src/host/linux.js';
 
 async function fixture() {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'hicode-eval-')));
@@ -27,6 +29,20 @@ test('timeout and grade remain independent', () => {
   expect(classify('timeout', { reward: 1 })).toEqual({ execution: 'timeout', grading: 'passed', state: 'error' });
   expect(classify(undefined, null)).toEqual({ execution: 'completed', grading: 'unavailable', state: 'error' });
   expect(classify(undefined, {reward: 0}).state).toBe('failed');
+});
+test('relocated CLI starts from an unrelated directory without model work', () => {
+  const entry = fileURLToPath(new URL('../eval.sh', import.meta.url));
+  const result = Bun.spawnSync(['bash', entry, '--help'], { cwd: tmpdir(), stdout: 'pipe', stderr: 'pipe' });
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString()).toContain('catalog | submit');
+  expect(result.stderr.toString()).toBe('');
+});
+test('relocated host still rejects run data inside the HiCode checkout', async () => {
+  const f = await fixture();
+  try {
+    const lab = new Lab({ ...f.config, data: REPOSITORY_ROOT }, 'fixture');
+    await expect(lab.init()).rejects.toThrow('Run data must be outside checkout');
+  } finally { await f.cleanup(); }
 });
 test('persisted payloads reject symlink parents and snapshot symlinks', async () => {
   const f = await fixture(); try {
@@ -100,7 +116,7 @@ test('submission validates all tasks and concurrency before publishing a batch',
 });
 
 test('CLI client reads a batch and publishes a bounded report over the authenticated protocol', async () => {
-  const { Client } = await import('../lib/client.js');
+  const { Client } = await import('../src/host/client.js');
   const f = await fixture(), s = finished(); await persist(f, s);
   const lab = new Lab(f.config, 'fake'); await lab.init();
   const server = serve(lab, 0); const client = new Client(server.port!);
@@ -131,7 +147,7 @@ test('queued batch cancellation prevents execution and premature reporting is re
 });
 
 test('new batches default to thirty minutes and preserve an explicit budget', async () => {
-  const { budgetSchema } = await import('../lib/types.js');
+  const { budgetSchema } = await import('../src/host/types.js');
   expect(budgetSchema.parse({}).agentSeconds).toBe(1800);
   expect(budgetSchema.parse({agentSeconds: 2400}).agentSeconds).toBe(2400);
 });
@@ -185,7 +201,7 @@ test('single-run recovery is serialized, idempotent, and exposed through the exi
     const [a,b]=await Promise.all([lab.recover(previous.id),lab.recover(previous.id)]);
     expect(a.state).toBe('passed');expect(b.state).toBe('passed');expect(recover).toHaveBeenCalledTimes(1);
     expect(JSON.parse(await readFile(join(f.dir,'runs',previous.id,'state.before-recovery.json'),'utf8'))).toEqual(previous);
-    server=serve(lab,0);const {Client}=await import('../lib/client.js');
+    server=serve(lab,0);const {Client}=await import('../src/host/client.js');
     await new Client(server.port!).request('recover-run',{run:previous.id});
     expect(recover).toHaveBeenCalledTimes(1);
   } finally {server?.stop(true);await lab?.close();prepare.mockRestore();recover.mockRestore();await f.cleanup();}

@@ -1,3 +1,4 @@
+import {waitForState} from "../helpers/waitForState.js";
 import {afterEach, expect, test} from "bun:test";
 import {cleanup, render} from "ink-testing-library";
 import {z} from "zod";
@@ -122,7 +123,9 @@ test("Ctrl+C closes /mcp from details without saving or exiting the conversation
         await key("\x03");
         expect(view.lastFrame()).toContain("Ask HiCode"); expect(view.lastFrame()).not.toContain("◆ MCP");
         expect(f.saved).toEqual([]);
-        await key("hello"); await key("\r"); expect(calls).toBe(1);
+        await key("hello"); await key("\r");
+        await waitForState(() => calls > 0, "Agent submission after closing MCP");
+        expect(calls).toBe(1);
     } finally {view.unmount(); await resources.close();}
 }));
 

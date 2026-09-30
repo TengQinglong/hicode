@@ -28,7 +28,7 @@ test.each([false, true])('batch viewer shows terminal and blocked scheduling rea
     write(text: string, cb: () => void) { writes.push(text); cb(); }
   }
   let finish!: () => void; const rendered = new Promise<void>(r => { finish = r; });
-  runInNewContext(await readFile(new URL('../web/app.js', import.meta.url), 'utf8'), {
+  runInNewContext(await readFile(new URL('../src/web/app.js', import.meta.url), 'utf8'), {
     document: { getElementById: el, createElement: () => new Element() }, Terminal,
     getComputedStyle: () => ({paddingTop:'10px',paddingBottom:'10px'}),
     ResizeObserver: class { constructor(callback: () => void) {resized=callback;} observe() {} disconnect() {} },

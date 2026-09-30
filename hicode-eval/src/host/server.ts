@@ -3,7 +3,8 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import { ROOT, Lab } from './manager.js';
+import { Lab } from './manager.js';
+import { EVAL_ROOT } from '../paths.js';
 import { submissionSchema, idSchema } from './types.js';
 import { exists } from './store.js';
 
@@ -16,13 +17,13 @@ hostname: '127.0.0.1', port, maxRequestBodySize: 256 * 1024, async fetch(request
       const actualPort = server.port; const allowed = new Set([`127.0.0.1:${actualPort}`, `localhost:${actualPort}`]);
       const url = new URL(request.url); const origin = request.headers.get('origin');
       if (!allowed.has(request.headers.get('host') ?? '') || (origin && !['http://127.0.0.1:' + actualPort, 'http://localhost:' + actualPort].includes(origin))) return json({ error: 'Local request required' }, 403);
-      if (request.method === 'GET' && url.pathname === '/') return response(Bun.file(join(ROOT, 'web/index.html')), 200, 'text/html; charset=utf-8', true);
+      if (request.method === 'GET' && url.pathname === '/') return response(Bun.file(join(EVAL_ROOT, 'src/web/index.html')), 200, 'text/html; charset=utf-8', true);
       const cookie = request.headers.get('cookie')?.match(/(?:^|;\s*)eval_session=([a-f0-9]{64})(?:;|$)/)?.[1];
       if (!cookie || !timingSafeEqual(Buffer.from(cookie), Buffer.from(token))) return json({ error: 'Local session required' }, 403);
       try {
         if (request.method === 'GET') {
           const assets: Record<string, string> = { '/app.js': 'text/javascript', '/style.css': 'text/css', '/vendor/xterm.js': 'text/javascript', '/vendor/xterm.css': 'text/css' };
-          if (assets[url.pathname]) return response(Bun.file(join(ROOT, 'web', url.pathname)), 200, assets[url.pathname]);
+          if (assets[url.pathname]) return response(Bun.file(join(EVAL_ROOT, 'src/web', url.pathname)), 200, assets[url.pathname]);
           if (url.pathname === '/api/status') return json(await lab.snapshot());
           if (url.pathname === '/api/preparation') {
             const path = join(lab.path(url.searchParams.get('run') ?? ''), 'preparation.log');

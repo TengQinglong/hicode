@@ -1,10 +1,10 @@
 # 当前 CLI 与证据入口
 
-从技能真实路径向上定位包含 `hicode-eval/lab.ts` 的 checkout。先核对现有服务；不要把技能安装目录当 checkout。维护契约以该 checkout 的 `hicode-eval/README.md`、`lib/types.ts` 和 CLI 为准；只有命令不确定或实现变更时再查它们。
+先解析 Skill 目录的 realpath，再向上定位包含 `hicode-eval/src/cli.ts` 的 checkout。先核对现有服务；不要把技能安装目录当 checkout。维护契约以该 checkout 的 `hicode-eval/README.md`、`src/host/types.ts` 和 CLI 为准；只有命令不确定或实现变更时再查它们。
 
 ## 路径与复用
 
-在当前工具调用中显式填写 `HE_ROOT`（checkout）、`HE_DATA`（仓库外数据根）、`HE_TASKS`（固定数据集）、`HE_PAYLOAD`（固定源码包）、`HE_PORT` 和 `HE_BATCH_FILE`。变量不会自动跨工具调用保存。
+在当前工具调用中显式填写 `HE_ROOT`（checkout）、`HE_DATA`（仓库外数据根）、`HE_TASKS`（固定数据集）、`HE_PAYLOAD`（固定源码包）、`HE_PORT` 和 `HE_BATCH_FILE`。变量不会自动跨工具调用保存。通用配置在 `hicode-eval/config/`；临时提交文件放在外部数据目录的 `batch-configs/`，不要存回源码目录。固定回归题组可以复用 `config/regression15-*.json`，不要误将示例题目当作用户选题。
 
 现有数据根的 `config.json` 记录真实 tasks/payload/model/concurrency；`.service.lock/owner.json` 记录 PID/启动身份。结合监听进程和 status 核对，不能只凭旧 owner 文件杀进程。模型凭据不打印、不复制到任务文件。
 
@@ -21,7 +21,9 @@ bash hicode-eval/eval.sh status --batch "$HE_BATCH" --port "$HE_PORT"
 bash hicode-eval/eval.sh wait --batch "$HE_BATCH" --wait-seconds 30 --port "$HE_PORT"
 ```
 
-status/wait 输出含完整任务清单，接收后只打印批次 state/counts、run 的 task/state/execution/grading/collection/note 和 schedulingBlocked；不要把完整 JSON 灌进上下文再重读。需要时通过现有 `lib/client.ts` 的 `Client.status()` 读取并投影，不为单次检查编写新的监控系统。
+status/wait 输出含完整任务清单，接收后只打印批次 state/counts、run 的 task/state/execution/grading/collection/note 和 schedulingBlocked；不要把完整 JSON 灌进上下文再重读。需要时通过现有 `src/host/client.ts` 的 `Client.status()` 读取并投影，不为单次检查编写新的监控系统。
+
+先用 `bash hicode-eval/eval.sh --help` 确认入口；路径变更后的离线检查用 `bun test hicode-eval/tests`，Python 用 `PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker python3 -B -m unittest discover -s hicode-eval/tests`。正常启动已有环境不重复运行这些开发验证。
 
 批次 JSON 只有 `name`、`tasks`（明确选择的 ID 数组）、`concurrency`（1–3）、`budget.agentSeconds`（30–7200）。以已保存的用户约定为准，不直接运行示例文件中的题目。相同预算可合组，不同预算可同时排到同一服务，由全局并发限额控制。
 

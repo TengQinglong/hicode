@@ -1,3 +1,4 @@
+import {waitForState} from "../helpers/waitForState.js";
 import {contentText} from "../../src/images/content.js";
 import {afterEach, describe, expect, test} from "bun:test";
 import {cleanup, render} from "ink-testing-library";
@@ -115,7 +116,7 @@ describe("running input queue UI", () => {
                 ],
                 todos: [],
                 permissionMode: "ask",
-        collaborationMode: "build",
+                collaborationMode: "build",
                 uiEvents: [],
                 taskNotificationReceipts: [],
                 queuedInputs: [
@@ -147,18 +148,25 @@ describe("running input queue UI", () => {
                 />
             );
 
-            await new Promise((resolve) => setTimeout(resolve, 30));
-            expect(instance.lastFrame()).toContain("恢复后的草稿");
-            expect(inputs).toEqual([]);
-            expect(
-                loadSession(storage, cwd, initialSession.sessionId, resources.model)
-                    ?.queuedInputs
-            ).toEqual([initialSession.queuedInputs[1]]);
+            try {
+                await waitForState(() => (instance.lastFrame() ?? "").includes("恢复后的草稿") &&
+                    loadSession(storage, cwd, initialSession.sessionId, resources.model)?.queuedInputs?.length === 1,
+                    "restored draft and persisted queue");
+                expect(inputs).toEqual([]);
+                expect(loadSession(storage, cwd, initialSession.sessionId, resources.model)?.queuedInputs)
+                    .toEqual([initialSession.queuedInputs[1]]);
 
-            instance.stdin.write("\r");
-            await new Promise((resolve) => setTimeout(resolve, 40));
-            expect(inputs).toEqual(["恢复后的草稿"]);
-            await resources.close();
+                instance.stdin.write("\r");
+                // Submission awaits session initialization/hooks; elapsed milliseconds
+                // do not prove that the Agent has received or completed the input.
+                await waitForState(() => inputs.length > 0, "Agent receiving the restored draft");
+                await waitForState(() => (instance.lastFrame() ?? "").includes("Worked for"), "restored turn completion");
+                expect(inputs).toEqual(["恢复后的草稿"]);
+                expect(instance.lastFrame()).toContain("Ask HiCode to build, inspect, or fix something");
+            } finally {
+                instance.unmount();
+                await resources.close();
+            }
         });
     });
 

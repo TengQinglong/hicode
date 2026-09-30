@@ -25,7 +25,7 @@ for line in open(sys.argv[1], 'rb'):
     # Replay fragmented transport, not hand-made Python event objects.
     stream.accept(line[:9]);stream.accept(line[9:]);states.append(stream.started)
 print(json.dumps(states))
-`, path], { env: { ...process.env, PYTHONPATH: resolve(import.meta.dir, '../container') }, stdout: 'pipe', stderr: 'pipe' });
+`, path], { env: { ...process.env, PYTHONPATH: resolve(import.meta.dir, '../src/worker') }, stdout: 'pipe', stderr: 'pipe' });
     expect(proc.exitCode).toBe(0);
     expect(JSON.parse(proc.stdout.toString())).toEqual([false, false, false, true]);
   } finally { await rm(root, { recursive: true, force: true }); }

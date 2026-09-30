@@ -3,8 +3,8 @@ import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { prepareTaskInputs, profiles } from '../lib/publicTasks.js';
-import { tree } from '../lib/store.js';
+import { prepareTaskInputs, profiles } from '../src/host/publicTasks.js';
+import { tree } from '../src/host/store.js';
 
 const content = Buffer.from([0, 255, 10, 128, 42]);
 const hash = createHash('sha256').update(content).digest('hex');
@@ -60,7 +60,7 @@ test('manifest refuses path escapes, undeclared files, hidden test sources, and 
 
 test('catalog includes reviewed tasks with the exact newly required inputs', async () => {
   const available = await profiles();
-  expect(Object.keys(available)).toHaveLength(17);
+  expect(Object.keys(available)).toHaveLength(47);
   expect(available['sqlite-db-truncate']!.inputs.map(file => file.target)).toEqual(['trunc.db']);
   expect(available['code-from-image']!.inputs.map(file => file.target)).toEqual(['code.png']);
   expect(available['constraints-scheduling']!.inputs.map(file => file.target)).toEqual(['alice_calendar.ics', 'bob_calendar.ics', 'carol_calendar.ics']);
@@ -78,4 +78,25 @@ test('catalog includes reviewed tasks with the exact newly required inputs', asy
   expect(available['model-extraction-relu-logits']!.verifierPackages).toEqual(['numpy==2.3.1']);
   expect(available['db-wal-recovery']!.inputs.map(file => file.target)).toEqual(['main.db','main.db-wal']);
   expect(available['chess-best-move']!.inputs.map(file => file.target)).toEqual(['chess_board.png']);
+  // Only sim.c is public in the upstream Dockerfile; adjacent hidden tests must stay out.
+  expect(available['circuit-fibsqrt']!.inputs).toEqual([
+    { source: 'environment/tests/sim.c', target: 'sim.c' },
+    { source: 'environment/gates.txt', target: 'gates.txt' },
+  ]);
+  expect(available['protein-assembly']!.inputs.map(file => file.target)).toEqual(['antibody.fasta', 'plasmid.gb', 'pdb_ids.txt']);
+  expect(available['distribution-search']!.packages).toEqual(['numpy==2.1.2', 'scipy==1.15.3']);
+  expect(available['distribution-search']!.verifierPackages).toEqual(['numpy==2.3.0']);
+  expect(available['cobol-modernization']!.inputs.every(file => /^(src|data)\//.test(file.target))).toBe(true);
+  expect(available['write-compressor']!.initializer).toEqual({ kind: 'bash', file: 'eval-build-decomp.sh' });
+  expect(available['write-compressor']!.inputs.map(file => file.target)).toEqual(['decomp.c', 'data.txt']);
+  expect(available['modernize-scientific-stack']!.inputs.every(file => file.target.startsWith('climate_analyzer/'))).toBe(true);
+  expect(available['portfolio-optimization']!.inputs.some(file => file.target === 'cvxopt_benchmark.py')).toBe(false);
+  expect(available['video-processing']!.inputs.map(file => file.target)).toEqual(['example_video.mp4']);
+  expect(available['fix-git']!.initializer).toEqual({ kind: 'bash', file: 'setup.sh' });
+  expect(available['vulnerable-secret']!.initializer).toEqual({ kind: 'bash', file: 'eval-setup.sh' });
+  expect(available['query-optimize']!.inputs.map(file => file.target)).toEqual(['my-sql-query.sql', 'oewn.sqlite']);
+  expect(available['financial-document-processor']!.inputs.filter(file => file.target.startsWith('seed-documents/'))).toHaveLength(17);
+  expect(available['tune-mjcf']!.packages).toEqual(['mujoco==3.3.5']);
+  expect(available['bn-fit-modify']!.verifierPackages).toEqual(['pandas==2.3.2', 'scipy==1.16.1']);
+  expect(available['overfull-hbox']!.inputs.map(file => file.target)).toEqual(['main.tex', 'input.tex', 'synonyms.txt']);
 });

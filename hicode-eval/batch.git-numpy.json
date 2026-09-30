@@ -1,6 +1,0 @@
-{
-  "name": "Git merge + ReLU · prepared environment",
-  "tasks": ["merge-diff-arc-agi-task", "model-extraction-relu-logits"],
-  "concurrency": 2,
-  "budget": {"agentSeconds": 1800}
-}

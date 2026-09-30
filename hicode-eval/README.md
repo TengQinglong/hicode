@@ -4,9 +4,24 @@
 
 在一台长期运行的 Linux 容器中，批量测试 HiCode 完成公开编程任务的能力。CLI 提交任务，网页查看完整 TUI 和进度，结束后自动运行原题测试并保存日志。每题独立尝试一次，不追加纠错提示、不自动重跑。
 
-目前适配 Terminal-Bench 2.0 的 **17 道题**。此工具用于研发回归；共享系统、ARM64 环境和可调时限与官方环境存在差异，结果不等同于官方榜单成绩。
+已适配题目见 [题目清单](config/terminal-bench.json)。此工具用于研发回归；共享系统、ARM64 环境和可调时限与官方环境存在差异，结果不等同于官方榜单成绩。
 
-题目运行状态（通过、未通过、待测试）见 [TASK-STATUS.md](TASK-STATUS.md)。
+批次执行状态与成绩由 CLI `status` 查询。个人题目复盘和环境准备记录保存在仓库外。
+
+## 目录与记录
+
+```text
+src/
+  cli.ts     命令行入口
+  host/      宿主调度、状态、Linux 连接与源码打包
+  worker/    Linux 执行、判题、终端记录与收尾
+  web/       只读看板与终端组件
+config/      题目适配清单、固定回归题组与配置示例
+tests/       离线回归测试
+skills/      Codex 批量评测操作说明
+```
+
+题目文件、源码 payload、凭据和运行记录保存在仓库外。`config/` 只保存通用声明、固定回归题组和示例；每次实际提交的模型、版本、预算和结果，以 `<data-dir>/batches/` 与 `runs/` 为准。临时选题配置放在仓库外，例如 `../hicode-eval-data/batch-configs/`，不存入源码目录。个人状态与本机准备记录可放在 `../hicode-eval-data/records/`。
 
 ## 1. 准备环境与数据
 
@@ -17,7 +32,7 @@ bun install --frozen-lockfile
 bash .devcontainer/linux.sh eval-start
 ```
 
-首次会构建开发基础镜像及独立评测镜像，安装 tmux、Python 3.13、pytest 8.4.1 和 pytest-json-ctrf 0.3.5。之后复用镜像，不为每题重新安装。评测机名为 `hicode-eval-linux`，只挂独立数据卷，不挂宿主源码、Home 或 Docker socket；开发容器不必同时运行。
+首次会构建开发基础镜像及独立评测镜像，安装 tmux、Python 3.13、pytest 8.4.1 和 pytest-json-ctrf 0.3.5。之后复用镜像和系统工具；题目专属 Python 依赖按清单安装到独立目录。评测机名为 `hicode-eval-linux`，只挂独立数据卷，不挂宿主源码、Home 或 Docker socket；开发容器不必同时运行。
 
 将上游题目下载到仓库外，并固定为已审核版本：
 
@@ -26,13 +41,13 @@ git clone https://github.com/harbor-framework/terminal-bench-2.git ../terminal-b
 git -C ../terminal-bench-2 checkout --detach 69671fbaac6d67a7ef0dfec016cc38a64ef7a77c
 ```
 
-`public-tasks.json` 校验已接入题目的完整文件哈希，题目变更后会拒绝执行。仓库不附带题目或参考解；使用数据集须遵守上游许可与使用条件。无需安装 Harbor。
+`config/terminal-bench.json` 校验已接入题目的完整文件哈希，题目变更后会拒绝执行。仓库不附带题目或参考解；使用数据集须遵守上游许可与使用条件。无需安装 Harbor。
 
 ## 2. 配置模型并固定源码
 
 运行 `bun run start`，用 `/providers` 配置连接、Key 和模型，再用 `/model` 选择默认模型，完成后退出。评测服务读取 **本仓库及用户 `~/.hicode`** 的设置；不读取题目目录或其他项目的模型配置。
 
-也可以复制 [model.example.json](model.example.json) 为 `hicode-eval/model.local.json`，填写模型 ID、接口地址和 Key 的环境变量名，启动时传 `--model-config hicode-eval/model.local.json`。此 JSON **不存 Key 值**。Key 从进程环境、本仓库 `.env`、`~/.hicode/.env` 依次补缺；可通过 `/providers` 保存，无需把凭据写进命令行。`source` 目前支持 `qwen`、`deepseek`、`glm`、`openrouter`。
+也可以复制 [config/example.model.json](config/example.model.json) 为 `../hicode-eval-data/model.local.json`，填写模型 ID、接口地址和 Key 的环境变量名，启动时传 `--model-config ../hicode-eval-data/model.local.json`。此 JSON **不存 Key 值**。Key 从进程环境、本仓库 `.env`、`~/.hicode/.env` 依次补缺；可通过 `/providers` 保存，无需把凭据写进命令行。`source` 目前支持 `qwen`、`deepseek`、`glm`、`openrouter`。
 
 冻结待测版本：
 
@@ -58,12 +73,12 @@ bash hicode-eval/eval.sh serve \
 
 ```bash
 bash hicode-eval/eval.sh catalog
-bash hicode-eval/eval.sh submit --file hicode-eval/batch.example.json
+bash hicode-eval/eval.sh submit --file hicode-eval/config/example.batch.json
 bash hicode-eval/eval.sh status --batch BATCH_ID
 bash hicode-eval/eval.sh wait --batch BATCH_ID --wait-seconds 30
 ```
 
-将 `BATCH_ID` 替换为提交返回的 ID。示例批次配置 6 道回归题，并发 3、每题 30 分钟；新增题目通过单独批次提交。修改批次文件的 `tasks`、`concurrency`、`budget.agentSeconds` 即可调整；并发最多 3，不能超过服务上限；时限为 30–7200 秒。实际预算和原题预算均会记录，加长时限属于研发评测条件。
+将 `BATCH_ID` 替换为提交返回的 ID。示例批次配置 3 道公开题，并发 3、每题 30 分钟；新增题目通过单独批次提交。修改批次文件的 `tasks`、`concurrency`、`budget.agentSeconds` 即可调整；并发最多 3，不能超过服务上限；时限为 30–7200 秒。实际预算和原题预算均会记录，加长时限属于研发评测条件。
 
 `--source` 和 `--model` 可成对覆盖已配置模型；自定义连接使用 `--model-config`。更换端口时，所有 CLI 命令都传同一个 `--port`。同一评测机只运行一个服务，不在任务期间部署另一个版本。
 
@@ -71,7 +86,7 @@ CLI 可由人或 Codex 等工具操作，**不依赖 Codex 做调度或判题**�
 
 ## 判题、日志与停止
 
-新增题目的数据库、图片和日历按 `public-tasks.json` 中的 `inputs` 清单精确复制并校验哈希，不复制整个题目目录。图片题需要模型显式支持图片输入。
+新增题目的数据库、图片和日历按 `config/terminal-bench.json` 中的 `inputs` 清单精确复制并校验哈希，不复制整个题目目录。图片题需要模型显式支持图片输入。
 
 执行完成后自动上传原题测试并判题；执行期间不向 Agent 提供测试或参考解。使用原测试断言及 pytest 参数，把原 `test.sh` 的安装步骤移到环境准备阶段。`cancel-async-tasks` 还保留原测试辅助文件的复制步骤。
 
@@ -125,7 +140,7 @@ bash hicode-eval/eval.sh recover --run RUN_ID
 
 ```bash
 bun test hicode-eval/tests
-PYTHONPATH=hicode-eval/container python3 -B -m unittest discover -s hicode-eval/tests
+PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker python3 -B -m unittest discover -s hicode-eval/tests
 bun run check
 ```
 

@@ -1,7 +1,11 @@
 import io
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
+
+# The host payload builder shares durable file helpers with the Linux worker.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'worker'))
 from protocol import atomic_json, digest
 
 

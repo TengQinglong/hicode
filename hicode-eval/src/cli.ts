@@ -4,12 +4,13 @@ import { resolve, join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { parse } from 'dotenv';
 import { z } from 'zod';
-import { ROOT, Lab } from './lib/manager.js';
-import { Client } from './lib/client.js';
-import { configSchema, modelSchema, submissionSchema, idSchema } from './lib/types.js';
-import { directory, readJson, run, save, exists } from './lib/store.js';
-import { lease } from './lib/lease.js';
-import { serve } from './lib/server.js';
+import { Lab } from './host/manager.js';
+import { EVAL_ROOT, REPOSITORY_ROOT } from './paths.js';
+import { Client } from './host/client.js';
+import { configSchema, modelSchema, submissionSchema, idSchema } from './host/types.js';
+import { directory, readJson, run, save, exists } from './host/store.js';
+import { lease } from './host/lease.js';
+import { serve } from './host/server.js';
 async function main() {
   process.umask(0o077);
   const { positionals, values: v } = parseArgs({ allowPositionals: true, options: {
@@ -21,7 +22,7 @@ async function main() {
   const required = (key: keyof typeof v) => { const value = v[key]; if (typeof value !== 'string' || !value) throw Error('Missing --' + key); return value; };
   const port = z.number().int().min(1024).max(65535).parse(Number(v.port));
   if (command === 'prepare') {
-    console.log(await run(['python3',join(ROOT,'container/prepare.py'),'--source',resolve(ROOT,'..'),'--payload',resolve(required('payload')),...(v['snapshot-worktree']?['--snapshot-worktree']:[])],{timeout:60000}));return;
+    console.log(await run(['python3',join(EVAL_ROOT,'src/host/prepare.py'),'--source',REPOSITORY_ROOT,'--payload',resolve(required('payload')),...(v['snapshot-worktree']?['--snapshot-worktree']:[])],{timeout:60000}));return;
   }
   if (command !== 'serve') {
     const client = new Client(port), batch = v.batch ? idSchema.parse(v.batch) : undefined;
@@ -50,9 +51,9 @@ async function main() {
   let lab: Lab|undefined,server:ReturnType<typeof serve>|undefined;
   try {
     if(!!v.source!==!!v.model)throw Error('Supply both --source and --model');
-    const model=v['model-config']?await readJson(resolve(v['model-config']),modelSchema):modelSchema.parse(JSON.parse(await run(['bun',join(ROOT,'resolve-model.mjs'),resolve(ROOT,'..'),resolve(ROOT,'..'),join(process.env.HOME??'','.hicode'),...(v.source&&v.model?[v.source,v.model]:[])])));
+    const model=v['model-config']?await readJson(resolve(v['model-config']),modelSchema):modelSchema.parse(JSON.parse(await run(['bun',join(EVAL_ROOT,'src/host/resolve-model.mjs'),REPOSITORY_ROOT,REPOSITORY_ROOT,join(process.env.HOME??'','.hicode'),...(v.source&&v.model?[v.source,v.model]:[])])));
     let credential=process.env[model.apiKeyEnv];
-    for(const path of [resolve(ROOT,'../.env'),join(process.env.HOME??'','.hicode/.env')])if(!credential&&await exists(path))credential=parse(await Bun.file(path).text())[model.apiKeyEnv];
+    for(const path of [join(REPOSITORY_ROOT,'.env'),join(process.env.HOME??'','.hicode/.env')])if(!credential&&await exists(path))credential=parse(await Bun.file(path).text())[model.apiKeyEnv];
     if(!credential)throw Error('Missing provider credential');
     const config=configSchema.parse({version:3,data,tasks:resolve(required('tasks')),payload:resolve(required('payload')),context:v['docker-context'],machine:v.machine,concurrency:Number(v.concurrency),budget:{},model});
     lab=new Lab(config,credential);await lab.init();

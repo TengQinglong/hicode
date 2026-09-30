@@ -9,6 +9,6 @@
   ],
   "exclude": [
     "tests/**",
-    "hicode-eval/container/**"
+    "hicode-eval/src/worker/**"
   ]
 }

@@ -1,11 +1,11 @@
 import { mkdir, appendFile, rename, rm, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { validatePublicTask, prepareTaskInputs, taskSchema } from './publicTasks.js';
 import { run, readJson, save, tree, exists } from './store.js';
 import type { Config, Run } from './types.js';
-const ROOT = resolve(import.meta.dir, '..');
+import { EVAL_ROOT } from '../paths.js';
 
 const packetSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('phase'), phase: z.string() }),
@@ -31,7 +31,7 @@ export class LinuxMachine {
     const hash = createHash('sha256').update(archive).digest('hex');
     if (manifest.files['source.tar.gz'] !== hash) throw Error('Source payload changed');
     await run(this.docker('exec', this.config.machine, 'mkdir', '-p', '/opt/hicode-eval', '/opt/hicode/releases', '/eval/runs'));
-    for (const name of ['runner.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'record.py', 'preflight.ts', 'bootstrap.py']) await run(this.docker('cp', join(ROOT, 'container', name), this.config.machine + ':/opt/hicode-eval/' + name));
+    for (const name of ['runner.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'record.py', 'preflight.ts', 'bootstrap.py']) await run(this.docker('cp', join(EVAL_ROOT, 'src/worker', name), this.config.machine + ':/opt/hicode-eval/' + name));
     const target = '/opt/hicode-eval/source-' + hash + '.tar.gz';
     await run(this.docker('cp', join(this.config.payload, 'source.tar.gz'), this.config.machine + ':' + target));
     this.release = await run(this.docker('exec', this.config.machine, 'python3', '/opt/hicode-eval/bootstrap.py', target, hash), { timeout: 660000 });
