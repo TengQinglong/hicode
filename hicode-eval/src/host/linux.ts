@@ -37,7 +37,7 @@ export class LinuxMachine {
     const hash = createHash('sha256').update(archive).digest('hex');
     if (manifest.files['source.tar.gz'] !== hash) throw Error('Source payload changed');
     await run(this.docker('exec', this.config.machine, 'mkdir', '-p', '/opt/hicode-eval', '/opt/hicode/releases', '/eval/runs'));
-    for (const name of ['runner.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'record.py', 'preflight.ts', 'bootstrap.py', 'swe.py']) await run(this.docker('cp', join(EVAL_ROOT, 'src/worker', name), this.config.machine + ':/opt/hicode-eval/' + name));
+    for (const name of ['runner.py', 'model_proxy.py', 'network_entry.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'record.py', 'preflight.ts', 'bootstrap.py', 'swe.py']) await run(this.docker('cp', join(EVAL_ROOT, 'src/worker', name), this.config.machine + ':/opt/hicode-eval/' + name));
     const target = '/opt/hicode-eval/source-' + hash + '.tar.gz';
     await run(this.docker('cp', join(this.config.payload, 'source.tar.gz'), this.config.machine + ':' + target));
     this.release = await run(this.docker('exec', this.config.machine, 'python3', '/opt/hicode-eval/bootstrap.py', target, hash), { timeout: 660000 });
@@ -111,7 +111,7 @@ export class LinuxMachine {
       if (profile!.initializer) await run(this.docker('cp', join(task, 'environment', profile!.initializer.file), this.config.machine + ':' + remote + '/project/' + profile!.initializer.file));
     }
     await run(this.docker('cp', join(task, 'instruction.md'), this.config.machine + ':' + remote + '/instruction.md'));
-    await save(join(path, 'job.json'), { model: this.config.model, release: this.release, agentSeconds: state.budget.agentSeconds, originalAgentSeconds: spec.agent.timeout_sec, verifierSeconds: spec.verifier.timeout_sec,
+    await save(join(path, 'job.json'), { model: this.config.model, network: state.network, release: this.release, agentSeconds: state.budget.agentSeconds, originalAgentSeconds: spec.agent.timeout_sec, verifierSeconds: spec.verifier.timeout_sec,
       ...(swe ? {dataset:'swe-bench-verified',swe,initializer:null,packages:[],verifierPackages:[],verifierPrelude:'none'} :
         {dataset:'terminal-bench',commands:profile!.commands,publicTestInputs:profile!.publicTestInputs,environment:profile!.environment,verifierEnvironment:profile!.verifierEnvironment,initializer:profile!.initializer,packages:profile!.packages,verifierPackages:profile!.verifierPackages,verifierPrelude:profile!.verifierPrelude,verifierRootOverlay:profile!.verifierRootOverlay,verifierChroot:profile!.verifierChroot}) });
     await run(this.docker('cp', join(path, 'job.json'), this.config.machine + ':' + remote + '/job.json'));

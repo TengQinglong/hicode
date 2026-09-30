@@ -1,3 +1,4 @@
+import {WebFailures, type WebSources} from "../tools/webFetch/state.js";
 import type {ChildTaskAccess} from "../tasks/childAccess.js";
 import {TaskJoin} from "../tasks/taskJoin.js";
 import type {AgentMessaging} from "./agentMessaging.js";
@@ -54,6 +55,7 @@ interface ToolContextResources {
 }
 
 interface ToolContextSession {
+    webSources: WebSources;
     approvalEpoch?: ApprovalEpoch;
     fileState: FileStateTracker;
     networkAccess?: ToolContext["networkAccess"];
@@ -140,6 +142,8 @@ export function createToolContext({
         contextSettings: resources.contextSettings,
         sessionId: session.sessionId,
         toolResultStore: session.toolResultStore,
+        webSources: session.webSources,
+        webFailures: new WebFailures(),
         toolResultFiles: session.toolResultFiles ?? {
             resolveFile: path => session.toolResultStore.resolveFile(path),
         },

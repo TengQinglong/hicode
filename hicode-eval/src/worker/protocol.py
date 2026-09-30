@@ -109,7 +109,7 @@ class Events:
             if kind=='settled':
                 if type(event.get('sealed')) is not bool:raise ValueError('Missing execution seal state')
                 if any(type(event.get(k)) is not int or event[k]<0 for k in ['runningAgents','pendingAgentMessages']):raise ValueError('Invalid Agent completion counters')
-                if event.get('reason') not in {'completed','incomplete','max_turns','permission_denied','hook_blocked','hook_error','hook_limit','no_tool_calls','interrupted'}:raise ValueError('Unknown stop reason')
+                if event.get('reason') not in {'completed','incomplete','max_turns','permission_denied','hook_blocked','hook_error','hook_limit','no_tool_calls','interrupted','error'}:raise ValueError('Unknown stop reason')
             if kind=='agent_event' and (not isinstance(event.get('event'),dict) or not isinstance(event['event'].get('type'),str)):
                 raise ValueError('Invalid Agent event')
             if kind == 'ready': self.ready = True
@@ -138,6 +138,15 @@ class Events:
         return (self.settled is not None and self.settled.get('sealed') is True and not self.busy and self.settled['runningAgents'] == 0 and self.settled.get('pendingAgentMessages') == 0
                 and not self.pending_tools and self.ending is not None and self.ending['persistence_status'] == 'saved')
 
+    def failed_turn(self):
+        # An exported Root failure is a stop request, not an execution seal.
+        # The runner must terminate and confirm cleanup before exposing tests.
+        return (self.started and not self.busy and not self.waiting and not self.partial.strip()
+                and isinstance(self.ending, dict) and self.ending.get('status') == 'failed'
+                and self.ending.get('session_id') == self.session_id
+                and self.ending.get('reason') == 'error'
+                and self.ending.get('persistence_status') in {'saved', 'failed'})
+
 
 def prepare_verifier_root(project, target):
     """A sealed copy on one mount lets original /app -> /tmp renames work."""
@@ -165,11 +174,13 @@ def prepare_verifier_root(project, target):
     copy_tree(project,target/'app');(target/'tmp').mkdir(mode=0o700)
 
 
-def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False, workdir="/app", environment=None, readonly_logs=False, public_tests=None, private_root=None):
+def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False, workdir="/app", environment=None, readonly_logs=False, public_tests=None, private_root=None, isolated_network=False):
     if tests is None and (writable_tests or root_overlay):raise ValueError('Verifier-only filesystem options')
     if private_root is not None and (tests is None or not root_overlay or workdir!='/app'):raise ValueError('Private chroot is verifier-only')
     if public_tests is not None and tests is not None:raise ValueError('Public helpers and hidden verifier are separate views')
+    if isolated_network and tests is not None:raise ValueError('Network isolation is for the actor only')
     result=['bwrap','--unshare-user','--unshare-pid','--die-with-parent']
+    if isolated_network:result+=['--unshare-net']
     if root_overlay:
         # A verifier may create new top-level directories in a private tmpfs;
         # every existing system entry remains read-only. The host root is never writable.
@@ -179,6 +190,7 @@ def namespace_argv(args, project, home, logs, control, tests=None, *, writable_t
     else:result+=['--ro-bind','/','/']
     if workdir not in {'/app','/testbed'}:raise ValueError('Unsupported dataset workspace')
     result+=['--proc','/proc','--dev','/dev']
+    if isolated_network:result+=['--tmpfs','/run']
     if private_root is None:result+=['--tmpfs','/tmp','--bind',str(project),workdir]
     result+=['--bind',str(home),str(home),'--ro-bind' if readonly_logs else '--bind',str(logs),str(logs),'--ro-bind',str(control),str(control),'--chdir',workdir]
     if environment is not None:result+=['--bind',str(environment),'/opt/hicode-swe/env']

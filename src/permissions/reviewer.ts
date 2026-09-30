@@ -1,3 +1,4 @@
+import {WebSources} from "../tools/webFetch/state.js";
 import {z} from "zod";
 import {createReadOnlyBashTool} from "../tools/bash/bash.js";
 import type {AgentEvent} from "../agent/types.js";
@@ -81,7 +82,7 @@ export function createApprovalReviewer(runAgent: AgentRunner): ApprovalReviewer 
                 contextSettings: parent.contextSettings, storage: parent.storage, cwd: parent.cwd, model: target.model, provider: target.source,
                 fastModel: target.model, fastProvider: target.source, skills: [], readOnlyTools: true,
                 fileCommits: new FileCommitCoordinator(), shellRunner: parent.shellRunner},
-            session: {sessionId: `${parent.sessionId}:review:${request.id}`, toolResultStore: parent.toolResultStore,
+            session: {webSources: new WebSources(),sessionId: `${parent.sessionId}:review:${request.id}`, toolResultStore: parent.toolResultStore,
                 fileState: createFileStateTracker(), compactState: createCompactState(), contextUsage: new ContextUsageTracker()},
             host: {canUseTool: async () => ({behavior: "deny", message: "Reviewer cannot request additional permissions"}),
                 getPermissionMode: () => "ask", getCollaborationMode: () => "build", getPermissionPromptPolicy: () => "never",

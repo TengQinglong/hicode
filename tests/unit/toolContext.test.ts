@@ -1,3 +1,4 @@
+import {WebSources} from "../../src/tools/webFetch/state.js";
 import {DEFAULT_CONTEXT_SETTINGS} from "../../src/context/config.js";
 import {ContextUsageTracker} from "../../src/context/usage.js";
 import {createFileStateTracker} from "../../src/tools/shared/fileState.js";
@@ -40,7 +41,7 @@ describe("ToolContext builder", () => {
             testChildEnvironment,
           ),
         },
-        session: {fileState: createFileStateTracker(),
+        session: {webSources: new WebSources(),fileState: createFileStateTracker(),
           sessionId: "session-live",
           compactState: createCompactState(), contextUsage: new ContextUsageTracker(),
           toolResultStore: createTestToolResultStore(cwd, "session-live", {
@@ -112,7 +113,7 @@ describe("ToolContext builder", () => {
           testChildEnvironment,
         ),
       };
-      const session = {
+      const session = {webSources: new WebSources(),
         fileState: createFileStateTracker(),
         sessionId: "shared-session",
         compactState,

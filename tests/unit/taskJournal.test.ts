@@ -19,13 +19,13 @@ function shellEvent(input: {
     const sessionId = input.sessionId ?? "session-a";
     const status = input.status ?? "running";
     return {
-        version: 7,
+        version: 8,
         type: input.type ?? "task_progress",
         sequence: input.sequence,
         sessionId,
         task: {
             id: input.taskId ?? "task-a",
-            kind: "shell", executionMode: "sandbox", phase: status === "running" ? "running" : "finished",
+            kind: "shell", executionMode: "sandbox", timing: {queuedMs: 0, runningMs: 0}, phase: status === "running" ? "running" : "finished",
             owner: {
                 sessionId: input.ownerSessionId ?? sessionId,
                 toolCallId: "call-a",
@@ -143,7 +143,7 @@ describe("TaskJournal", () => {
             const storage = createHiCodeStorageLayout({hicodeHome: join(cwd, "store")});
             const journal = createTaskJournal(storage, cwd);
             for (const runCount of [1, 2]) {
-                await journal.append({version: 7, type: "task_finished", sequence: runCount, sessionId: "session-a",
+                await journal.append({version: 8, type: "task_finished", sequence: runCount, sessionId: "session-a",
                     task: {id: "agent-a", kind: "agent", cwd, owner: {sessionId: "session-a", toolCallId: "call"},
                         agentType: "Explore", description: "test", status: "completed", startedAt: "2026-09-05T00:00:00.000Z",
                         completedAt: "2026-09-05T00:00:01.000Z", resultPreview: `run ${runCount}`,

@@ -24,6 +24,7 @@ export async function createShellTask(
     return {
         id,
         phase: "queued",
+        createdTick: performance.now(),
         published: false,
         publication: Promise.resolve(),
         executionMode: input.sandboxPermissions === "require_escalated" ? "host" : "sandbox",
@@ -52,6 +53,8 @@ export async function runShellTask(
     try {
         const run = () => {
             task.phase = "starting";
+            task.acquiredTick = performance.now();
+            task.blockedByTaskId = undefined;
             execution.onPhaseChanged();
             return shellRunner.run({
                 command: input.command,
@@ -61,14 +64,14 @@ export async function runShellTask(
                 outputFilePath: task.outputPath,
                 maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
                 previewChars: 30_000,
-                onStarted: () => {task.phase = "running"; task.startedAt = new Date().toISOString(); execution.onPhaseChanged();},
+                onStarted: () => {task.phase = "running"; task.processStartedAt = new Date().toISOString(); task.processStartedTick = performance.now(); execution.onPhaseChanged();},
                 sandboxPermissions: input.sandboxPermissions,
                 writableRoots: input.writableRoots,
                 networkAccess: input.networkAccess,
             });
         };
         const result = execution.kind === "continuation"
-            ? await execution.fileCommits.exclusive(task.controller.signal, run, task.id) : await run();
+            ? await execution.fileCommits.exclusive(task.controller.signal, run, task.id, owner => {task.blockedByTaskId = owner; execution.onPhaseChanged();}) : await run();
         if (!task.published) task.inlineResult = result;
         finalStatus = statusFromResult(result);
         task.termination = result.termination;
@@ -102,6 +105,8 @@ export async function runShellTask(
     } finally {
         task.status = finalStatus;
         task.phase = "finished";
+        task.finishedTick = performance.now();
+        task.blockedByTaskId = undefined;
         task.completedAt = new Date().toISOString();
         task.notificationPending = !task.suppressTerminalNotification && !isExpectedShellShutdown(task);
         await task.store.removeTemporaryFile(task.outputPath);

@@ -27,6 +27,12 @@ interface ManagedTaskBase<Status extends string = TaskStatus> {
 
 export interface ManagedShellTask extends ManagedTaskBase {
     phase: ShellTaskSnapshot["phase"];
+    createdTick: number;
+    acquiredTick?: number;
+    processStartedTick?: number;
+    processStartedAt?: string;
+    finishedTick?: number;
+    blockedByTaskId?: string;
     published: boolean;
     publication: Promise<void>;
     inlineResult?: ShellExecutionResult;
@@ -108,6 +114,10 @@ export async function snapshotShell(
         kind: "shell",
         executionMode: task.executionMode,
         phase: task.phase,
+        timing: {queuedMs: Math.max(0, Math.round((task.acquiredTick ?? task.finishedTick ?? performance.now()) - task.createdTick)),
+            runningMs: task.processStartedTick === undefined ? 0 : Math.max(0, Math.round((task.finishedTick ?? performance.now()) - task.processStartedTick))},
+        ...(task.processStartedAt ? {processStartedAt: task.processStartedAt} : {}),
+        ...(task.blockedByTaskId ? {blockedByTaskId: task.blockedByTaskId} : {}),
         owner: task.owner,
         command: task.command,
         cwd: task.cwd,

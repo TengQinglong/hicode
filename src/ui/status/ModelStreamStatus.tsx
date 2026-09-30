@@ -5,6 +5,8 @@ import {COLORS} from "../theme.js";
 import type {LLMRetryInfo} from "../../llm/types.js";
 
 const RETRY_REASONS: Record<LLMRetryInfo["reason"], string> = {
+    output_truncated: "Output limit reached; requesting a smaller next step",
+    provider: "Temporary provider error",
     connection: "Connection failed",
     http: "Service temporarily unavailable",
     empty_response: "Model returned an empty response",

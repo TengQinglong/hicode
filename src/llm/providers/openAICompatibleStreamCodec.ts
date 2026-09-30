@@ -3,6 +3,13 @@ import {reasoningDetailSchema, type ReasoningDetail} from "../reasoning.js";
 
 const MAX_TOOL_CALLS = 128;
 
+export class ProviderStreamError extends Error {
+    constructor(readonly code: string | number, message: string) {
+        super(`Provider stream error ${code}: ${message}`);
+        this.name = "ProviderStreamError";
+    }
+}
+
 interface OpenAICompatibleStreamDeltaToolCall {
     index?: number;
     id?: string;
@@ -152,7 +159,7 @@ export function decodeOpenAICompatibleStreamChunk(
         const error = value.error;
         const code = isRecord(error) && (typeof error.code === "number" || typeof error.code === "string") ? error.code : "unknown";
         const message = isRecord(error) && typeof error.message === "string" ? error.message : "Provider stream failed";
-        throw new Error(`Provider stream error ${code}: ${message}`);
+        throw new ProviderStreamError(typeof code === "string" ? code.slice(0, 128) : code, message);
     }
     const usage = decodeUsage(value.usage);
     if (value.choices === undefined) return usage ? {usage} : {};

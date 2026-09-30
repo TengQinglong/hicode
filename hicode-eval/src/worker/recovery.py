@@ -67,17 +67,28 @@ def recover(root):
             raise ValueError('Outcome and completion receipt disagree')
         proof = {'identity.json': hashlib.sha256(read_bytes(root / 'identity.json', 65536)).hexdigest(),
                  'outcome.json': hashlib.sha256(read_bytes(root / 'outcome.json', 65536)).hexdigest()}
-        if outcome['execution'] == 'completed':
+        if outcome['execution'] == 'completed' or (outcome['execution'] == 'failed' and outcome['grading'] != 'unavailable'):
             data = read_bytes(root / 'logs/events.jsonl', 256 * 1024 * 1024)
             events = Events()
             for offset in range(0, len(data), 65536):
                 events.accept(data[offset:offset + 65536])
-            if events.partial.strip() or not events.ready or not events.complete() or events.settled['reason'] != 'completed':
-                raise ValueError('No sealed, persisted completion event')
+            if outcome['execution'] == 'completed':
+                if events.partial.strip() or not events.ready or not events.complete() or events.settled['reason'] != 'completed':
+                    raise ValueError('No sealed, persisted completion event')
+            else:
+                shutdown = record(root/'shutdown.json')
+                if (not events.ready or not events.failed_turn() or events.pending_tools
+                        or events.ending.get('persistence_status') != 'saved'
+                        or type(shutdown.get('version')) is not int or shutdown['version'] != 1
+                        or shutdown.get('reason') != 'failed' or shutdown.get('cliExited') is not True
+                        or shutdown.get('turnSaved') is not True or shutdown.get('pendingToolCallIds') != []
+                        or shutdown.get('eventStreamComplete') is not True or shutdown.get('error') is not None):
+                    raise ValueError('No confirmed shutdown for failed execution')
+                proof['shutdown.json'] = hashlib.sha256(read_bytes(root/'shutdown.json',65536)).hexdigest()
             proof['logs/events.jsonl'] = hashlib.sha256(data).hexdigest()
         if outcome['grading'] != 'unavailable':
-            if outcome['execution'] not in {'completed', 'timeout'}:
-                raise ValueError('Cancelled or failed execution cannot claim a grade')
+            if outcome['execution'] not in {'completed', 'timeout', 'failed'}:
+                raise ValueError('Cancelled execution cannot claim a grade')
             job=record(root/'job.json') if (root/'job.json').exists() else {}
             swe=job.get('dataset')=='swe-bench-verified'
             report = root / ('logs/verifier/report.json' if swe else 'logs/verifier/ctrf.json')

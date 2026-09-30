@@ -1,3 +1,4 @@
+import {WebSources} from "../tools/webFetch/state.js";
 import {finishPromptLogRun} from "../llm/promptLog.js";
 import type {ContextSettings} from "../context/config.js";
 import {ContextUsageTracker} from "../context/usage.js";
@@ -81,7 +82,7 @@ function buildMemoryConsolidator(options: ConsolidatorOptions, caller: LLMCaller
                         contextSettings: options.contextSettings, storage: draftStorage, cwd: directory, workspaceBoundary: directory, shellWorkspace: directory, shellRunner: options.shellRunner,
                         fileCommits: new FileCommitCoordinator(), model: options.target.model, provider: options.target.source,
                         fastModel: options.target.model, fastProvider: options.target.source, skills: [], instructions: EMPTY_PROJECT_INSTRUCTIONS,
-                    }, session: { sessionId: input.sessionId, compactState: createCompactState(), contextUsage: new ContextUsageTracker(), fileState: createFileStateTracker(),
+                    }, session: {webSources: new WebSources(), sessionId: input.sessionId, compactState: createCompactState(), contextUsage: new ContextUsageTracker(), fileState: createFileStateTracker(),
                         toolResultStore: createToolResultStore(draftStorage, directory, input.sessionId) },
                     host: { canUseTool: async () => ({ behavior: "deny", message: "Memory consolidation cannot request interactive escalation" }), getPermissionRules: () => ({ allow: [], ask: [], deny: [] }),
                         getPermissionMode: () => "ask", getCollaborationMode: () => "build", getPermissionPromptPolicy: () => "never",

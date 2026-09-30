@@ -1,3 +1,4 @@
+import {WebSources} from "../tools/webFetch/state.js";
 import {ensureSessionIdentity} from "../persistence/projectState.js";
 import {ContextUsageTracker} from "../context/usage.js";
 import {ApprovalEpoch} from "../permissions/approval.js";
@@ -105,6 +106,7 @@ export function createRootSessionRuntime({
     allowBackgroundTasks?: boolean;
     shellContinuation?: boolean;
 }): RootSessionRuntime {
+    const webSources = new WebSources();
     const fileState = createFileStateTracker();
     const approvalEpoch = new ApprovalEpoch();
     const contextUsage = new ContextUsageTracker();
@@ -190,6 +192,7 @@ export function createRootSessionRuntime({
                 signal, turnId,
                 resources: {...resources, availableTools: resources.toolRuntime.getTools(), toolNames: resources.toolRuntime.toolNames, contextSettings: resources.settings.context, tasks: taskSession, agentMessaging: taskSession.messaging},
                 session: {
+                    webSources,
                     approvalEpoch,
                     sessionId: seed.sessionId,
                     compactState,

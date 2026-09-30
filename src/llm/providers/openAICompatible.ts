@@ -1,3 +1,4 @@
+import {ProviderStreamError} from "./openAICompatibleStreamCodec.js";
 import {createHash, randomUUID} from "node:crypto";
 import {encodeImageMessages, ImageRequestError, projectMessageForWire} from "../../images/wire.js";
 import {projectImagesForRequest} from "../../images/request.js";
@@ -294,6 +295,7 @@ async function callOpenAICompatibleCore(
     const outputStallTimeoutMs = config.outputStallTimeoutMs;
     let outputStallRetries = 0;
     let responseRetries = 0;
+    let truncationRetries = 0;
     let completedRetryUsage = emptyUsage();
 
     if (options.signal) throwIfTurnAborted(options.signal);
@@ -327,7 +329,8 @@ async function callOpenAICompatibleCore(
             disableThinking,
             reasoningScope
         );
-        requestBody.messages = wireMessages;
+        const recoveryMessage = truncationRetries > 0 ? [{role: "system", content: "The previous response exceeded the output limit and was discarded; none of its tool calls were executed. Continue from the last completed history. Return a concise next step with at most one small tool call. Split large changes across subsequent calls rather than emitting a complete large file or a long explanation."}] : [];
+        requestBody.messages = [...wireMessages, ...recoveryMessage];
         const requestJson = JSON.stringify(requestBody);
         if (hasImages && Buffer.byteLength(requestJson) > 20 * 1024 * 1024) {
             const error = new ImageRequestError("Encoded multimodal request exceeds 20 MiB; request was not sent");
@@ -339,7 +342,7 @@ async function callOpenAICompatibleCore(
             options.cwd,
             options.kind,
             options.model,
-            {...requestBody, messages: providerMessages.map(projectMessageForWire), ...(hasImages ? {imagesSubmitted: true} : {})},
+            {...requestBody, messages: [...providerMessages.map(projectMessageForWire), ...recoveryMessage], ...(hasImages ? {imagesSubmitted: true} : {})},
             [endpoint.apiKey], options.trace, attempt
         );
         let lastStreamProgress: LLMStreamProgress | undefined;
@@ -370,7 +373,7 @@ async function callOpenAICompatibleCore(
             message: string;
             allowed: boolean;
             immediate?: boolean;
-            details?: {usage: TokenUsage; rawResponse: Record<string, unknown>};
+            details?: {usage?: TokenUsage; rawResponse: Record<string, unknown>};
         }): Promise<void> => {
             const canRetry = failure.allowed && attempt < LLM_MAX_ATTEMPTS;
             requestSignal.cleanup();
@@ -567,12 +570,24 @@ async function callOpenAICompatibleCore(
                 });
                 throw new Error(`LLM stream has received no data for ${requestTimeoutMs} ms`);
             }
+            if (error instanceof ProviderStreamError) {
+                const retryable = [429, 500, 502, 503, 504, "rate_limit_exceeded", "server_error", "service_unavailable"].includes(error.code);
+                if (!retryable) {
+                    const message = redactSecret(error.message, endpoint.apiKey).slice(0, 1000) + "; provider rejected the response; no tools from this response were executed";
+                    finishPromptLog({error: message});
+                    throw new Error(message);
+                }
+                await recover({reason: "provider", allowed: retryable, message: redactSecret(error.message, endpoint.apiKey).slice(0, 1000),
+                    details: {rawResponse: {providerErrorCode: redactSecret(String(error.code), endpoint.apiKey)}}});
+                continue;
+            }
             if (error instanceof OpenAICompatibleProtocolError) {
-                const allowed = responseRetries++ < 1;
+                const truncated = error.diagnostic.code === "output_truncated";
+                const allowed = truncated ? truncationRetries++ < 1 : responseRetries++ < 1;
                 completedRetryUsage = addUsage(completedRetryUsage, error.usage);
                 const code = error.diagnostic.code;
                 await recover({
-                    reason: code === "stream_disconnected" || code === "empty_stream" || code === "invalid_json" ? code : "protocol",
+                    reason: code === "output_truncated" ? "output_truncated" : code === "stream_disconnected" || code === "empty_stream" || code === "invalid_json" ? code : "protocol",
                     message: error.message, allowed,
                     details: {usage: error.usage, rawResponse: {stream: true, provider: endpoint.displayName, protocolFailure: error.diagnostic}},
                 });

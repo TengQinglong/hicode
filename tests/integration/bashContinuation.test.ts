@@ -41,6 +41,10 @@ test("queued Shell returns its ID, remains unstarted, and cancellation never spa
                 timeoutMs: 100, signal: ctx.signal, onHandoff() {}});
             if (queued.kind !== "task") throw new Error("Expected queued task");
             expect(queued.task.phase).toBe("queued");
+            expect(queued.task.blockedByTaskId).toBe(first.kind === "task" ? first.task.id : undefined);
+            expect(queued.task.timing.queuedMs).toBeGreaterThanOrEqual(90);
+            expect(queued.task.timing.runningMs).toBe(0);
+            expect(queued.task.processStartedAt).toBeUndefined();
             expect(queued.task.id).toMatch(/^t_[a-f0-9]{12}$/);
             const status = await executeToolResult("task", JSON.stringify({action: "status", task_id: queued.task.id}), ctx, "queue-status");
             expect(status.modelContent).toContain("process not started");
@@ -70,6 +74,26 @@ test("task mistakes return accessible IDs without rerunning work or exposing ano
             expect(hidden.modelContent).toContain("No accessible tasks");
             expect(hidden.modelContent).not.toContain(task.id);
             expect(await tasks.list()).toHaveLength(1);
+        } finally {await resources.close();}
+    });
+});
+
+test("verified read compounds proceed during a writer while file mutations remain blocked", async () => {
+    await withTempProject(async cwd => {
+        const {resources, tasks, ctx} = fixture(cwd);
+        await writeFile(join(cwd, "evidence.txt"), "existing evidence");
+        try {
+            const owner = await tasks.runShell({command: "sleep 30", cwd, toolCallId: "writer", waitMs: 100,
+                signal: ctx.signal, onHandoff() {}});
+            if (owner.kind !== "task") throw new Error("Expected held writer");
+            const read = await executeToolResult("bash", JSON.stringify({command: "sleep 0.01; cat evidence.txt"}), ctx, "read");
+            expect(read.outcome).toBe("ok");
+            expect(read.modelContent).toContain("existing evidence");
+            expect((await tasks.get(owner.task.id))?.status).toBe("running");
+            const write = await executeToolResult("write_file", JSON.stringify({path: "new.txt", content: "never"}), ctx, "write");
+            expect(write.outcome).toBe("failed");
+            expect(write.modelContent).toContain(owner.task.id);
+            await expect(readFile(join(cwd, "new.txt"))).rejects.toThrow();
         } finally {await resources.close();}
     });
 });

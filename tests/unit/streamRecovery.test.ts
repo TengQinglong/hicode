@@ -44,6 +44,37 @@ function options(cwd: string, storage: LLMCallOptions["storage"]): LLMCallOption
     return {cwd, storage, kind: "main", model: "offline", messages: [{role: "user", origin: "user" as const, content: "continue"}], tools: []};
 }
 
+test("length retries once with a smaller-step request and preserves the caller's history", async () => withTempProject(async (cwd, storage) => {
+    const bodies: Array<{messages: unknown[]}> = [];
+    mockFetch(async (_url, init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return response(bodies.length === 1 ? event({content: "partial"}, "length") : good);
+    });
+    const input = options(cwd, storage);
+    const before = structuredClone(input.messages);
+    const result = await caller(input, endpoint);
+    expect(result.message.content).toBe("recovered");
+    expect(result.usage.total_tokens).toBe(24);
+    expect(bodies).toHaveLength(2);
+    expect(JSON.stringify(bodies[1])).toContain("at most one small tool call");
+    expect(input.messages).toEqual(before);
+}));
+
+test("persistent truncation exhausts its single recovery without executing partial calls", async () => withTempProject(async (cwd, storage) => {
+    let count = 0;
+    mockFetch(async () => {count++; return response(event({content: "partial"}, "length"));});
+    await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("retry budget exhausted");
+    expect(count).toBe(2);
+}));
+
+test.each(["rate_limit_exceeded", "data_inspection_failed"])("provider code %s controls recovery without matching error text", async code => withTempProject(async (cwd, storage) => {
+    let count = 0;
+    mockFetch(async () => ++count === 1 ? response(`data: ${JSON.stringify({error: {code, message: "fixture rejection"}})}\n\n`) : response(good));
+    if (code === "rate_limit_exceeded") expect((await caller(options(cwd, storage), endpoint)).message.content).toBe("recovered");
+    else await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("data_inspection_failed");
+    expect(count).toBe(code === "rate_limit_exceeded" ? 2 : 1);
+}));
+
 test("残缺工具响应只重试模型请求，重置草稿并累加已报告 usage", async () => withTempProject(async (cwd, storage) => {
     const bodies: string[] = [];
     mockFetch(async (_url: unknown, init?: RequestInit) => {
@@ -95,7 +126,7 @@ test("协议恢复退避响应取消，不发起下一次请求", async () => wi
     expect(count).toBe(1);
 }));
 
-test.each(["length", "content_filter"])("%s 完成原因不当作临时协议错误重试", async reason => withTempProject(async (cwd, storage) => {
+test.each(["content_filter"])("%s 完成原因不当作临时协议错误重试", async reason => withTempProject(async (cwd, storage) => {
     let count = 0;
     mockFetch(async () => {count++; return response(event({content: "partial"}, reason));});
     await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow(reason);
@@ -220,13 +251,13 @@ test("重试进度回调抛错时直接退出，不再请求", async () => withT
     expect(count).toBe(1);
 }));
 
-test.each(["identity", "disconnect", "json"] as const)("真实 Agent %s 恢复：既有写入不重放，坏批次零执行且 History 配对完整", async failure => withTempProject(async (cwd) => {
+test.each(["identity", "disconnect", "json", "length"] as const)("真实 Agent %s 恢复：既有写入不重放，坏批次零执行且 History 配对完整", async failure => withTempProject(async (cwd) => {
     const write = (id: string, path: string) => ({index: 0, id, function: {name: "write_file", arguments: JSON.stringify({path, content: id})}});
     const responses = [
         event({tool_calls: [write("first-write", "first.txt")]}, "tool_calls"),
         event({content: "uncommitted draft", tool_calls: failure === "identity"
             ? [write("ghost-write", "ghost.txt"), {index: 1}]
-            : [write("ghost-write", "ghost.txt")]}, failure === "disconnect" ? null : "tool_calls"),
+            : [write("ghost-write", "ghost.txt")]}, failure === "disconnect" ? null : failure === "length" ? "length" : "tool_calls"),
         event({tool_calls: [write("second-write", "second.txt")]}, "tool_calls"),
         good,
     ];

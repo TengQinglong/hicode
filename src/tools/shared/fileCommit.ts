@@ -62,9 +62,10 @@ export class FileCommitCoordinator {
     }
 
     /** Root-owned foreground Shell and file commits share a write ordering boundary. */
-    async exclusive<T>(signal: AbortSignal, operation: () => Promise<T>, shellTaskId?: string): Promise<T> {
+    async exclusive<T>(signal: AbortSignal, operation: () => Promise<T>, shellTaskId?: string, onWaiting?: (owner: string | undefined) => void): Promise<T> {
         while (this.active) {
             if (this.shellOwner && !shellTaskId) throw new Error(`File commit blocked by Shell task_id: ${this.shellOwner}. Use task wait or stop before retrying; no file was changed.`);
+            onWaiting?.(this.shellOwner);
             const pending = this.active;
             throwIfTurnAborted(signal);
             await new Promise<void>((done, reject) => {

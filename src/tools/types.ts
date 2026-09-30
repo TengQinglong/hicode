@@ -1,3 +1,4 @@
+import type {WebSources, WebFailures} from "./webFetch/state.js";
 import type {ChildTaskAccess} from "../tasks/childAccess.js";
 import type {TaskJoin} from "../tasks/taskJoin.js";
 import type {AgentMessaging} from "../runtime/agentMessaging.js";
@@ -136,6 +137,8 @@ export interface ToolContext {
     // Session large-result storage, injected by UI, Headless or tests.
     sessionId: string;
     toolResultStore: ToolResultStore;
+    webSources: WebSources;
+    webFailures: WebFailures;
     toolResultFiles: Pick<ToolResultStore, "resolveFile">;
     sessionArchives?: SessionArchiveAccess;
     sessionCompaction?: SessionCompaction;

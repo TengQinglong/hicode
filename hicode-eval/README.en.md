@@ -97,11 +97,26 @@ Use `--source` and `--model` together to override a configured model, or `--mode
 
 A person or an agent such as Codex can operate the CLI. **Scheduling and grading do not depend on Codex.** Real tasks incur usage charges from your configured model provider; offline tests do not call a model.
 
+## Evaluation network modes
+
+The service defaults to open networking. Use `serve --network isolated` to change the default, or set a mode per submitted batch:
+
+```json
+{"name":"Independent evaluation","network":"isolated","concurrency":3,"tasks":[{"id":"regex-log"}]}
+```
+
+- `open`: the Agent may use the network while solving the task.
+- `isolated`: preparation and grading retain network access. During the attempt, curl, pip, Fetch and other processes cannot access the internet; model calls use a fixed model-only gateway. Prepared local dependency caches remain available.
+
+An omitted mode inherits the service default. Each batch freezes its choice; active tasks are not switched and other batches are unaffected. Isolation failure stops preparation instead of falling back to open access. The real model credential stays outside the actor namespace. The gateway rejects arbitrary destinations, redirects and provider-side search tools. Shared files and caches still require an independent answer-exposure audit; network isolation alone is not proof of an uncontaminated result.
+
 ## Grading, logs, and shutdown
 
 Database, image, and calendar inputs are copied individually from the reviewed `inputs` manifest in `config/terminal-bench.json` and verified by hash, rather than copying the entire task directory. The image task requires a model with explicit image input support.
 
 Original tests are uploaded and run after execution finishes; the Agent does not receive tests or reference solutions during its attempt. The verifier preserves the original assertions and pytest arguments, moving installation steps from `test.sh` into environment preparation. `cancel-async-tasks` also retains the original test helper copy step.
+
+When the model explicitly fails, the runner ends the attempt promptly and records an execution failure. Original grading runs separately only after processes stop and execution records close completely. Per-task verifierPackages are installed after the attempt, making those private dependencies unavailable while the Agent works.
 
 The verifier can read task-installed Python dependencies, with pinned verifier packages taking priority. FEAL builds in a private verifier copy of the tests; Headless uses a private temporary root for its required paths. pytest caches go to writable logs. Displayed warnings are summarized; full output remains in `evidence/logs/verifier/output.txt`.
 

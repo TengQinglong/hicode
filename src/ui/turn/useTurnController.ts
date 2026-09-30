@@ -1,3 +1,4 @@
+import {hasCompleteToolPairs} from "../../session/codec.js";
 import {InteractiveEvents} from "../interactiveEvents.js";
 import type {McpToolPolicy} from "../../mcp/types.js";
 import {FileSuggestions} from "../../runtime/fileSuggestions.js";
@@ -365,7 +366,7 @@ export function useTurnController({
                 setCollaborationMode,
                 runTurn: async (input, signal) => {
                     await startSessionHooks();
-                    const turnResult = await runRootTurn({
+                    await runRootTurn({
                         resources,
                         session: rootSession,
                         prompt: input,
@@ -381,6 +382,21 @@ export function useTurnController({
                             );
                         },
                         onTurnSettled: () => {fileSuggestions.invalidate(); eventStore.settleTurn();},
+                        onTurnFinalized: async outcome => {
+                            if (observe) {
+                                const tasks = await taskSession.list();
+                                const pending = await taskSession.pendingNotifications();
+                                const agentIds = new Set(tasks.filter(task => task.kind === "agent").map(task => task.id));
+                                const queued = messageQueue.list().filter(message => message.type === "agent_message" ||
+                                    (message.type === "task_notification" && agentIds.has(message.taskId)));
+                                const runningAgents = tasks.filter(task => task.kind === "agent" && task.status === "running").length;
+                                const pendingAgentMessages = queued.length + pending.filter(message => message.kind === "agent").length;
+                                const sealed = outcome.persistence_status === "saved" && hasCompleteToolPairs(rootSession.history) && interactiveHost?.singleTask === true && runningAgents === 0 && pendingAgentMessages === 0;
+                                if (sealed) turnControllerRef.current!.seal();
+                                observe({type: "settled", sessionId: rootSession.sessionId, reason: outcome.reason,
+                                    runningAgents, pendingAgentMessages, sealed, status: outcome.status, persistenceStatus: outcome.persistence_status});
+                            }
+                        },
                         getSnapshotState: () => ({
                             todos: todosRef.current,
                             permissionMode: permissionModeRef.current,
@@ -397,19 +413,7 @@ export function useTurnController({
                             }
                         ),
                     });
-                    if (observe) {
-                        const tasks = await taskSession.list();
-                        const pending = await taskSession.pendingNotifications();
-                        const agentIds = new Set(tasks.filter(task => task.kind === "agent").map(task => task.id));
-                        const queued = messageQueue.list().filter(message => message.type === "agent_message" ||
-                            (message.type === "task_notification" && agentIds.has(message.taskId)));
-                        const runningAgents = tasks.filter(task => task.kind === "agent" && task.status === "running").length;
-                        const pendingAgentMessages = queued.length + pending.filter(message => message.kind === "agent").length;
-                        const sealed = interactiveHost?.singleTask === true && runningAgents === 0 && pendingAgentMessages === 0;
-                        if (sealed) turnControllerRef.current!.seal();
-                        observe({type: "settled", sessionId: rootSession.sessionId, reason: turnResult.reason,
-                            runningAgents, pendingAgentMessages, sealed});
-                    }
+
                 },
                 importImages: (paths, signal) => importSelectedImages(paths, resources, rootSession.createContext({signal, host: toolContextHost,
                     onEvent: handleEvent, getSnapshotState: () => ({...createSnapshot(), uiEvents: eventStore.getPersistedUIEvents()})})),

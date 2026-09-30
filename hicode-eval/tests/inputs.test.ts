@@ -92,6 +92,7 @@ test('catalog includes reviewed tasks with the exact newly required inputs', asy
   expect(available['modernize-scientific-stack']!.inputs.every(file => file.target.startsWith('climate_analyzer/'))).toBe(true);
   expect(available['portfolio-optimization']!.inputs.some(file => file.target === 'cvxopt_benchmark.py')).toBe(false);
   expect(available['video-processing']!.inputs.map(file => file.target)).toEqual(['example_video.mp4']);
+  expect(available['video-processing']!.packages).toContain('toml==0.10.2');
   expect(available['fix-git']!.initializer).toEqual({ kind: 'bash', file: 'setup.sh' });
   expect(available['vulnerable-secret']!.initializer).toEqual({ kind: 'bash', file: 'eval-setup.sh' });
   expect(available['query-optimize']!.inputs.map(file => file.target)).toEqual(['my-sql-query.sql', 'oewn.sqlite']);

@@ -1169,7 +1169,8 @@
     "initializer": null,
     "directories": [],
     "packages": [
-      "opencv-contrib-python==4.11.0.86"
+      "opencv-contrib-python==4.11.0.86",
+      "toml==0.10.2"
     ],
     "verifierPackages": [
       "opencv-contrib-python==4.11.0.86",

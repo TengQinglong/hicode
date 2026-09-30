@@ -24,6 +24,9 @@ interface TaskOwner {
 
 export interface ShellTaskSnapshot {
     phase: "queued" | "starting" | "running" | "finished";
+    timing: {queuedMs: number; runningMs: number};
+    processStartedAt?: string;
+    blockedByTaskId?: string;
     executionMode: "sandbox" | "host";
     id: string;
     kind: "shell";
@@ -132,7 +135,7 @@ export interface TaskNotification {
 export type TaskResultReceipt = Pick<TaskNotification, "taskId" | "notificationId">;
 
 export interface TaskEventEnvelope {
-    version: 7;
+    version: 8;
     sequence: number;
     sessionId: string;
     task: TaskSnapshot;

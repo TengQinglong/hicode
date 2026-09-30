@@ -26,7 +26,7 @@ test.skipIf(!enabled)("read-only aliases preserve lexical paths without bypassin
             expect(sandbox.status.kind).toBe("ready");
             const ctx = createTestContext(cwd, {shellRunner: createShellRunner(sandbox, testChildEnvironment), readOnlyTools: true});
             const run = (command: string) => executeToolResult("bash", JSON.stringify({command}), ctx, command);
-            for (const command of ["cat alias.txt", "rg -n ALIAS_NEEDLE current", "cat current/note.txt", "rg -L ALIAS_NEEDLE ."]) {
+            for (const command of ["cat alias.txt", "sleep 0.01; cat alias.txt", "rg -n ALIAS_NEEDLE current", "cat current/note.txt", "rg -L ALIAS_NEEDLE ."]) {
                 const result = await run(command);
                 expect(result.outcome).toBe("ok");
                 expect(result.modelContent).toContain("ALIAS_NEEDLE");

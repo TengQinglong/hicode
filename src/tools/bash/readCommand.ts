@@ -6,7 +6,7 @@ import type {ChildProcessEnvironment} from "../../runtime/childEnvironment.js";
 import type {CommandReadAccess} from "./readAccess.js";
 
 const SYSTEM_PROGRAMS: Record<string, string> = {ls: "/bin/ls", pwd: "/bin/pwd", cat: "/bin/cat", echo: "/bin/echo",
-    head: "/usr/bin/head", tail: "/usr/bin/tail", wc: "/usr/bin/wc"};
+    sleep: "/bin/sleep", head: "/usr/bin/head", tail: "/usr/bin/tail", wc: "/usr/bin/wc"};
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 /** Resolve programs without invoking a shell or inheriting aliases/startup hooks. */

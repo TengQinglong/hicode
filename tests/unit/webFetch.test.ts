@@ -10,6 +10,12 @@ import {testChildEnvironment} from "../helpers/childEnvironment.js";
 import {displayWebUrl, webFetchFailure} from "../../src/tools/webFetch/errors.js";
 
 describe("web_fetch boundaries", () => {
+  test.each(["reuse", "refresh", "permission", "query", "no-store", "expired", "evicted", "octet", "binary", "invalid-utf8", "failure", "http-error"])("session source reuse and recovery: %s", async mode => {
+    const child = Bun.spawn([process.execPath, fileURLToPath(new URL("../fixtures/webFetchReuse.ts", import.meta.url)), mode],
+      {env: testChildEnvironment.base, stdout: "pipe", stderr: "pipe"});
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect({code, stdout, stderr}).toEqual({code: 0, stdout: "verified\n", stderr: ""});
+  });
   test("diagnostics redact signed URLs and bound cyclic and aggregate causes", () => {
     const url = new URL("https://example.com/doc?signature=secret-value#private-fragment");
     expect(displayWebUrl(url.toString())).toBe("https://example.com/doc?[redacted]");

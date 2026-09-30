@@ -50,7 +50,7 @@ describe("English prompt contracts", () => {
         expect(prompt).toContain("not automatically unresolved work");
         expect(prompt).toContain("Only an explicit request to build that infrastructure");
         expect(prompt).toContain("stop that verification branch");
-        expect(prompt).toContain("Once the goal has sufficient evidence, stop");
+        expect(prompt).toContain("Once the user's requirements are met and necessary checks provide sufficient evidence, stop and deliver");
         expect(prompt).not.toContain("64 MiB");
         expect(prompt).not.toContain("timeout_ms");
         expect(toolDescription("bash")).toContain("rg --files");

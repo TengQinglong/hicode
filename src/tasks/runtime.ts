@@ -713,7 +713,7 @@ class TaskRuntime implements TaskRuntimeLike {
         task: TaskSnapshot
     ): TaskEventEnvelope {
         return {
-            version: 7,
+            version: 8,
             sequence: ++this.sequence,
             sessionId: task.owner.sessionId,
             task,
@@ -765,7 +765,7 @@ class TaskRuntime implements TaskRuntimeLike {
                 restored = {
                     ...restored,
                     status: "cancelled",
-                    ...(restored.kind === "shell" ? {phase: "finished" as const} : {}),
+                    ...(restored.kind === "shell" ? {phase: "finished" as const, blockedByTaskId: undefined} : {}),
                     completedAt: new Date().toISOString(),
                     outputIssue: [
                         restored.outputIssue,

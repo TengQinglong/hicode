@@ -82,3 +82,37 @@ class RecoveryTest(unittest.TestCase):
                 self.assertEqual(recover(root),outcome)
         with patch('recovery.Path.read_text',side_effect=ProcessLookupError()):
             self.assertIsNone(process_start(12345))
+
+    def failed_fixture(self, parent):
+        root, outcome = self.fixture(parent)
+        outcome['execution'] = 'failed'
+        (root/'outcome.json').write_text(json.dumps(outcome))
+        records = [{'type':'ready'}, {'type':'agent_event','event':{'type':'model_stream_start'}},
+                   {'type':'agent_event','event':{'type':'turn_end','input':{
+                       'session_id':'fixture','status':'failed','reason':'error','persistence_status':'saved'}}},
+                   {'type':'state','busy':False,'waitingForApproval':False}]
+        (root/'logs/events.jsonl').write_text(''.join(json.dumps({'version':1,'sequence':i+1,'sessionId':'fixture',**r})+'\n'
+                                                   for i,r in enumerate(records)))
+        (root/'shutdown.json').write_text(json.dumps({'version':1,'reason':'failed','cliExited':True,
+            'turnSaved':True,'pendingToolCallIds':[],'eventStreamComplete':True,'error':None}))
+        return root, outcome
+
+    def test_failed_attempt_with_confirmed_shutdown_keeps_independent_grade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, outcome = self.failed_fixture(tmp)
+            with patch('recovery.process_start',return_value=None), patch('recovery.pwd.getpwnam',return_value=SimpleNamespace(pw_uid=20001)), patch('cleanup.stop_task_processes'):
+                self.assertEqual(recover(root), outcome)
+                self.assertEqual(recover(root), outcome)
+            proof = json.loads((root/'recovery.json').read_text())['evidence']
+            self.assertIn('shutdown.json', proof)
+            self.assertIn('logs/events.jsonl', proof)
+
+    def test_failed_attempt_without_shutdown_proof_cannot_recover_a_grade(self):
+        for field,value in [('cliExited',False),('turnSaved',False),('pendingToolCallIds',['a']),
+                            ('eventStreamComplete',False),('error','failed'),('reason','timeout')]:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                root, _ = self.failed_fixture(tmp)
+                path=root/'shutdown.json';receipt=json.loads(path.read_text());receipt[field]=value;path.write_text(json.dumps(receipt))
+                with patch('recovery.process_start',return_value=None), patch('recovery.pwd.getpwnam',return_value=SimpleNamespace(pw_uid=20001)), patch('cleanup.stop_task_processes') as stop:
+                    with self.assertRaisesRegex(ValueError,'confirmed shutdown'):recover(root)
+                    stop.assert_not_called()

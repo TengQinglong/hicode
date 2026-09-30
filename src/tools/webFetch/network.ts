@@ -48,6 +48,7 @@ interface WebFetchResponse {
     status: number;
     statusText: string;
     contentType: string;
+    cacheControl: string;
     body: Buffer;
     redirectUrl?: string;
 }
@@ -156,12 +157,12 @@ async function resolveWithAbort(hostname: string, signal: AbortSignal) {
     });
 }
 
-async function requestOnce(url: URL, signal: AbortSignal): Promise<WebFetchResponse> {
+async function requestOnce(url: URL, signal: AbortSignal, startedAt: number): Promise<WebFetchResponse> {
     let addresses: Awaited<ReturnType<typeof resolvePublicAddresses>>;
     try {addresses = await resolveWithAbort(url.hostname, signal);}
     catch (error) {
         if (signal.aborted && !(signal.reason instanceof Error && "code" in signal.reason && signal.reason.code === "ETIMEDOUT")) throw requestAbortError(signal);
-        throw webFetchFailure("dns", error, url);
+        throw webFetchFailure("dns", error, url, performance.now() - startedAt);
     }
     if (signal.aborted) throw requestAbortError(signal);
     const request = url.protocol === "https:" ? requestHttps : requestHttp;
@@ -185,7 +186,7 @@ async function requestOnce(url: URL, signal: AbortSignal): Promise<WebFetchRespo
             response?.destroy();
             req?.destroy();
             reject(signal.aborted && !(signal.reason instanceof Error && "code" in signal.reason && signal.reason.code === "ETIMEDOUT")
-                ? requestAbortError(signal) : webFetchFailure(response ? "response_body" : "request", error, url));
+                ? requestAbortError(signal) : webFetchFailure(response ? "response_body" : "request", error, url, performance.now() - startedAt, response?.statusCode ?? null));
         };
         const abort = () => fail(requestAbortError(signal));
         signal.addEventListener("abort", abort, {once: true});
@@ -249,6 +250,7 @@ async function requestOnce(url: URL, signal: AbortSignal): Promise<WebFetchRespo
                             status: incoming.statusCode ?? 0,
                             statusText: incoming.statusMessage ?? "",
                             contentType: String(incoming.headers["content-type"] ?? ""),
+                            cacheControl: String(incoming.headers["cache-control"] ?? ""),
                             body: Buffer.concat(chunks),
                             ...(incoming.headers.location
                                 ? {redirectUrl: new URL(incoming.headers.location, url).toString()}
@@ -278,6 +280,7 @@ export async function fetchPublicWebUrl(
     value: string,
     signal: AbortSignal
 ): Promise<WebFetchResponse> {
+    const startedAt = performance.now();
     if (signal.aborted) throw requestAbortError(signal);
     const controller = new AbortController();
     const abort = () => controller.abort(requestAbortError(signal));
@@ -289,7 +292,7 @@ export async function fetchPublicWebUrl(
     try {
         let current = parsePublicWebUrl(value);
         for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
-            const response = await requestOnce(current, controller.signal);
+            const response = await requestOnce(current, controller.signal, startedAt);
             if (response.status < 300 || response.status >= 400 || !response.redirectUrl) {
                 return response;
             }

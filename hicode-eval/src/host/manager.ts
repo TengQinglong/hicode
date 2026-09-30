@@ -44,6 +44,7 @@ export class Lab {
       if (state.id !== name) throw Error('Run identity mismatch');
       const batch = this.batches.get(state.batchId);
       if (!batch || batch.runIds.indexOf(name) < 0 || batch.tasks[batch.runIds.indexOf(name)] !== state.task) throw Error('Orphan or mismatched run');
+      if (state.network !== batch.network) throw Error('Run network mode differs from its frozen batch');
       this.runs.set(name, state);
       const unstarted = state.state === 'queued' && state.startedAt === undefined &&
         !await exists(join(this.path(name), 'job.json')) && !await exists(join(this.path(name), 'container.json'));
@@ -90,8 +91,8 @@ export class Lab {
     const payload = await readJson(join(this.config.payload, 'manifest.json'), z.record(z.unknown()));
     if (this.closed || this.halted) throw Error('Service closing or scheduling blocked');
     const id = randomBytes(8).toString('hex'), now = Date.now() / 1000;
-    const batch = batchSchema.parse({ ...input, tasks, budget: this.config.budget, version: 1, id, createdAt: now, runIds: tasks.map(() => randomBytes(8).toString('hex')), model: this.config.model, payload });
-    const states = input.tasks.map((task, i) => runSchema.parse({ version: 2, id: batch.runIds[i], batchId: id, task: task.id, dataset: catalog.find(t => t.id === task.id)?.dataset ?? 'terminal-bench', state: 'queued', createdAt: now, updatedAt: now, model: this.config.model.model, budget: { agentSeconds: task.agentSeconds ?? batch.budget.agentSeconds } }));
+    const batch = batchSchema.parse({ ...input, network: input.network ?? this.config.network, tasks, budget: this.config.budget, version: 1, id, createdAt: now, runIds: tasks.map(() => randomBytes(8).toString('hex')), model: this.config.model, payload });
+    const states = input.tasks.map((task, i) => runSchema.parse({ version: 2, network: batch.network, id: batch.runIds[i], batchId: id, task: task.id, dataset: catalog.find(t => t.id === task.id)?.dataset ?? 'terminal-bench', state: 'queued', createdAt: now, updatedAt: now, model: this.config.model.model, budget: { agentSeconds: task.agentSeconds ?? batch.budget.agentSeconds } }));
     // Publish the batch only after all children are durable; no worker sees a partial submission.
     try {
       for (const state of states) {
@@ -211,7 +212,7 @@ export class Lab {
       if (!isDeepStrictEqual(await datasetTree(join(path, 'task', current.task),current.dataset),frozen)) throw Error('Frozen task changed');
       const payload = await readJson(join(this.config.payload, 'manifest.json'), z.record(z.unknown()));
       if (JSON.stringify(payload) !== JSON.stringify(this.batches.get(current.batchId)!.payload)) throw Error('Payload changed after submission');
-      await save(join(path, 'manifest.json'), { model: this.config.model, payload, task: current.task, dataset: current.dataset, task_files: frozen, machine: this.config.machine, entry: 'tui', budget: current.budget });
+      await save(join(path, 'manifest.json'), { model: this.config.model, payload, task: current.task, dataset: current.dataset, task_files: frozen, machine: this.config.machine, entry: 'tui', network: current.network, budget: current.budget });
       if (!this.machine) throw Error('Initialize the evaluation machine before running tasks');
       const result = await this.machine.execute(current, path, this.credential, async phase => {
         await appendPhase(path, phase);

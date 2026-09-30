@@ -29,8 +29,13 @@ export function analyzeReadCommand(command: string): ReadCommand | undefined {
         const original = segment.tokens[0]!;
         const program = basename(original);
         // Explicit executables are validated by the execution layer, not trusted by basename.
-        if (!["rg", "ls", "pwd", "head", "tail", "wc", "cat", "echo"].includes(program)) return undefined;
+        if (!["rg", "ls", "pwd", "head", "tail", "wc", "cat", "echo", "sleep"].includes(program)) return undefined;
         const args = segment.tokens.slice(1);
+        if (program === "sleep") {
+            if (args.length !== 1 || !/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(args[0]!) || Number(args[0]) > 30) return undefined;
+            result.segments.push({program: original, args, ...(segment.next ? {next: segment.next} : {})});
+            continue;
+        }
         const paths: string[] = [];
         let positional = false;
         let hasPattern = false;
@@ -99,6 +104,7 @@ export function analyzeReadCommand(command: string): ReadCommand | undefined {
         result.paths.push(...paths);
         result.segments.push({program: original, args, ...(segment.next ? {next: segment.next} : {})});
     }
+    if (result.segments.every(segment => basename(segment.program) === "sleep")) return undefined;
     result.singleSearch = result.segments.length === 1 && basename(result.segments[0]!.program) === "rg" && result.kind !== "read";
     return result;
 }

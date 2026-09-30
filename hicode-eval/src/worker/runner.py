@@ -6,11 +6,14 @@ from verifier import verify,verifier_environment
 from terminal import capture,settle,submit_prompt
 from cleanup import stop_task_processes,finalize_task,open_task_cli,terminate_task_cli
 from recovery import process_start
+from model_proxy import Gateway
 
 run_id=sys.argv[1]
 if len(run_id)!=16 or any(c not in '0123456789abcdef' for c in run_id):raise ValueError('Invalid run ID')
 root=Path('/eval/runs')/run_id
 config=json.loads((root/'job.json').read_text())
+network=config.get('network','open')
+if network not in {'open','isolated'}:raise ValueError('Invalid evaluation network mode')
 is_swe=config.get('dataset')=='swe-bench-verified'
 swe_environment=Path('/eval/swe-envs')/run_id if is_swe else None
 project=root/'project';home=root/'home';logs=root/'logs';control=Path('/run/hicode-eval')/run_id
@@ -48,13 +51,14 @@ atomic_json(root/'identity.json',{'version':2,'uid':uid,'user':name,'pid':os.get
 def demote():
     os.setgroups([]);os.setgid(account.pw_gid);os.setuid(uid)
 
-def namespace(args,verifier=False,setup=False):
+def namespace(args,verifier=False,setup=False,actor=False):
     return namespace_argv(args,project,home,logs,control,root/'tests' if verifier else None,
                           writable_tests=verifier and not is_swe and config['verifierPrelude']=='compile-feal-extension',
                           root_overlay=verifier and not setup and config.get('verifierRootOverlay',False),
                           workdir='/testbed' if is_swe else '/app',environment=swe_environment,
                           public_tests=root/'public-tests' if not verifier and config.get('publicTestInputs') else None,
-                          private_root=verifier_root if verifier else None)
+                          private_root=verifier_root if verifier else None,
+                          isolated_network=actor and network=='isolated')
 
 def command(args,timeout=15,extra=None,cwd=None,output_path=None):
     env={'PATH':'/opt/python313/bin:'+str(home/'.local/bin')+':'+str(home/'bin')+':'+os.environ['PATH'],'HOME':str(home),'TERM':'xterm-256color','COLORTERM':'truecolor','LANG':'C.UTF-8'}
@@ -76,7 +80,7 @@ def tmux(*args,**kwargs):return command(['tmux','-S',socket,*args],**kwargs)
 def stop_user():
     stop_task_processes(uid)
 
-terminal_started=False;cli_fd=None;shutdown_attempted=False
+terminal_started=False;cli_fd=None;shutdown_attempted=False;agent_failed=False;gateway=None
 model=config['model'];release=config['release'];status='failed';grade='unavailable';events=Events();offset=0
 
 def drain_events():
@@ -105,6 +109,7 @@ def shutdown_cli():
     if error or not exited:emit('error',message='Graceful shutdown incomplete; forcing task cleanup. '+(error or 'CLI did not exit within 10 seconds.'))
     elif events.started and (not receipt['turnSaved'] or receipt['pendingToolCallIds'] or not receipt['eventStreamComplete']):
         emit('error',message='CLI exited, but execution records did not close completely; see shutdown.json.')
+    return receipt
 
 try:
     # Approval is granted for this disposable assignment, inside the outer namespace.
@@ -112,6 +117,7 @@ try:
     atomic_json(root/'job.json',config)
     emit('phase',phase='Deploying task on shared Linux')
     settings={'sources':{model['source']:{'baseUrl':model['baseUrl'],'apiKeyEnv':model['apiKeyEnv'],'models':[{'id':model['model'],'label':model['model'],'imageInput':model.get('imageInput',False)}]}},'models':{'primary':{'source':model['source'],'model':model['model']}},'memory':{'enabled':False},'permissions':{'defaultMode':config['permissionMode'],'deny':[f'{t}({p}/**)' for t in ['write_file','edit_file'] for p in [str(logs),str(control)]]},'sandbox':{'network':{'mode':'open'},'filesystem':{'denyWrite':[str(logs),str(control)]}}}
+    if network=='isolated':settings['permissions']['deny'].append('web_fetch')
     conf=home/'.hicode';conf.mkdir(exist_ok=True);atomic_json(conf/'settings.json',settings)
     subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(home)],check=True)
     extra={'HICODE_EVAL_SOURCE':release,'HICODE_EVAL_HOME':str(conf)}
@@ -129,11 +135,6 @@ try:
         argv,offline=package_install_argv(packages,'/app/.eval-python')
         emit('phase',phase='Installing task packages from local wheels' if offline else 'Downloading pinned task packages')
         command(namespace(argv),timeout=300,output_path=logs/'package-install.txt')
-    verifier_packages=config.get('verifierPackages',[])
-    if verifier_packages:
-        argv,offline=package_install_argv(verifier_packages,'/app/.eval-verifier-python')
-        emit('phase',phase='Installing verifier packages from local wheels' if offline else 'Downloading pinned verifier packages')
-        command(namespace(argv),timeout=300,output_path=logs/'verifier-package-install.txt')
     initializer=config['initializer']
     if initializer:
         script=project/initializer['file']
@@ -143,13 +144,22 @@ try:
         else:argv=['gzip','-d','--',app_script]
         command(namespace(argv),timeout=30,output_path=logs/'initializer.txt')
         script.unlink(missing_ok=True)
-    command(namespace(['bun','/opt/hicode-eval/preflight.ts']),timeout=30,extra=extra)
+    command(namespace(['bun','/opt/hicode-eval/preflight.ts'],actor=True),timeout=30,extra=extra)
+    if network=='isolated':
+        # Check the actual actor namespace before consuming model tokens. There is no open fallback.
+        command(namespace(['python3','-c',"import socket; assert [n for _,n in socket.if_nameindex()] == ['lo']"],actor=True),timeout=15)
+        gateway=Gateway(control/'model.sock',model['baseUrl'],model['model'],os.environ[model['apiKeyEnv']])
+        os.chown(control/'model.sock',uid,account.pw_gid)
+    atomic_json(root/'network.json',{'version':1,'mode':network,'actorInternet':network=='open',
+                                   'modelTransport':'unix-model-gateway' if gateway else 'direct'})
     emit('phase',phase='Starting HiCode')
     launch=control/'launch.sh'
     import shlex
-    launch.write_text('#!/bin/bash\nset -eu\nexec '+shlex.join(namespace(['bun',release+'/src/index.tsx','--single-task','--event-log',str(logs/'events.jsonl'),'--permission-mode',config['permissionMode'],'--source',model['source'],'--model',model['model']]))+'\n')
+    actor_command=['bun',release+'/src/index.tsx','--single-task','--event-log',str(logs/'events.jsonl'),'--permission-mode',config['permissionMode'],'--source',model['source'],'--model',model['model']]
+    if gateway:actor_command=['python3','/opt/hicode-eval/network_entry.py',str(control/'model.sock'),str(conf/'settings.json'),*actor_command]
+    launch.write_text('#!/bin/bash\nset -eu\nexec '+shlex.join(namespace(actor_command,actor=True))+'\n')
     launch.chmod(0o755)
-    secret={model['apiKeyEnv']:os.environ[model['apiKeyEnv']]}
+    secret={model['apiKeyEnv']:'eval-isolated' if gateway else os.environ[model['apiKeyEnv']]}
     tmux('new-session','-d','-s','hicode','-x','140','-y','40','bash --noprofile --norc',extra=secret)
     terminal_started=True
     tmux('set-option','-t','hicode','remain-on-exit','on')
@@ -171,8 +181,15 @@ try:
             emit('phase',phase='Running HiCode')
         if events.ready and submitted is None:
             cli_fd=open_task_cli(uid,release+'/src/index.tsx',logs/'events.jsonl')
-            prompt=control/'prompt.txt';prompt.write_text((root/'instruction.md').read_text());prompt.chmod(0o644)
+            instruction=(root/'instruction.md').read_text()
+            if network=='isolated':
+                instruction='Evaluation environment: external networking is disabled during this attempt. Use the supplied workspace and prepared local dependencies; public package downloads and web_fetch are unavailable. The model connection is managed separately.\n\n'+instruction
+            prompt=control/'prompt.txt';prompt.write_text(instruction);prompt.chmod(0o644)
             submit_prompt(tmux,prompt);submitted=time.monotonic()
+        if events.failed_turn():
+            status='failed';agent_failed=True
+            emit('error',message='HiCode turn failed; stopping this attempt without waiting for its time budget.')
+            break
         if events.complete():
             if events.settled['reason']!='completed':raise RuntimeError('Agent stopped: '+events.settled['reason'])
             status='completed';break
@@ -181,7 +198,11 @@ try:
         if tmux('display-message','-p','-t','hicode:0.0','#{pane_dead}').strip()=='1':raise RuntimeError('HiCode exited before completion')
         time.sleep(.5)
     else:status='timeout'
-    if status in ['timeout','cancelled']:shutdown_cli()
+    if status in ['timeout','cancelled'] or agent_failed:
+        receipt=shutdown_cli()
+        if agent_failed and (receipt is None or receipt['error'] or not receipt['cliExited'] or not receipt['turnSaved']
+                             or receipt['pendingToolCallIds'] or not receipt['eventStreamComplete']):
+            raise RuntimeError('Failed HiCode turn did not close its execution records; verification withheld. See shutdown.json.')
     if terminal_started:
         try:
             if status=='completed':
@@ -190,19 +211,27 @@ try:
             else:capture(tmux,emit)
         except (OSError,RuntimeError,ValueError,subprocess.TimeoutExpired) as error:
             emit('error',message='Final terminal capture failed: '+str(error)[-1000:])
-    if status in ['completed','timeout']:
+    if status in ['completed','timeout'] or agent_failed:
         # Stop all assignment processes before exposing the original verifier.
         stop_user();terminal_started=False
+        if gateway:gateway.close();gateway=None
         emit('phase',phase='Awaiting local verification')
         # Host uploads checks only after the assignment is sealed.
         emit('verification_request',runId=run_id)
         if not wait_verifier_handoff(root,run_id,lambda:cancelled or (root/'cancel').exists()):status='cancelled'
-        if status in ['completed','timeout']:
+        if status in ['completed','timeout'] or (agent_failed and status=='failed'):
             emit('phase',phase='Verifying result')
             try:
                 verifier_log=logs/'verifier'
                 if verifier_log.is_symlink():raise ValueError('Verifier log directory replaced with symlink')
                 verifier_log.mkdir(exist_ok=True);os.chown(verifier_log,uid,account.pw_gid)
+                verifier_packages=config.get('verifierPackages',[])
+                if verifier_packages:
+                    target=project/'.eval-verifier-python'
+                    if target.exists() or target.is_symlink():raise ValueError('Reserved verifier dependency path already exists in the submitted workspace')
+                    argv,offline=package_install_argv(verifier_packages,'/app/.eval-verifier-python')
+                    emit('phase',phase='Installing verifier packages from local wheels' if offline else 'Downloading pinned verifier packages')
+                    command(namespace(argv,verifier=True),timeout=300,output_path=logs/'verifier-package-install.txt')
                 if config.get('verifierChroot'):
                     verifier_root=root/'verifier-root'
                     prepare_verifier_root(project,verifier_root)
@@ -255,6 +284,7 @@ finally:
         result={'execution':status,'grading':grade,'uid':uid}
         try:finalize_task(root,result)
         finally:
+            if gateway:gateway.close()
             if is_swe:
                 for env_root in ['/eval/swe-envs','/eval/swe-grader-envs']:
                     shutil.rmtree(Path(env_root)/run_id,ignore_errors=True)

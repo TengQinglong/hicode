@@ -45,6 +45,7 @@ interface RunRootTurnOptions {
     onHookResult(result: HookBatchResult): void | Promise<void>;
     onLifecycleIssue(issue: RootTurnLifecycleIssue): void | Promise<void>;
     onTurnSettled?(result: AgentResult | undefined): void;
+    onTurnFinalized?(outcome: Extract<HookInput, {hook_event_name: "TurnEnd"}>): void | Promise<void>;
     getSnapshotState(): RootTurnSnapshotState;
     sessionStartContextBlocks?: readonly string[];
     inputChannel?: AgentInputChannel;
@@ -81,7 +82,7 @@ export function createRootTurnRunnerFactory(
         } = options;
         const turnId = options.turnId ?? randomUUID();
         const releaseHookTurn = resources.holdHookConfiguration();
-        const memoryBaseline=host.getCollaborationMode()==="plan"?undefined:await resources.memory.captureBaseline(session.sessionId,contentText(prompt));
+        let memoryBaseline: readonly string[] | undefined;
         const agentOptions: AgentRunOptions = {
             getToolSchemas: resources.toolRuntime.getToolSchemas,
             executeTool: resources.toolRuntime.executeTool,
@@ -120,6 +121,7 @@ export function createRootTurnRunnerFactory(
         };
 
         try {
+            memoryBaseline = host.getCollaborationMode() === "plan" ? undefined : await resources.memory.captureBaseline(session.sessionId, contentText(prompt));
             const initialState = getSnapshotState();
             await session.initialize();
             await createTaskNotificationDelivery({tasks: session.taskSession, queue: session.messageQueue,
@@ -221,16 +223,16 @@ export function createRootTurnRunnerFactory(
                     try {await onLifecycleIssue({scope: "session", message: "Task result notification acknowledgement failed; pending delivery is retained", error});} catch {}
                 }
             }
+            const input: Extract<HookInput, {hook_event_name: "TurnEnd"}> = {
+                hook_event_name: "TurnEnd", session_id: session.sessionId, turn_id: turnId,
+                status: signal.aborted || result?.reason === "interrupted" ? "cancelled"
+                    : failed || !result || result.reason === "hook_error" || result.reason === "no_tool_calls" ? "failed"
+                    : result.reason === "hook_blocked" || result.reason === "permission_denied" ? "blocked"
+                    : result.reason === "max_turns" || result.reason === "hook_limit" ? "limit" : "completed",
+                reason: signal.aborted ? normalizeTurnAbortReason(signal.reason) : failed ? "error" : result?.reason ?? "error",
+                persistence_status: sessionSaved ? "saved" : "failed",
+            };
             try {
-                const input: Extract<HookInput, {hook_event_name: "TurnEnd"}> = {
-                    hook_event_name: "TurnEnd", session_id: session.sessionId, turn_id: turnId,
-                    status: signal.aborted || result?.reason === "interrupted" ? "cancelled"
-                        : failed || !result || result.reason === "hook_error" || result.reason === "no_tool_calls" ? "failed"
-                        : result.reason === "hook_blocked" || result.reason === "permission_denied" ? "blocked"
-                        : result.reason === "max_turns" || result.reason === "hook_limit" ? "limit" : "completed",
-                    reason: signal.aborted ? normalizeTurnAbortReason(signal.reason) : failed ? "error" : result?.reason ?? "error",
-                    persistence_status: sessionSaved ? "saved" : "failed",
-                };
                 await emitEvent({type: "turn_end", input});
                 // Cancellation reports a fact only; never create a fresh signal for notifications.
                 if (!signal.aborted) {
@@ -239,7 +241,13 @@ export function createRootTurnRunnerFactory(
                 }
             } catch (error) {
                 try {await onLifecycleIssue({scope: "host", message: "TurnEnd Hook diagnostics failed", error});} catch {}
-            } finally {releaseHookTurn();}
+            } finally {
+                releaseHookTurn();
+                try {await options.onTurnFinalized?.(input);}
+                catch (error) {
+                    try {await onLifecycleIssue({scope: "host", message: "Turn completion delivery failed", error});} catch {}
+                }
+            }
         }
     };
 }

@@ -1,3 +1,4 @@
+import {WebSources} from "../tools/webFetch/state.js";
 import {createSessionPersistence} from "../session/storage.js";
 import {createSessionArchiveAccess, prepareSessionArchive} from "../session/archive.js";
 import {childTaskTool} from "../tools/task/task.js";
@@ -128,6 +129,7 @@ export function createSubagentFactories(
         const archiveAccess = createSessionArchiveAccess(parentContext.storage, storageCwd, childSessionId,
             () => childCompactState, inheritedArchives);
         const childContextUsage = new ContextUsageTracker();
+        const webSources = new WebSources();
         const childFileState = createFileStateTracker();
         const childToolResultStore = dependencies.createToolResultStore(
             options.storageCwd ?? parentContext.cwd,
@@ -218,6 +220,7 @@ export function createSubagentFactories(
                             contextSettings: parentContext.contextSettings,
                         },
                         session: {
+                            webSources,
                             fileState: childFileState,
                             hookSession,
                             sessionId: childSessionId,

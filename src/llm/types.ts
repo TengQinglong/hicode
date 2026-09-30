@@ -67,7 +67,7 @@ type LLMStreamPhase =
     | "stalled";
 
 export interface LLMRetryInfo {
-    reason: "connection" | "http" | "empty_response" | "output_stall" | "stream_disconnected" | "empty_stream" | "invalid_json" | "protocol";
+    reason: "connection" | "http" | "empty_response" | "output_stall" | "stream_disconnected" | "empty_stream" | "invalid_json" | "protocol" | "output_truncated" | "provider";
     attempt: number;
     maxAttempts: number;
 }

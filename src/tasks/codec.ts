@@ -13,7 +13,7 @@ import type {
 export type TaskJournalEntry =
     | TaskEventEnvelope
     | {
-    version: 7;
+    version: 8;
     type: "task_notification_claimed";
     sequence: number;
     sessionId: string;
@@ -172,7 +172,7 @@ function decodeCommon(value: Record<string, unknown>): {
 function decodeShellTask(value: Record<string, unknown>): ShellTaskSnapshot | undefined {
     if (!hasOnlyKeys(value, [
         "id", "kind", "owner", "command", "cwd", "status", "startedAt",
-        "completedAt", "output", "outputResult", "outputIssue", "termination", "executionMode", "phase",
+        "completedAt", "output", "outputResult", "outputIssue", "termination", "executionMode", "phase", "timing", "processStartedAt", "blockedByTaskId",
     ])) return undefined;
     const common = decodeCommon(value);
     const outputResult = value.outputResult === undefined
@@ -185,6 +185,9 @@ function decodeShellTask(value: Record<string, unknown>): ShellTaskSnapshot | un
     if (
         (phase !== "queued" && phase !== "starting" && phase !== "running" && phase !== "finished") ||
         (value.status === "running" ? phase === "finished" : phase !== "finished") ||
+        !isRecord(value.timing) || !hasOnlyKeys(value.timing, ["queuedMs", "runningMs"]) || !safeCount(value.timing.queuedMs) || !safeCount(value.timing.runningMs) ||
+        (value.processStartedAt !== undefined && !isoDate(value.processStartedAt)) ||
+        (value.blockedByTaskId !== undefined && (phase !== "queued" || !boundedString(value.blockedByTaskId, MAX_ID_CHARACTERS))) ||
         value.kind !== "shell" || !common || common.status === "interrupted" ||
         (value.executionMode !== "sandbox" && value.executionMode !== "host") ||
         !boundedString(value.command, MAX_COMMAND_CHARACTERS) ||
@@ -199,6 +202,9 @@ function decodeShellTask(value: Record<string, unknown>): ShellTaskSnapshot | un
         kind: "shell",
         executionMode: value.executionMode,
         phase,
+        timing: {queuedMs: value.timing.queuedMs, runningMs: value.timing.runningMs},
+        ...(typeof value.processStartedAt === "string" ? {processStartedAt: value.processStartedAt} : {}),
+        ...(typeof value.blockedByTaskId === "string" ? {blockedByTaskId: value.blockedByTaskId} : {}),
         command: value.command,
         cwd: value.cwd,
         output: value.output,
@@ -296,13 +302,13 @@ export function decodeTaskJournalEntry(
     value: unknown,
     expectedSessionId: string
 ): TaskJournalEntry | undefined {
-    if (!isRecord(value) || value.version !== 7 || !safeCount(value.sequence) ||
+    if (!isRecord(value) || value.version !== 8 || !safeCount(value.sequence) ||
         value.sequence === 0 || value.sessionId !== expectedSessionId) return undefined;
     if (value.type === "task_notification_claimed") {
         if (!hasOnlyKeys(value, ["version", "type", "sequence", "sessionId", "taskId", "notificationId"]) ||
             !boundedString(value.taskId, MAX_ID_CHARACTERS) || typeof value.notificationId !== "string" || !/^[a-f0-9]{64}$/.test(value.notificationId)) return undefined;
         return {
-            version: 7,
+            version: 8,
             type: "task_notification_claimed",
             sequence: value.sequence,
             sessionId: expectedSessionId,
@@ -325,7 +331,7 @@ export function decodeTaskJournalEntry(
         (value.type === "task_finished" && task.status === "running")
     ) return undefined;
     return {
-        version: 7,
+        version: 8,
         type: value.type,
         sequence: value.sequence,
         sessionId: expectedSessionId,

@@ -1,6 +1,13 @@
 import {expect, test} from "bun:test";
 import {analyzeReadCommand} from "../../src/permissions/shellRead.js";
 
+test("bounded literal waits compose with verified reads without expanding command authority", () => {
+    expect(analyzeReadCommand("sleep 0.1; cat output.txt; echo done")?.paths).toEqual(["output.txt"]);
+    for (const input of ["sleep 31; cat x", "sleep infinity; cat x", "sleep $DELAY; cat x", "sleep 1; rm x", "sleep 1 > x; cat x", "sleep 1 2; cat x", "sleep 1"]) {
+        expect(analyzeReadCommand(input)).toBeUndefined();
+    }
+});
+
 test("read-command analysis separates patterns, options, paths and complete pipelines", () => {
     expect(analyzeReadCommand("rg -n -F -e 'a.b()' -g '*.ts' 'src with spaces' | head -n 20")).toMatchObject({
         kind: "search", pattern: "a.b()", paths: ["src with spaces"], singleSearch: false,

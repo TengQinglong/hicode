@@ -123,10 +123,10 @@ function commandSyntaxIssue(command: string): string | undefined {
     }
 }
 
-function runningOutput(task: ShellTaskSnapshot): string {
+function runningOutput(task: ShellTaskSnapshot, service: boolean): string {
     if (!task.output) return task.outputIssue
         ? `Output unavailable: ${task.outputIssue}`
-        : "No output captured yet. Use task status to check readiness and the actual address before probing a service; do not assume its default port.";
+        : service ? "No output captured yet. Use task status to check readiness and the actual address before probing a service; do not assume its default port." : "No output captured yet. Use task wait when this command blocks further work; no output alone does not mean it has stalled.";
     const bytes = Buffer.from(task.output, "utf8");
     const limit = 4000;
     const start = Math.max(0, bytes.length - limit);
@@ -451,12 +451,14 @@ export const bashTool: Tool<typeof inputSchema> = {
                         formatTaskHeader(task),
                         !run_in_background ? (task.phase === "running" ? "Command is still running and moved to the background (same process). This is not a successful command result." : "Command has not started; the existing task continues waiting. Do not resubmit it.") : "Background task registered.",
                         `phase: ${task.phase}${task.phase === "queued" ? " (waiting for the file commit lock)" : ""}`,
+                        `Queued: ${task.timing.queuedMs} ms; running: ${task.timing.runningMs} ms`,
+                        ...(task.blockedByTaskId ? [`Blocked by task_id: ${task.blockedByTaskId}`] : []),
                         "Lifecycle: managed by the current HiCode Runtime; terminates when HiCode exits.",
                         `Cwd: ${displayToolPath(ctx.cwd, commandCwd) || "."}`,
                         ...(timeout_ms !== undefined && run_in_background
                             ? ["Ignored timeout_ms: explicit background services do not use a hard execution timeout."]
                             : []),
-                        runningOutput(task),
+                        runningOutput(task, run_in_background === true),
                         "Use task to inspect output, completion status or stop the task.",
                     ].join("\n"),
                     outcome: "ok" as const,

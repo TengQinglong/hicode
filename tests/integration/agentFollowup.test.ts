@@ -105,7 +105,7 @@ test("per-run time excludes idle gaps, queued work keeps the clock, and journal 
             expect(result.progress.runCount).toBe(3);
             expect(result.startedAt).toBe(task.startedAt);
             expect(agentRunTiming(result)).toEqual({runMs: 5000, totalMs: 35000});
-            const envelope: TaskEventEnvelope = {version: 7, type: "task_finished", sequence: 1, sessionId: parent.sessionId, task: result};
+            const envelope: TaskEventEnvelope = {version: 8, type: "task_finished", sequence: 1, sessionId: parent.sessionId, task: result};
             const decoded = decodeTaskJournalEntry(JSON.parse(JSON.stringify(envelope)), parent.sessionId);
             expect(decoded).toEqual(envelope);
             for (const progress of [{...result.progress, previousDurationMs: -1}, {...result.progress, runStartedAt: "bad"}, {...result.progress, todosUpdated: "yes"}]) {

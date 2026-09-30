@@ -1,0 +1,164 @@
+"""Exercise the real runner control flow with offline process/namespace fixtures."""
+import contextlib
+import builtins
+import io
+import json
+import os
+from pathlib import Path, PosixPath
+import runpy
+import subprocess
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+RUNNER = Path(__file__).resolve().parents[1] / 'src/worker/runner.py'
+RUN_ID = '1234567890abcdef'
+
+
+class RunnerFailureTest(unittest.TestCase):
+    def run_attempt(self, *, saved=True, pending=False, exits=True, handoff=True, completed=False, claimed_dependencies=False, isolated=False):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / 'eval/runs' / RUN_ID
+            logs = root / 'logs'
+            logs.mkdir(parents=True)
+            if claimed_dependencies:
+                (root / 'project/.eval-verifier-python').mkdir(parents=True)
+            config = {'model': {'source': 'qwen', 'baseUrl': 'https://example.invalid',
+                                'apiKeyEnv': 'EVAL_FIXTURE_KEY', 'model': 'fixture'},
+                      'release': '/release', 'packages': [], 'verifierPackages': ['toml==0.10.2'],
+                      'initializer': None, 'agentSeconds': 3600, 'verifierSeconds': 10,
+                      'verifierPrelude': 'none'}
+            config['network'] = 'isolated' if isolated else 'open'
+            (root / 'job.json').write_text(json.dumps(config))
+            (root / 'instruction.md').write_text('Offline fixture')
+            events = [{'type': 'ready'}, {'type': 'agent_event', 'event': {'type': 'model_stream_start'}}]
+            if pending:
+                events.append({'type': 'agent_event', 'event': {'type': 'tool_call_start', 'toolCallId': 'pending'}})
+            events += [{'type': 'agent_event', 'event': {'type': 'turn_end', 'input': {
+                'session_id': 'fixture',
+                'status': 'completed' if completed else 'failed', 'reason': 'completed' if completed else 'error',
+                'persistence_status': 'saved' if saved else 'failed'}}},
+                       {'type': 'state', 'busy': False, 'waitingForApproval': False}]
+            if completed:
+                events.append({'type': 'settled', 'reason': 'completed', 'runningAgents': 0,
+                               'pendingAgentMessages': 0, 'sealed': True})
+            (logs / 'events.jsonl').write_text(''.join(json.dumps({
+                'version': 1, 'sequence': i, 'sessionId': 'fixture', **event}) + '\n'
+                for i, event in enumerate(events, 1)))
+            calls = []
+
+            class FixturePath(PosixPath):
+                def __new__(cls, *args):
+                    value = PosixPath(*args)
+                    if value == PosixPath('/eval') or value.is_relative_to('/eval') or value.is_relative_to('/run/hicode-eval'):
+                        value = base / str(value).lstrip('/')
+                    return super().__new__(cls, value)
+
+            def execute(argv, **kwargs):
+                if '--target' in argv:
+                    self.assertNotIn('--unshare-net', argv)
+                    self.assertIn('stop', calls)
+                    self.assertIn('handoff', calls)
+                    calls.append('install-verifier')
+                if 'new-session' in argv:
+                    self.assertEqual(kwargs['env']['EVAL_FIXTURE_KEY'], 'eval-isolated' if isolated else 'offline-fixture')
+                return subprocess.CompletedProcess(argv, 0, stdout='', stderr='')
+
+            def upload(*args):
+                self.assertIn('stop', calls)
+                calls.append('handoff')
+                return handoff
+
+            def grade(*args, **kwargs):
+                self.assertIn('install-verifier', calls)
+                calls.append('verify')
+                return 'failed', 'Original verifier: missing output'
+
+            output = io.StringIO()
+            actual_open = builtins.open
+            actual_import = builtins.__import__
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(patch('builtins.open', side_effect=lambda path, *args, **kwargs:
+                    actual_open(FixturePath(path) if isinstance(path, (str, PosixPath)) else path, *args, **kwargs)))
+                stack.enter_context(patch('builtins.__import__', side_effect=lambda name, globals=None, locals=None, fromlist=(), level=0:
+                    SimpleNamespace(Path=FixturePath) if name == 'pathlib' and fromlist == ('Path',)
+                    else actual_import(name, globals, locals, fromlist, level)))
+                stack.enter_context(patch('sys.argv', [str(RUNNER), RUN_ID]))
+                stack.enter_context(patch.dict(os.environ, {'EVAL_FIXTURE_KEY': 'offline-fixture'}))
+                stack.enter_context(patch('pwd.getpwnam', side_effect=[KeyError(), SimpleNamespace(pw_gid=20001)]))
+                stack.enter_context(patch('pwd.getpwuid', side_effect=KeyError()))
+                stack.enter_context(patch('os.chown'))
+                stack.enter_context(patch('os.close'))
+                stack.enter_context(patch('signal.signal'))
+                stack.enter_context(patch('subprocess.run', side_effect=execute))
+                stack.enter_context(patch('cleanup.open_task_cli', return_value=7))
+                stack.enter_context(patch('cleanup.terminate_task_cli', side_effect=lambda *args: calls.append('shutdown') or exits))
+                stack.enter_context(patch('cleanup.stop_task_processes', side_effect=lambda *args: calls.append('stop')))
+                stack.enter_context(patch('cleanup.finalize_task', side_effect=lambda *args: calls.append('finalize')))
+                stack.enter_context(patch('recovery.process_start', return_value='fixture'))
+                stack.enter_context(patch('protocol.wait_verifier_handoff', side_effect=upload))
+                stack.enter_context(patch('terminal.capture'))
+                stack.enter_context(patch('terminal.settle', return_value=True))
+                stack.enter_context(patch('terminal.submit_prompt'))
+                stack.enter_context(patch('verifier.verify', side_effect=grade))
+                gateway = stack.enter_context(patch('model_proxy.Gateway'))
+                gateway.return_value.close.side_effect = lambda: calls.append('gateway-close')
+                stack.enter_context(patch('time.sleep', side_effect=AssertionError('Failed turn must not wait for budget')))
+                stack.enter_context(contextlib.redirect_stdout(output))
+                runpy.run_path(str(RUNNER), run_name='__main__')
+                if isolated:
+                    self.assertEqual(gateway.call_args.args[1:], ('https://example.invalid', 'fixture', 'offline-fixture'))
+                    launch=(base/'run/hicode-eval'/RUN_ID/'launch.sh').read_text()
+                    self.assertIn('--unshare-net',launch)
+                    self.assertIn('network_entry.py',launch)
+                    self.assertNotIn('offline-fixture',launch)
+                    settings=json.loads((root/'home/.hicode/settings.json').read_text())
+                    self.assertIn('web_fetch',settings['permissions']['deny'])
+                    self.assertEqual(json.loads((root/'network.json').read_text())['mode'],'isolated')
+            packets = [json.loads(line) for line in output.getvalue().splitlines()]
+            self.assertIn('finalize', calls)
+            self.assertEqual(calls.count('shutdown'), 0 if completed else 1)
+            return packets[-1], calls, None if completed else json.loads((root / 'shutdown.json').read_text())
+
+    def test_completed_attempt_installs_verifier_only_after_sealing(self):
+        result, calls, _ = self.run_attempt(completed=True)
+        self.assertEqual(result['execution'], 'completed')
+        self.assertEqual(calls, ['stop', 'handoff', 'install-verifier', 'verify', 'finalize'])
+
+    def test_saved_failure_stops_then_grades_without_waiting_for_budget(self):
+        result, calls, receipt = self.run_attempt()
+        self.assertEqual(result['execution'], 'failed')
+        self.assertEqual(result['grading'], 'failed')
+        self.assertEqual(calls, ['shutdown', 'stop', 'handoff', 'install-verifier', 'verify', 'finalize'])
+        self.assertTrue(receipt['turnSaved'])
+
+    def test_incomplete_shutdown_never_uploads_tests_or_installs_verifier(self):
+        for options in [{'saved': False}, {'pending': True}, {'exits': False}]:
+            with self.subTest(options=options):
+                result, calls, receipt = self.run_attempt(**options)
+                self.assertEqual(result['execution'], 'failed')
+                self.assertEqual(result['grading'], 'unavailable')
+                self.assertNotIn('handoff', calls)
+                self.assertNotIn('install-verifier', calls)
+                self.assertNotIn('verify', calls)
+
+    def test_cancelled_handoff_does_not_install_or_grade(self):
+        result, calls, _ = self.run_attempt(handoff=False)
+        self.assertEqual(result['execution'], 'cancelled')
+        self.assertEqual(result['grading'], 'unavailable')
+        self.assertNotIn('install-verifier', calls)
+        self.assertNotIn('verify', calls)
+
+    def test_actor_cannot_prepopulate_the_verifier_dependency_directory(self):
+        result, calls, _ = self.run_attempt(claimed_dependencies=True)
+        self.assertEqual(result['grading'], 'unavailable')
+        self.assertNotIn('install-verifier', calls)
+        self.assertNotIn('verify', calls)
+
+    def test_isolated_run_uses_gateway_placeholder_and_closes_before_grading(self):
+        result,calls,_=self.run_attempt(isolated=True)
+        self.assertEqual(result['execution'],'failed')
+        self.assertEqual(calls.count('gateway-close'),1)
+        self.assertLess(calls.index('gateway-close'),calls.index('handoff'))

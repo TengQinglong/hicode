@@ -31,6 +31,18 @@ test('timeout and grade remain independent', () => {
   expect(classify(undefined, null)).toEqual({ execution: 'completed', grading: 'unavailable', state: 'error' });
   expect(classify(undefined, {reward: 0}).state).toBe('failed');
 });
+test('Token Plan model survives evaluation config and batch persistence', async () => {
+  const f=await fixture();
+  try {
+    const model={source:'qwen-token-plan',model:'deepseek-v4.1-flash',apiKeyEnv:'QWEN_TOKEN_PLAN_API_KEY',baseUrl:'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1',imageInput:true} as const;
+    const config=configSchema.parse({...f.config,model});
+    await save(join(f.dir,'config.json'),config);
+    expect(configSchema.parse(JSON.parse(await readFile(join(f.dir,'config.json'),'utf8'))).model).toEqual(model);
+    const state=finished();
+    expect(batchSchema.parse({version:1,id:state.batchId,name:'Token Plan',budget:config.budget,tasks:[state.task],runIds:[state.id],concurrency:1,createdAt:1,model,payload:{}}).model).toEqual(model);
+    expect(()=>configSchema.parse({...config,model:{...model,source:'unknown-provider'}})).toThrow();
+  } finally {await f.cleanup();}
+});
 test('relocated CLI starts from an unrelated directory without model work', () => {
   const entry = fileURLToPath(new URL('../eval.sh', import.meta.url));
   const result = Bun.spawnSync(['bash', entry, '--help'], { cwd: tmpdir(), stdout: 'pipe', stderr: 'pipe' });
@@ -169,19 +181,22 @@ test('one batch executes and restores independently resolved task limits', async
     }
     await save(join(f.config.payload,'manifest.json'),{});
     await lab.init(); await lab.prepareMachine();
-    const batch = await lab.submit({name:'mixed limits',concurrency:2,tasks:[
+    const batch = await lab.submit({name:'mixed limits',network:'isolated',concurrency:2,tasks:[
       {id:'cancel-async-tasks',agentSeconds:900},
       {id:'regex-log',agentSeconds:1800},
       {id:'sqlite-db-truncate'},
     ]});
     for (let i=0;i<100&&batch.runIds.some(id=>lab.runs.get(id)?.state!=='passed');i++) await Bun.sleep(5);
     expect(execute).toHaveBeenCalledTimes(3);
+    expect(batch.network).toBe('isolated');
+    expect(execute.mock.calls.every(([run])=>run.network==='isolated')).toBe(true);
     expect(Object.fromEntries(execute.mock.calls.map(([run])=>[run.task,run.budget.agentSeconds]))).toEqual({
       'cancel-async-tasks':900,'regex-log':1800,'sqlite-db-truncate':1800,
     });
     expect([...lab.batches.keys()]).toEqual([batch.id]);
     const restored = new Lab(f.config,'fixture'); await restored.init();
     expect(batch.runIds.map(id=>restored.runs.get(id)?.budget.agentSeconds)).toEqual([900,1800,1800]);
+    expect(batch.runIds.every(id=>restored.runs.get(id)?.network==='isolated')).toBe(true);
     expect(restored.batchView(restored.batches.get(batch.id)!).counts.passed).toBe(3);
   } finally {await lab.close(); validate.mockRestore();prepare.mockRestore();execute.mockRestore();await f.cleanup();}
 });
@@ -277,4 +292,24 @@ test('final export failure preserves sealed execution and grading without publis
     const restored=new Lab(f.config,'fixture');await restored.init();
     expect(restored.runs.get(id)).toMatchObject({execution:'completed',grading:'passed',collection:'retained'});
   }finally{await lab.close();validate.mockRestore();prepare.mockRestore();execute.mockRestore();await f.cleanup();}
+});
+
+test('network mode defaults to open and invalid values fail before submission', async () => {
+  const f=await fixture();
+  try {
+    expect(f.config.network).toBe('open');
+    expect(configSchema.parse({...f.config,network:'isolated'}).network).toBe('isolated');
+    expect(()=>configSchema.parse({...f.config,network:'disabled-ish'})).toThrow();
+    expect(()=>submissionSchema.parse({name:'bad',tasks:[{id:'x'}],network:'proxy'})).toThrow();
+  } finally {await f.cleanup();}
+});
+
+test('restart refuses a run whose network mode differs from its batch', async () => {
+  const f=await fixture();
+  try {
+    const state=finished();await persist(f,state);
+    await save(join(f.dir,'runs',state.id,'state.json'),{...state,network:'isolated'});
+    const restored=new Lab(f.config,'fixture');
+    await expect(restored.init()).rejects.toThrow('network mode');
+  } finally {await f.cleanup();}
 });

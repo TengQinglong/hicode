@@ -80,3 +80,10 @@ class NamespaceTest(unittest.TestCase):
             self.assertTrue((Path(tmp)/'root/tmp').is_dir())
             (p/'escape').symlink_to('/etc/passwd')
             with self.assertRaises(ValueError):prepare_verifier_root(p,Path(tmp)/'bad')
+
+    def test_isolated_actor_has_no_shared_network_or_runtime_sockets(self):
+        args=namespace_argv(['bun','entry.ts'],'/p','/h','/l','/run/a',isolated_network=True)
+        self.assertIn('--unshare-net',args)
+        self.assertIn(['--tmpfs','/run'],[args[i:i+2] for i in range(len(args)-1)])
+        self.assertNotIn('--unshare-net',namespace_argv(['pip'],'/p','/h','/l','/c'))
+        with self.assertRaises(ValueError):namespace_argv(['pytest'],'/p','/h','/l','/c','/tests',isolated_network=True)

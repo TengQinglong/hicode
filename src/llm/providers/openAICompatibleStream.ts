@@ -11,7 +11,7 @@ const MAX_STREAM_OUTPUT_CHARACTERS = 64 * 1024 * 1024;
 const MAX_DATA_EVENTS = 200_000;
 
 type ProtocolFailureCode = "missing_completion" | "inconsistent_completion" | "missing_tool_identity" | "duplicate_tool_id"
-    | "stream_disconnected" | "empty_stream" | "invalid_json";
+    | "stream_disconnected" | "empty_stream" | "invalid_json" | "output_truncated";
 interface ToolFragmentDiagnostic {
     event: number;
     index: number;
@@ -23,7 +23,7 @@ interface ToolFragmentDiagnostic {
 interface StreamFailureDiagnostic {
     code: ProtocolFailureCode;
     dataEventCount: number;
-    finishReason: "stop" | "tool_calls" | null;
+    finishReason: "stop" | "tool_calls" | "length" | null;
     done: boolean;
     contentLength: number;
     reasoningContentLength: number;
@@ -110,7 +110,7 @@ export async function consumeOpenAICompatibleSSE({
     const recentToolFragments: ToolFragmentDiagnostic[] = [];
     const protocolError = (code: ProtocolFailureCode, message: string) => new OpenAICompatibleProtocolError(message, {
         code, dataEventCount, done,
-        finishReason: finishReason === "stop" || finishReason === "tool_calls" ? finishReason : null,
+        finishReason: finishReason === "stop" || finishReason === "tool_calls" || finishReason === "length" ? finishReason : null,
         contentLength: content.length,
         reasoningContentLength: reasoningContent.length,
         tools: [...tools].map(([index, tool]) => ({index, hasId: !!tool.id,
@@ -310,6 +310,9 @@ export async function consumeOpenAICompatibleSSE({
         throw protocolError("missing_completion",
             "OpenAI-compatible stream ended before explicit completion; rejecting a potentially truncated response"
         );
+    }
+    if (finishReason === "length") {
+        throw protocolError("output_truncated", "OpenAI-compatible stream ended with length; the incomplete response was discarded");
     }
     if (
         (toolCalls.length > 0 && finishReason !== "tool_calls") ||

@@ -1,3 +1,4 @@
+import {WebSources} from "../../src/tools/webFetch/state.js";
 import {createToolRuntime} from "../../src/tools/runtime.js";
 import {DEFAULT_CONTEXT_SETTINGS, type ContextSettings} from "../../src/context/config.js";
 import {ContextUsageTracker} from "../../src/context/usage.js";
@@ -45,6 +46,7 @@ export function createTestContext(
     signal?: AbortSignal;
     sessionId?: string;
     toolResultStore?: ToolResultStore;
+    webSources?: WebSources;
     tasks?: TaskSessionLike;
     mcpManager?: McpManagerLike;
     fileState?: FileStateTracker;
@@ -93,7 +95,7 @@ export function createTestContext(
         options.shellRunner ??
         createShellRunner(createDisabledSandboxRuntime(), testChildEnvironment),
     },
-    session: {
+    session: {webSources: options.webSources ?? new WebSources(),
       fileState: options.fileState ?? createFileStateTracker(),
       sessionId,
       compactState: createCompactState(), contextUsage: new ContextUsageTracker(),
