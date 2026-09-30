@@ -1,10 +1,11 @@
 import {randomUUID} from "node:crypto";
-import {createTurnAbortController} from "../runtime/abort.js";
+import {createTurnAbortController, normalizeTurnAbortReason} from "../runtime/abort.js";
 import type {ShellExecutionResult} from "../tools/bash/process.js";
 import type {ShellRunnerLike} from "../tools/bash/shellRunner.js";
 import type {StartShellTaskInput, TaskSessionBinding, TaskStatus,} from "./types.js";
 import {type ManagedShellTask, readOutputPreview,} from "./managed.js";
 import {isExpectedShellShutdown} from "./notifications.js";
+import type {FileCommitCoordinator} from "../tools/shared/fileCommit.js";
 
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
@@ -22,6 +23,8 @@ export async function createShellTask(
     const outputPath = await binding.toolResultStore.createCapture();
     return {
         id: randomUUID(),
+        published: false,
+        publication: Promise.resolve(),
         executionMode: input.sandboxPermissions === "require_escalated" ? "host" : "sandbox",
         owner: {sessionId: binding.sessionId, toolCallId: input.toolCallId},
         command: input.command,
@@ -41,22 +44,27 @@ export async function runShellTask(
     task: ManagedShellTask,
     input: StartShellTaskInput,
     shellRunner: ShellRunnerLike,
+    execution: {kind: "background" | "continuation"; timeoutMs: number | null; fileCommits: FileCommitCoordinator; onStarted(): void},
     onFinished: (task: ManagedShellTask) => Promise<void>
 ): Promise<void> {
     let finalStatus: TaskStatus = "failed";
     try {
-        const result = await shellRunner.run({
+        const run = () => shellRunner.run({
             command: input.command,
             cwd: input.cwd,
             signal: task.controller.signal,
-            timeoutMs: input.timeoutMs ?? null,
+            timeoutMs: execution.timeoutMs,
             outputFilePath: task.outputPath,
             maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
-            previewChars: 0,
+            previewChars: 30_000,
+            onStarted: execution.onStarted,
             sandboxPermissions: input.sandboxPermissions,
             writableRoots: input.writableRoots,
             networkAccess: input.networkAccess,
         });
+        const result = execution.kind === "continuation"
+            ? await execution.fileCommits.exclusive(task.controller.signal, run) : await run();
+        if (!task.published) task.inlineResult = result;
         finalStatus = statusFromResult(result);
         task.termination = result.termination;
         const outputPreview = await readOutputPreview(task.outputPath);
@@ -65,7 +73,7 @@ export async function runShellTask(
         if (result.stderr.trim() && !task.outputPreview.includes(result.stderr.trim())) {
             task.outputPreview = `${task.outputPreview}\n${result.stderr}`.trim();
         }
-        try {
+        if (task.published || (result.outputBytes ?? 0) > 30_000 || result.outputComplete === false) try {
             task.outputResult = await task.store.promoteFile({
                 toolCallId: task.owner.toolCallId,
                 toolName: "task",
@@ -78,10 +86,14 @@ export async function runShellTask(
             task.outputIssue = error instanceof Error
                 ? error.message
                 : String(error);
+            finalStatus = "failed";
         }
     } catch (error) {
         finalStatus = task.controller.signal.aborted ? "cancelled" : "failed";
         task.outputIssue = error instanceof Error ? error.message : String(error);
+        if (!task.published) task.inlineResult = {stdout: "", stderr: "", termination: task.controller.signal.aborted
+            ? {kind: "aborted", reason: normalizeTurnAbortReason(task.controller.signal.reason)}
+            : {kind: "spawn_error", error: error instanceof Error ? error : new Error(String(error))}};
     } finally {
         task.status = finalStatus;
         task.completedAt = new Date().toISOString();

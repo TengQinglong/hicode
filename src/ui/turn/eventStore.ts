@@ -32,7 +32,7 @@ export interface UIModelStreamInfo {
         | "tool_input"
         | "retrying"
         | "stalled";
-    waitingAgents?: number;
+    waitingTasks?: number;
     outputCharacters: number;
     estimatedOutputTokens: number;
     toolName?: string;
@@ -100,9 +100,9 @@ export class UITurnEventStore {
     handleEvent = (event: AgentEvent): void => {
         this.uiEvents.handleEvent(event);
 
-        if (event.type === "agent_wait") {
+        if (event.type === "task_wait") {
             const modelStream: UIModelStreamInfo | null = event.taskIds.length
-                ? {phase: "requesting", waitingAgents: event.taskIds.length, outputCharacters: 0, estimatedOutputTokens: 0}
+                ? {phase: "requesting", waitingTasks: event.taskIds.length, outputCharacters: 0, estimatedOutputTokens: 0}
                 : null;
             this.modelStreamProgressRef.current = modelStream;
             this.update({...this.snapshot, modelStream});

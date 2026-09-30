@@ -175,12 +175,12 @@ async function runAgentCore(
     };
 
     const appendQueuedInputs = async (inputs: readonly QueuedAgentInput[]) => {
-        const accepted = inputs.filter(input => !ctx.agentJoin || ctx.agentJoin.accepts(input));
+        const accepted = inputs.filter(input => !ctx.taskJoin || ctx.taskJoin.accepts(input));
         for (const input of accepted) {
             history.push({role: "user", origin: input.source === "user_input" ? "user" : input.source === "agent_message" ? (options.inputOrigin === "assignment" ? "assignment" : "agent") : "task_notification", content: input.content});
         }
         for (const input of accepted) {
-            await ctx.agentJoin?.consume(input);
+            await ctx.taskJoin?.consume(input);
             if (input.source === "agent_message") await onEvent({type: "coordination_message", messageId: input.id, text: contentText(input.content)});
         }
     };
@@ -200,7 +200,7 @@ async function runAgentCore(
         ) {
             iterations = i + 1;
             // Capture terminal delegates even for headless Hosts without a UI notification pump.
-            const completedDelegates = await ctx.agentJoin?.collect() ?? [];
+            const completedDelegates = await ctx.taskJoin?.collect() ?? [];
             await appendQueuedInputs(completedDelegates);
             if (completedDelegates.length) await ctx.commitToolBatch?.();
             await onEvent({
@@ -335,27 +335,32 @@ async function runAgentCore(
 
             // Without tool calls, the response is expected to be the final answer.
             if (toolCalls.length === 0) {
-                if (hasNextIteration && ctx.agentJoin?.ids.length) {
+                if (!hasNextIteration && ctx.taskJoin?.ids.length) {
                     history.pop();
                     await draft.finish("discarded");
-                    let queued = inputChannel.drainSafeBoundary().filter(input => !ctx.agentJoin || ctx.agentJoin.accepts(input));
+                    break;
+                }
+                if (hasNextIteration && ctx.taskJoin?.ids.length) {
+                    history.pop();
+                    await draft.finish("discarded");
+                    let queued = inputChannel.drainSafeBoundary().filter(input => !ctx.taskJoin || ctx.taskJoin.accepts(input));
                     await appendQueuedInputs(queued);
-                    let ready = await ctx.agentJoin.collect();
-                    while (!queued.length && !ready.length && ctx.agentJoin.ids.length) {
-                        await onEvent({type: "agent_wait", taskIds: ctx.agentJoin.ids});
+                    let ready = await ctx.taskJoin.collect();
+                    while (!queued.length && !ready.length && ctx.taskJoin.ids.length) {
+                        await onEvent({type: "task_wait", taskIds: ctx.taskJoin.ids});
                         try {
-                            await ctx.agentJoin.wait(ctx.signal, signal => inputChannel.waitForInput(signal));
+                            await ctx.taskJoin.wait(ctx.signal, signal => inputChannel.waitForInput(signal));
                         } finally {
-                            await onEvent({type: "agent_wait", taskIds: []});
+                            await onEvent({type: "task_wait", taskIds: []});
                         }
                         throwIfTurnAborted(ctx.signal);
-                        queued = inputChannel.drainSafeBoundary().filter(input => !ctx.agentJoin || ctx.agentJoin.accepts(input));
+                        queued = inputChannel.drainSafeBoundary().filter(input => !ctx.taskJoin || ctx.taskJoin.accepts(input));
                         await appendQueuedInputs(queued);
-                        ready = await ctx.agentJoin.collect();
+                        ready = await ctx.taskJoin.collect();
                     }
                     await appendQueuedInputs(ready);
                     await ctx.commitToolBatch?.();
-                    completionNudge = "Continue the current task. Inspect delegated results, integrate changes, and run the remaining checks before the final answer.";
+                    completionNudge = "Continue the current task. Inspect task results, integrate changes, and run the remaining checks before the final answer.";
                     continue;
                 }
                 if (!textContent && !emptyResponseRetryUsed && hasNextIteration) {
@@ -381,7 +386,7 @@ async function runAgentCore(
                     continue;
                 }
                 if (hasNextIteration) {
-                    const queued = inputChannel.drainSafeBoundary().filter(input => !ctx.agentJoin || ctx.agentJoin.accepts(input));
+                    const queued = inputChannel.drainSafeBoundary().filter(input => !ctx.taskJoin || ctx.taskJoin.accepts(input));
                     if (queued.length > 0) {
                         if (textContent) {
                             await onEvent({
@@ -492,7 +497,7 @@ async function runAgentCore(
                 };
             }
             if (hasNextIteration) {
-                await appendQueuedInputs(inputChannel.drainSafeBoundary().filter(input => !ctx.agentJoin || ctx.agentJoin.accepts(input)));
+                await appendQueuedInputs(inputChannel.drainSafeBoundary().filter(input => !ctx.taskJoin || ctx.taskJoin.accepts(input)));
             }
         }
 

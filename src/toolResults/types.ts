@@ -1,5 +1,6 @@
 import type {ToolUIData} from "../fileChanges/index.js";
 import type {StoredImage, MessageContent} from "../images/content.js";
+import type {TaskResultReceipt} from "../tasks/types.js";
 
 export const DEFAULT_MAX_RESULT_CHARS = 50_000;
 export const DEFAULT_PREVIEW_CHARS = 2_000;
@@ -46,6 +47,8 @@ export type ToolOutput =
     persisted?: PersistedToolResult;
     outcome?: ToolOutcome;
     uiData?: ToolUIData;
+    completedTask?: TaskResultReceipt;
+    runningTask?: string;
 };
 
 export interface ToolExecutionResult {
@@ -54,6 +57,8 @@ export interface ToolExecutionResult {
     outcome: ToolOutcome;
     persisted?: PersistedToolResult;
     uiData?: ToolUIData;
+    completedTask?: TaskResultReceipt;
+    runningTask?: string;
 }
 
 export interface ToolResultStoreLimits {

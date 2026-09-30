@@ -8,6 +8,33 @@ import {createSubagentRegistry} from "../../src/subagents/registry.js";
 afterEach(() => cleanup());
 
 describe("App input cursor layout", () => {
+  test("显式 Shell wait 显示等待任务结果，不误报等待 Agent", async () => {
+    await withTempProject(async cwd => {
+      const resources = createTestRuntimeResources(cwd);
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => {release = resolve;});
+      let entered!: () => void;
+      const waiting = new Promise<void>(resolve => {entered = resolve;});
+      resources.agentRuntime.runAgent = async (_prompt, _history, onEvent) => {
+        await onEvent({type: "tool_call_start", turnId: "wait-turn", toolCallId: "wait", name: "task",
+          args: '{"action":"wait","task_id":"shell"}'});
+        entered();
+        await gate;
+        return {reply: "done", reason: "completed", iterations: 1};
+      };
+      const view = render(<App resources={resources}/>);
+      try {
+        await new Promise(resolve => setTimeout(resolve, 20));
+        view.stdin.write("wait");
+        await new Promise(resolve => setTimeout(resolve, 20));
+        view.stdin.write("\r");
+        await waiting;
+        await new Promise(resolve => setTimeout(resolve, 20));
+        expect(view.lastFrame()).toContain("Waiting for task results");
+        expect(view.lastFrame()).not.toContain("Waiting for agents");
+      } finally {release(); await new Promise(resolve => setTimeout(resolve, 20)); view.unmount(); await resources.close();}
+    });
+  });
   test("启动时只显示一次有界的 Agent 加载警告", async () => {
     await withTempProject(async (cwd) => {
       const subagents = createSubagentRegistry({

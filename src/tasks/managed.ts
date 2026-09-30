@@ -4,7 +4,7 @@ import {type FileHandle, open} from "node:fs/promises";
 import type {StopReason} from "../agent/types.js";
 import {selectUtf8Range} from "../toolResults/utf8.js";
 import type {ToolResultStore} from "../toolResults/index.js";
-import type {ShellTermination} from "../tools/bash/process.js";
+import type {ShellExecutionResult, ShellTermination} from "../tools/bash/process.js";
 import type {SubagentThread} from "../subagents/types.js";
 import type {RuntimeMessageQueue} from "../runtime/messageQueue.js";
 import type {AgentTaskSnapshot, ShellTaskSnapshot, TaskSnapshot, TaskStatus, AgentTaskStatus,} from "./types.js";
@@ -26,6 +26,9 @@ interface ManagedTaskBase<Status extends string = TaskStatus> {
 }
 
 export interface ManagedShellTask extends ManagedTaskBase {
+    published: boolean;
+    publication: Promise<void>;
+    inlineResult?: ShellExecutionResult;
     executionMode: "sandbox" | "host";
     command: string;
     cwd: string;

@@ -5,7 +5,7 @@ USER root
 COPY --from=evaluation_python /usr/local /opt/python313
 RUN /opt/python313/bin/python3.13 -m pip install --no-cache-dir --force-reinstall pip==25.2 \
     && /opt/python313/bin/pip --version
-RUN missing=""; for tool in tmux file xxd; do command -v "$tool" >/dev/null || missing="$missing $tool"; done; \
+RUN missing=""; for tool in tmux file xxd sqlite3; do command -v "$tool" >/dev/null || missing="$missing $tool"; done; \
     if [ -n "$missing" ]; then apt-get update && apt-get install -y --no-install-recommends $missing && rm -rf /var/lib/apt/lists/*; fi
 RUN /opt/python313/bin/python3.13 -m venv /opt/hicode-verifier \
     && /opt/hicode-verifier/bin/pip install --no-cache-dir pytest==8.4.1 pytest-json-ctrf==0.3.5 \

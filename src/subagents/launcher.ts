@@ -47,7 +47,7 @@ export function createSubagentLauncher({
                     request,
                     parentContext,
                 });
-                parentContext.agentJoin?.register(task);
+                parentContext.taskJoin?.register(task);
                 return {kind: "background", task};
             }
             return {kind: "foreground", result: await runSubagent(request)};

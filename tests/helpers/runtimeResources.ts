@@ -157,13 +157,15 @@ export function createTestRuntimeResources(
       subagents,
       memory,
     });
+  const fileCommits = overrides.fileCommits ?? new FileCommitCoordinator();
   const taskRuntime = createTaskRuntimeForTest(
     cwd,
     shellRunner,
     agentRuntime.createSubagentThread,
-    undefined,
+    storage.hicodeHome,
     subagents,
-    memory
+    memory,
+    fileCommits
   );
   const hooks = overrides.hooks ?? createDisabledTestHookRuntime();
   const toolRuntime = overrides.toolRuntime ?? createToolRuntime({hooks});
@@ -217,7 +219,7 @@ export function createTestRuntimeResources(
     shellRunner,
     sandbox,
     memory,
-    fileCommits: new FileCommitCoordinator(),
+    fileCommits,
     gitWorkspace: createGitWorkspaceRuntime(cwd, testChildEnvironment),
     beginShutdown,
     async close() {

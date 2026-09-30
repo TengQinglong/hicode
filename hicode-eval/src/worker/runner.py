@@ -1,7 +1,7 @@
 """One assignment, one Linux user, one tmux session. No installs or per-task containers."""
 import base64,fcntl,json,os,pwd,signal,subprocess,sys,time,shutil
 from pathlib import Path
-from protocol import Events,atomic_json,namespace_argv,package_install_argv
+from protocol import Events,atomic_json,namespace_argv,package_install_argv,prepare_verifier_root
 from verifier import verify,verifier_environment
 from terminal import capture,settle,submit_prompt
 from cleanup import stop_task_processes,finalize_task,open_task_cli,terminate_task_cli
@@ -16,6 +16,7 @@ swe_environment=Path('/eval/swe-envs')/run_id if is_swe else None
 project=root/'project';home=root/'home';logs=root/'logs';control=Path('/run/hicode-eval')/run_id
 name='eval-'+run_id
 cancelled=False
+verifier_root=None
 
 def emit(kind,**value):
     print(json.dumps({'type':kind,**value},ensure_ascii=False),flush=True)
@@ -38,6 +39,8 @@ with open('/eval/users.lock','a') as lock:
     account=pwd.getpwnam(name)
 for p in [root,project,home,logs,control]:p.mkdir(parents=True,exist_ok=True)
 subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(project),str(home),str(logs),str(control)],check=True)
+if config.get('publicTestInputs'):
+    subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(root/'public-tests')],check=True)
 os.chown(root,uid,account.pw_gid);os.chmod(root,0o700)
 for p in [project,home,logs,control]:os.chmod(p,0o700)
 atomic_json(root/'identity.json',{'version':2,'uid':uid,'user':name,'pid':os.getpid(),'runnerStart':process_start(os.getpid()),'run':run_id})
@@ -49,7 +52,9 @@ def namespace(args,verifier=False,setup=False):
     return namespace_argv(args,project,home,logs,control,root/'tests' if verifier else None,
                           writable_tests=verifier and not is_swe and config['verifierPrelude']=='compile-feal-extension',
                           root_overlay=verifier and not setup and config.get('verifierRootOverlay',False),
-                          workdir='/testbed' if is_swe else '/app',environment=swe_environment)
+                          workdir='/testbed' if is_swe else '/app',environment=swe_environment,
+                          public_tests=root/'public-tests' if not verifier and config.get('publicTestInputs') else None,
+                          private_root=verifier_root if verifier else None)
 
 def command(args,timeout=15,extra=None,cwd=None,output_path=None):
     env={'PATH':'/opt/python313/bin:'+str(home/'.local/bin')+':'+str(home/'bin')+':'+os.environ['PATH'],'HOME':str(home),'TERM':'xterm-256color','COLORTERM':'truecolor','LANG':'C.UTF-8'}
@@ -136,7 +141,7 @@ try:
         if initializer['kind']=='python':argv=['/opt/python313/bin/python3.13',app_script]
         elif initializer['kind']=='bash':argv=['bash',app_script]
         else:argv=['gzip','-d','--',app_script]
-        command(namespace(argv),timeout=30)
+        command(namespace(argv),timeout=30,output_path=logs/'initializer.txt')
         script.unlink(missing_ok=True)
     command(namespace(['bun','/opt/hicode-eval/preflight.ts']),timeout=30,extra=extra)
     emit('phase',phase='Starting HiCode')
@@ -156,7 +161,7 @@ try:
         if (logs/'terminal.overflow').exists():raise RuntimeError('Terminal recording exceeds limit')
         if cancelled or (root/'cancel').exists():status='cancelled';break
         drain_events()
-        if time.monotonic()-last_screen>=2:
+        if time.monotonic()-last_screen>=1:
             screen=tmux('capture-pane','-p','-e','-S','-20000','-t','hicode:0.0')
             if len(screen.encode())>8*1024*1024:raise ValueError('Terminal exceeds budget')
             if screen!=old_screen:emit('screen',screen=screen);old_screen=screen
@@ -201,6 +206,13 @@ try:
                 verifier_log=logs/'verifier'
                 if verifier_log.is_symlink():raise ValueError('Verifier log directory replaced with symlink')
                 verifier_log.mkdir(exist_ok=True);os.chown(verifier_log,uid,account.pw_gid)
+                if config.get('verifierChroot'):
+                    verifier_root=root/'verifier-root'
+                    prepare_verifier_root(project,verifier_root)
+                    subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(verifier_root)],check=True)
+                    command(namespace(['/opt/python313/bin/python3.13','-c',
+                        "import os,tempfile; f=tempfile.NamedTemporaryFile(dir='/app',delete=False);f.close(); dest='/tmp/'+os.path.basename(f.name);os.rename(f.name,dest);os.unlink(dest);os.chroot('/');assert os.getuid()==0"],verifier=True),
+                        timeout=15,output_path=verifier_log/'namespace-check.txt')
                 if config['verifierPrelude']=='reset-large-csv':
                     command(namespace(['bash','-c','rm -f -- /app/*.csv && /opt/python313/bin/python3.13 /tests/gen_large_csv.py input'],verifier=True),timeout=30)
                 if is_swe:

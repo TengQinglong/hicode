@@ -110,7 +110,8 @@ interface RootRuntimeDependencies {
         shellRunner: ShellRunnerLike,
         createSubagentThread: CreateSubagentThread,
         subagents: SubagentCatalog,
-        memory:MemoryRuntimeLike
+        memory:MemoryRuntimeLike,
+        fileCommits: FileCommitCoordinator
     ): TaskRuntimeLike;
     createAgentRuntime: typeof createAgentRuntime;
 
@@ -331,13 +332,15 @@ export function createRootRuntimeResourcesFactory(
                 subagents,
                 memory: createdMemory,
             });
+            const fileCommits = new FileCommitCoordinator();
             const createdTaskRuntime = dependencies.createTaskRuntime(
                 storage,
                 cwd,
                 shellRunner,
                 agentRuntime.createSubagentThread,
                 subagents,
-                createdMemory
+                createdMemory,
+                fileCommits
             );
             taskRuntime = createdTaskRuntime;
             closeOwnedResources = createResourceCloser(
@@ -401,7 +404,7 @@ export function createRootRuntimeResourcesFactory(
                 shellRunner,
                 sandbox,
                 memory: createdMemory,
-                fileCommits: new FileCommitCoordinator(),
+                fileCommits,
                 gitWorkspace,
                 beginShutdown: closeOwnedResources.beginShutdown,
                 close: () => finalClose ??= (async () => {try {await closeOwnedResources!.close();} finally {await releaseActivity();}})(),

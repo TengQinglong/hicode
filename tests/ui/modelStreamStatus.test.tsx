@@ -7,6 +7,20 @@ import type {
 } from "../../src/ui/turn/eventStore.js";
 
 describe("ModelStreamStatus", () => {
+  test("等待有限 Shell 结果时显示任务状态，恢复后清除", async () => {
+    const waiting: UIModelStreamInfo = {phase: "requesting", outputCharacters: 0, estimatedOutputTokens: 0, waitingTasks: 1};
+    const ref: UIModelStreamProgressRef = {current: waiting};
+    const view = render(<ModelStreamStatus modelStream={waiting} progressRef={ref} stopping={false}/>);
+    expect(view.lastFrame()).toContain("Waiting for 1 task");
+    expect(view.lastFrame()).not.toContain("Waiting for model response");
+    const resumed: UIModelStreamInfo = {phase: "requesting", outputCharacters: 0, estimatedOutputTokens: 0};
+    ref.current = resumed;
+    view.rerender(<ModelStreamStatus modelStream={resumed} progressRef={ref} stopping={false}/>);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(view.lastFrame()).toContain("Waiting for model response");
+    expect(view.lastFrame()).not.toContain("Waiting for 1 task");
+    view.unmount();
+  });
   test("没有父模型流时显示当前工具活动而不是泛化的思考中", () => {
     const frame = render(
       <ModelStreamStatus

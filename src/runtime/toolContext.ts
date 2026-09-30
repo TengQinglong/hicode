@@ -1,5 +1,5 @@
-import {isParentTaskSession, type ChildTaskAccess} from "../tasks/childAccess.js";
-import {AgentTaskJoin} from "../tasks/agentJoin.js";
+import type {ChildTaskAccess} from "../tasks/childAccess.js";
+import {TaskJoin} from "../tasks/taskJoin.js";
 import type {AgentMessaging} from "./agentMessaging.js";
 import type {ContextUsageTracker} from "../context/usage.js";
 import {ApprovalBudget, ApprovalEpoch, type ApprovalReviewer} from "../permissions/approval.js";
@@ -99,6 +99,7 @@ export function createToolContext({
         toolResultStore: session.toolResultStore,
         allowBackgroundTasks: session.allowBackgroundTasks,
     });
+    const taskJoin = tasks ? new TaskJoin(tasks) : undefined;
     return {
         signal,
         allowFullAccess: resources.allowFullAccess ?? false,
@@ -154,7 +155,7 @@ export function createToolContext({
         mcpManager: resources.mcpManager,
         agentMessaging: resources.agentMessaging,
         tasks,
-        ...(tasks && isParentTaskSession(tasks) ? {agentJoin: new AgentTaskJoin(tasks)} : {}),
+        taskJoin,
         ...(session.hookSession ? {hookSession: session.hookSession} : {}),
         shellRunner: resources.shellRunner,
     };

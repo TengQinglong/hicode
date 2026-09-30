@@ -5,9 +5,9 @@ import type {Tool} from "../types.js";
 import {checkTaskStopPermission} from "./stopPermission.js";
 import {EMPTY_AGENT_INPUT_CHANNEL} from "../../agent/inputChannel.js";
 import {agentRunTiming} from "../../tasks/timing.js";
-import {waitForAgentActivity} from "../../tasks/agentJoin.js";
 import {waitForTaskActivity} from "../../tasks/wait.js";
 import {isParentTaskSession} from "../../tasks/childAccess.js";
+import {taskNotificationId} from "../../tasks/notifications.js";
 
 const inputSchema = z.object({
     action: z
@@ -116,19 +116,21 @@ export const taskTool: Tool<typeof inputSchema> = {
                         signal => ctx.agentMessaging ? ctx.agentMessaging.wait(signal) : EMPTY_AGENT_INPUT_CHANNEL.waitForInput(signal));
                     const completed = await ctx.tasks.get(task_id);
                     if (!completed || completed.kind !== "shell") return {content: "Shell task became unavailable", outcome: "failed"};
-                    return {content: formatTask(completed) + (completed.status === "running" ? "\nNew input is available and will be delivered after this tool batch." : ""), outcome: completed.status === "failed" ? "failed" : "ok"};
+                    return {content: formatTask(completed) + (completed.status === "running" ? "\nNew input is available and will be delivered after this tool batch." : ""),
+                        ...(completed.status !== "running" ? {completedTask: {taskId: completed.id, notificationId: taskNotificationId(completed.id, 1)}} : {}),
+                        outcome: completed.status === "failed" || completed.outputIssue ? "failed" : "ok"};
                 }
             }
             if (!isParentTaskSession(ctx.tasks)) return {content: "Child Shell wait requires task_id", outcome: "failed"};
-            const ids = [...new Set([...(ctx.agentJoin?.ids ?? []), ...(task_id ? [task_id] : [])])];
+            const ids = [...new Set([...(ctx.taskJoin?.agentIds ?? []), ...(task_id ? [task_id] : [])])];
             if (!ids.length) return "No delegated Agent results are pending.";
             const initial = await Promise.all(ids.map(id => ctx.tasks!.get(id)));
             if (initial.some(task => !task || task.kind !== "agent")) return {content: "Cannot wait for an unavailable Agent task", outcome: "failed"};
-            await waitForAgentActivity(ctx.tasks, ids, ctx.signal,
+            await waitForTaskActivity(ctx.tasks, ids, ctx.signal, "agent",
                 signal => ctx.agentMessaging ? ctx.agentMessaging.wait(signal) : EMPTY_AGENT_INPUT_CHANNEL.waitForInput(signal));
             const snapshots = await Promise.all(ids.map(id => ctx.tasks!.get(id)));
             const completed = snapshots.filter((task): task is AgentTaskSnapshot => task?.kind === "agent" && task.status !== "running");
-            for (const task of completed) ctx.agentJoin?.markReported(task);
+            for (const task of completed) ctx.taskJoin?.markReported(task);
             return {
                 content: completed.length ? completed.map(formatTask).join("\n\n")
                     : "New input is available and will be delivered after this tool batch. Delegated agents may still be running.",

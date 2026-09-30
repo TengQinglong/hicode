@@ -433,7 +433,7 @@ test("close waits for a Shell startup and its cancellation cleanup", async () =>
     const runtime = createTaskRuntimeForTest(cwd, runner);
     const session = runtime.forSession({sessionId: "startup-close", toolResultStore: createTestToolResultStore(cwd, "startup-close")});
     session.subscribe(event => {if (event.type === "task_started") close = runtime.close().then(() => {closed = true;});});
-    const pending = session.startShell({command: "fixture", cwd, toolCallId: "start", waitMs: 100});
+    const pending = session.startShell({command: "fixture", cwd, toolCallId: "start"});
     await executing; await Promise.resolve();
     expect(closed).toBe(false);
     finish(); await pending; await close;
@@ -456,7 +456,10 @@ test("Shell history eviction preserves idle Agent threads and follow-up", async 
             agentType: "Worker", description: "keep", prompt: "finish", parentToolCallId: "spawn"}});
         await completed;
         for (const notification of await session.pendingNotifications()) await session.acknowledgeNotification(notification);
-        for (let i = 0; i < 34; i++) await session.startShell({command: `fixture-${i}`, cwd, toolCallId: `shell-${i}`});
+        for (let i = 0; i < 34; i++) {
+            await session.startShell({command: `fixture-${i}`, cwd, toolCallId: `shell-${i}`});
+            for (const notification of await session.pendingNotifications()) await session.acknowledgeNotification(notification);
+        }
         expect(await session.get(first.id)).toMatchObject({kind: "agent", status: "completed"});
         expect((await session.list()).filter(task => task.kind === "shell")).toHaveLength(32);
         await session.followup(first.id, "continue");

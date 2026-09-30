@@ -4,7 +4,7 @@ import type {RuntimeMessageQueue} from "../runtime/messageQueue.js";
 import type {SandboxExecutionPreference} from "../sandbox/index.js";
 import type {NetworkAccessExecution} from "../permissions/networkAccess.js";
 import type {PersistedToolResult, ToolResultStore} from "../toolResults/index.js";
-import type {ShellTermination} from "../tools/bash/process.js";
+import type {ShellExecutionResult, ShellTermination} from "../tools/bash/process.js";
 import type {StopReason} from "../agent/types.js";
 import type {SubagentRequest} from "../subagents/types.js";
 import type {ToolContext} from "../tools/types.js";
@@ -91,9 +91,6 @@ export interface RunningTaskSummary {
 }
 
 export interface StartShellTaskInput {
-    waitMs?: number;
-    timeoutMs?: number;
-    signal?: AbortSignal;
     networkAccess?: NetworkAccessExecution;
     command: string;
     cwd: string;
@@ -102,6 +99,17 @@ export interface StartShellTaskInput {
     sandboxPermissions?: SandboxExecutionPreference;
     writableRoots?: readonly string[];
 }
+
+export interface RunShellTaskInput extends StartShellTaskInput {
+    waitMs: number;
+    timeoutMs?: number;
+    signal: AbortSignal;
+    onHandoff(): void;
+}
+
+export type RunShellTaskResult =
+    | {kind: "inline"; result: ShellExecutionResult; persisted?: PersistedToolResult; outputIssue?: string}
+    | {kind: "task"; task: ShellTaskSnapshot};
 
 export interface StartAgentTaskInput {
     request: SubagentRequest;
@@ -120,6 +128,7 @@ export interface TaskNotification {
     resultId?: string;
     message: string;
 }
+export type TaskResultReceipt = Pick<TaskNotification, "taskId" | "notificationId">;
 
 export interface TaskEventEnvelope {
     version: 6;
@@ -131,11 +140,13 @@ export interface TaskEventEnvelope {
 
 export interface TaskSessionLike {
     readonly sessionId: string;
+    readonly shellContinuation: boolean;
     readonly messaging?: AgentMessaging;
 
     initialize(): Promise<void>;
 
     startShell(input: StartShellTaskInput): Promise<ShellTaskSnapshot>;
+    runShell(input: RunShellTaskInput): Promise<RunShellTaskResult>;
 
     startAgent(input: StartAgentTaskInput): Promise<AgentTaskSnapshot>;
 
@@ -168,6 +179,7 @@ export interface TaskSessionBinding {
     sessionId: string;
     toolResultStore: ToolResultStore;
     allowBackgroundTasks?: boolean;
+    shellContinuation?: boolean;
 }
 
 export interface TaskRuntimeLike {

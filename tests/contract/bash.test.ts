@@ -624,6 +624,10 @@ describe("bash tool contract", () => {
         expect(result.modelContent).toContain("Termination: exit 1");
         expect(result.modelContent).toContain("listen EPERM");
         expect(result.modelContent).not.toContain("HiCode Sandbox: 本地端口监听被");
+        const pending = await tasks.pendingNotifications();
+        expect(pending).toHaveLength(1);
+        expect(result.completedTask).toEqual({taskId: pending[0]!.taskId, notificationId: pending[0]!.notificationId});
+        await tasks.acknowledgeNotification(result.completedTask!);
         expect(await tasks.pendingNotifications()).toEqual([]);
       } finally {
         await runtime.close();

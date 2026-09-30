@@ -10,8 +10,23 @@ import subprocess
 import tempfile
 import pwd
 import tarfile
+import re
 
 ROOT=Path('/opt/hicode-swe'); STAGE=ROOT/'staging'
+
+def project_tool_pins(repo, python):
+    program="""import json,sys,yaml
+document=yaml.safe_load(open(sys.argv[1]))
+names={'https://github.com/psf/black':'black','https://github.com/PyCQA/isort':'isort','https://github.com/PyCQA/flake8':'flake8'}
+print(json.dumps({names[r['repo']]:r['rev'] for r in document['repos'] if r.get('repo') in names}))
+"""
+    versions=json.loads(subprocess.check_output([str(python),'-c',program,str(repo/'.pre-commit-config.yaml')],text=True))
+    if not isinstance(versions,dict) or set(versions)!={'black','isort','flake8'}:raise ValueError('Missing project development-tool pins')
+    pins=[]
+    for name,version in sorted(versions.items()):
+        if not isinstance(version,str) or not re.fullmatch(r'v?[0-9]+(?:\.[0-9]+)+',version):raise ValueError('Unsupported development-tool revision')
+        pins.append(name+'=='+version.removeprefix('v'))
+    return pins
 
 def run(args,timeout=600,**kwargs):
     subprocess.run(args,check=True,timeout=timeout,**kwargs)
@@ -84,22 +99,41 @@ def main():
                     (target/'repository/.git/hooks').mkdir(exist_ok=True)
                     print('Reusing frozen public bundle: '+id,flush=True);continue
             raise ValueError('Incomplete or mismatched cached bundle; inspect before removing: '+id)
-        target.mkdir(mode=0o700)
         archive=STAGE/(row['base_commit']+'.tar.gz')
-        if not archive.exists():run(['curl','-fL','--retry','1','--max-time','120','https://codeload.github.com/django/django/tar.gz/'+row['base_commit'],'-o',str(archive)])
+        if not archive.exists():
+            partial=archive.with_suffix('.partial')
+            try:
+                run(['curl','-fL','--retry','1','--max-time','120','https://codeload.github.com/django/django/tar.gz/'+row['base_commit'],'-o',str(partial)])
+                partial.replace(archive)
+            finally:partial.unlink(missing_ok=True)
+        target.mkdir(mode=0o700)
         repo=target/'repository';extract(archive,repo)
+        pins=project_tool_pins(repo,cache/'bin/python')
+        tooling_key=hashlib.sha256((key+json.dumps(pins)+'-development-tools-v1').encode()).hexdigest()
+        task_cache=ROOT/'cache'/tooling_key;tooling_ready=task_cache/'.ready.json'
+        if not tooling_ready.exists():
+            if task_cache.exists():raise ValueError('Incomplete development-tool cache; inspect before removing')
+            shutil.copytree(cache,task_cache,symlinks=True)
+            from swe import relocate_environment
+            relocate_environment(task_cache,str(cache));tooling_ready.unlink()
+            run([uv,'pip','install','--python',str(task_cache/'bin/python'),*pins],env=env)
+            packages=subprocess.check_output([uv,'pip','freeze','--python',str(task_cache/'bin/python')],env=env,text=True)
+            tooling_ready.write_text(json.dumps({'python':'3.9','requirementsSha256':hashlib.sha256((STAGE/'requirements.txt').read_bytes()).hexdigest(),
+                'developmentTools':pins,'resolvedPackages':packages,'mode':'shared-linux-development'}))
+        tooling_proof=json.loads(tooling_ready.read_text())
+        if tooling_proof.get('developmentTools')!=pins:raise ValueError('Development-tool cache does not match this project')
         git(['init','--template='],repo)
         (repo/'.git/hooks').mkdir(exist_ok=True)
         git(['config','user.email','eval@localhost'],repo);git(['config','user.name','HiCode Eval'],repo)
         git(['add','-A'],repo);git(['commit','-qm','Original base tree '+row['base_commit']],repo)
         # Django 4.2 official repo installation. venv is only transient during setup;
         # runtime replays the same installation at the stable /testbed mount.
-        run([str(cache/'bin/python'),'-m','pip','install','--no-deps','-e',str(repo)])
+        run([str(task_cache/'bin/python'),'-m','pip','install','--no-deps','-e',str(repo)])
         git(['add','-A'],repo);git(['commit','--allow-empty','-qm','Prepared baseline'],repo)
         baseline=git(['rev-parse','HEAD'],repo)
         git(['gc','--prune=now'],repo)
         # Remove path-specific editable registration from the reusable cache.
-        run([str(cache/'bin/python'),'-m','pip','uninstall','-y','Django'])
+        run([str(task_cache/'bin/python'),'-m','pip','uninstall','-y','Django'])
         (target/'instruction.md').write_text(row['problem_statement'])
         hidden=target/'hidden';hidden.mkdir(mode=0o700)
         evaluator={k:v for k,v in row.items() if k!='problem_statement'}
@@ -110,7 +144,7 @@ def main():
             elif path.is_file():files[str(path.relative_to(target))]=hashlib.sha256(path.read_bytes()).hexdigest()
         task={'kind':'swe-bench-verified','instanceId':id,'revision':'c104f840cc67f8b6eec6f759ebc8b2693d585d4a',
               'repo':row['repo'],'version':row['version'],'baseCommit':row['base_commit'],'harnessVersion':'4.1.0',
-              'environment':str(cache),'python':'3.9','verifierSeconds':1800,'baselineCommit':baseline,'files':files,
+              'environment':str(task_cache),'python':'3.9','verifierSeconds':1800,'baselineCommit':baseline,'files':files,
               'evaluationMode':'shared-linux-development'}
         (target/'swe-task.json').write_text(json.dumps(task,indent=2)+'\n')
         print('Prepared public base tree: '+id,flush=True)
@@ -121,7 +155,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='swe-preflight-',dir='/eval') as tmp:
         probe=Path(tmp);project=probe/'project';home=probe/'home';logs=probe/'logs';control=probe/'control';local_env=probe/'env'
         shutil.copytree(bundles/rows[0]['instance_id']/'repository',project,symlinks=True)
-        shutil.copytree(cache,local_env,symlinks=True);relocate_environment(local_env,str(cache))
+        selected_cache=Path(json.loads((bundles/rows[0]['instance_id']/'swe-task.json').read_text())['environment'])
+        shutil.copytree(selected_cache,local_env,symlinks=True);relocate_environment(local_env,str(selected_cache))
         for path in [home,logs,control]:path.mkdir()
         run(['chown','-R',str(account.pw_uid)+':'+str(account.pw_gid),str(probe)])
         def demote():os.setgroups([]);os.setgid(account.pw_gid);os.setuid(account.pw_uid)

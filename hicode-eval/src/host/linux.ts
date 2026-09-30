@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { validateSweTask } from './sweTasks.js';
-import { validatePublicTask, prepareTaskInputs, taskSchema } from './publicTasks.js';
+import { validatePublicTask, prepareTaskInputs, preparePublicTestInputs, taskSchema } from './publicTasks.js';
 import { run, readJson, save, evidenceTree, exists } from './store.js';
 import type { Config, Run } from './types.js';
 import { EVAL_ROOT } from '../paths.js';
@@ -29,7 +29,7 @@ export class LinuxMachine {
     const info = JSON.parse(await run(this.docker('inspect', this.config.machine), { timeout: 15000 }));
     const machine = z.array(z.object({ State: z.object({ Running: z.literal(true) }), Config: z.object({ Labels: z.record(z.string()) }) })).length(1).parse(info)[0];
     if (machine.Config.Labels['dev.hicode.role'] !== 'eval') throw Error('Use the dedicated evaluation machine, not the development container');
-    await run(this.docker('exec', this.config.machine, 'sh', '-c', 'command -v bun && command -v node && command -v tmux && command -v bwrap && command -v python3'), { timeout: 15000 });
+    await run(this.docker('exec', this.config.machine, 'sh', '-c', 'command -v bun && command -v node && command -v tmux && command -v bwrap && command -v python3 && /opt/python313/bin/pip3 --version'), { timeout: 15000 });
     await run(this.docker('exec', this.config.machine, '/opt/hicode-verifier/bin/python', '-c', "import sys,importlib.metadata as m; assert sys.version_info[:2] == (3,13); assert m.version('pytest') == '8.4.1'; assert m.version('pytest-json-ctrf') == '0.3.5'"));
     const manifest = await readJson(join(this.config.payload, 'manifest.json'), z.object({ files: z.record(z.string()) }));
     const archive = await readFile(join(this.config.payload, 'source.tar.gz'));
@@ -84,12 +84,17 @@ export class LinuxMachine {
     } else {
       await prepareTaskInputs(task, inputs, profile!);
       await run(this.docker('cp', inputs + '/.', this.config.machine + ':' + remote + '/project/'));
+      if (profile!.publicTestInputs.length) {
+        const helpers = join(path, 'public-test-inputs');
+        await preparePublicTestInputs(task, helpers, profile!);
+        await run(this.docker('cp', helpers, this.config.machine + ':' + remote + '/public-tests'));
+      }
       if (profile!.initializer) await run(this.docker('cp', join(task, 'environment', profile!.initializer.file), this.config.machine + ':' + remote + '/project/' + profile!.initializer.file));
     }
     await run(this.docker('cp', join(task, 'instruction.md'), this.config.machine + ':' + remote + '/instruction.md'));
     await save(join(path, 'job.json'), { model: this.config.model, release: this.release, agentSeconds: state.budget.agentSeconds, originalAgentSeconds: spec.agent.timeout_sec, verifierSeconds: spec.verifier.timeout_sec,
       ...(swe ? {dataset:'swe-bench-verified',swe,initializer:null,packages:[],verifierPackages:[],verifierPrelude:'none'} :
-        {dataset:'terminal-bench',commands:profile!.commands,environment:profile!.environment,verifierEnvironment:profile!.verifierEnvironment,initializer:profile!.initializer,packages:profile!.packages,verifierPackages:profile!.verifierPackages,verifierPrelude:profile!.verifierPrelude,verifierRootOverlay:profile!.verifierRootOverlay}) });
+        {dataset:'terminal-bench',commands:profile!.commands,publicTestInputs:profile!.publicTestInputs,environment:profile!.environment,verifierEnvironment:profile!.verifierEnvironment,initializer:profile!.initializer,packages:profile!.packages,verifierPackages:profile!.verifierPackages,verifierPrelude:profile!.verifierPrelude,verifierRootOverlay:profile!.verifierRootOverlay,verifierChroot:profile!.verifierChroot}) });
     await run(this.docker('cp', join(path, 'job.json'), this.config.machine + ':' + remote + '/job.json'));
     if (await exists(join(path, 'cancel'))) await this.cancel(state.id);
     await mkdir(join(path, 'live'), { recursive: true });

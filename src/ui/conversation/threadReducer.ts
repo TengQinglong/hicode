@@ -195,7 +195,7 @@ export function reduceThreads(
             return threads.map(thread => thread.role === "tool_call" && thread.toolCallId === event.toolCallId
                 ? {...thread, approvalReview: event.phase === "start" ? event.source === "user" ? "Waiting for approval" : "Reviewing permissions automatically" : undefined} : thread);
         case "iteration":
-        case "agent_wait":
+        case "task_wait":
             return threads;
         case "assistant_draft":
         case "assistant_draft_end":

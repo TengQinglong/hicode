@@ -200,6 +200,12 @@ export async function executeToolCallBatch({
                     content: interruptedContent ?? execution.modelContent,
                     tool_call_id: toolCall.id,
                 });
+                if (!interrupted && execution.completedTask) ctx.taskJoin?.record(execution.completedTask);
+                if (!interrupted && execution.runningTask) {
+                    const task = await ctx.tasks?.get(execution.runningTask);
+                    if (!task || task.kind !== "shell") throw new Error("Shell result references an unavailable task");
+                    ctx.taskJoin?.register(task);
+                }
                 outcomes.push({
                     toolCallId: toolCall.id,
                     name: toolCall.function.name,

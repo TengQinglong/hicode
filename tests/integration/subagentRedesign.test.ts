@@ -105,11 +105,11 @@ test("child Shell task capability excludes parent and sibling tasks and cannot s
         const runtime = createTaskRuntimeForTest(cwd, parent.shellRunner);
         const tasks = runtime.forSession({sessionId: parent.sessionId, toolResultStore: parent.toolResultStore});
         try {
-            const root = await tasks.startShell({command: "printf root", cwd, toolCallId: "root", waitMs: 1000});
+            const root = await tasks.startShell({command: "printf root", cwd, toolCallId: "root"});
             const child = createChildTaskAccess(tasks, parent.toolResultFiles);
             const sibling = createChildTaskAccess(tasks, parent.toolResultFiles);
-            const own = await child.tasks.startShell({command: "printf child", cwd, toolCallId: "child", waitMs: 1000});
-            const other = await sibling.tasks.startShell({command: "printf sibling", cwd, toolCallId: "sibling", waitMs: 1000});
+            const own = await child.tasks.startShell({command: "printf child", cwd, toolCallId: "child"});
+            const other = await sibling.tasks.startShell({command: "printf sibling", cwd, toolCallId: "sibling"});
             expect((await child.tasks.list()).map(task => task.id)).toEqual([own.id]);
             expect(await child.tasks.get(root.id)).toBeUndefined();
             expect(await child.tasks.stop(other.id)).toBeUndefined();

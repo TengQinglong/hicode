@@ -46,7 +46,7 @@ test('mixed submission under CLI umask preserves links and executable bits and r
  const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-mixed-submit-')));
  const prior=process.umask(0o077);
  const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined);
- const validate=spyOn(adapters,'validatePublicTask').mockResolvedValue({hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPackages:[],verifierPrelude:'none',verifierRootOverlay:false,commands:[],environment:{},verifierEnvironment:{}});
+ const validate=spyOn(adapters,'validatePublicTask').mockResolvedValue({hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPackages:[],verifierPrelude:'none',publicTestInputs:[],verifierChroot:false,verifierRootOverlay:false,commands:[],environment:{},verifierEnvironment:{}});
  let release=()=>{};const gate=new Promise<void>(resolve=>{release=resolve;});let active=0,peak=0;
  const execute=spyOn(LinuxMachine.prototype,'execute').mockImplementation(async()=>{
   peak=Math.max(peak,++active);await gate;active--;return {type:'result',execution:'completed',grading:'passed',uid:20001};

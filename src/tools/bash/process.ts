@@ -31,6 +31,8 @@ export interface ShellCommandOptions {
     outputFilePath?: string;
     maxOutputBytes?: number;
     previewChars?: number;
+    /** TaskRuntime starts its observation window only after a real process exists. */
+    onStarted?: () => void;
 }
 
 interface ShellArgvOptions extends Omit<ShellCommandOptions, "command"> {
@@ -143,6 +145,7 @@ function runProcess({
                         outputFilePath,
                         maxOutputBytes = 64 * 1024 * 1024,
                         previewChars = 30_000,
+                        onStarted,
                     }: Omit<ShellCommandOptions, "command"> & {
     launch: ProcessLaunch;
 }): Promise<ShellExecutionResult> {
@@ -356,6 +359,11 @@ function runProcess({
                 timeoutMs
             );
             timeout.unref?.();
+        }
+        if (signal.aborted) onAbort();
+        if (child.pid !== undefined && !signal.aborted) {
+            try {onStarted?.();}
+            catch (error) {terminate({kind: "spawn_error", error: error instanceof Error ? error : new Error(String(error))});}
         }
     });
 }

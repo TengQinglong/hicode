@@ -105,6 +105,8 @@ CLI 可由人或 Codex 等工具操作，**不依赖 Codex 做调度或判题**�
 
 判题能读取该题安装的 Python 依赖，固定判题版本优先。FEAL 的编译只写入判题专用测试副本；Headless 所需的根目录路径使用判题进程的临时根目录。pytest 缓存写入可写日志目录，警告在展示中汇总，完整输出保留在 `evidence/logs/verifier/output.txt`。
 
+明确公开的自测辅助文件可以单独只读挂载，不开放隐藏验收。路径追踪判题使用停止作答后的独立工作区副本，`/app` 与 `/tmp` 在同一隔离挂载；chroot 能力仅限该判题 user namespace，系统路径仍只读。启动检查 pip 入口与必需命令，初始化完整输出保存到 `initializer.txt`。终端采集与网页轮询约 1 秒。
+
 - `passed` / `failed`：pytest 退出码与本次 CTRF 报告一致，生成有效判分。
 - 判题超时、启动失败、未收集到测试或报告不一致：记为异常，无有效判分，不伪造 0 分。
 - 执行超时先停止 Agent 再验收；用户取消不判题。执行状态与判题状态分别保存。
@@ -194,6 +196,8 @@ bash hicode-eval/eval.sh prepare-swe \
 准备需要空闲的专用评测机和网络。首次下载 Python 3.9、官方 harness 及 Django 原声明的全部依赖，包括原生扩展所需的系统头文件；后续缓存复用。输出目录必须是新的仓库外目录，失败缓存保留供检查。每题下载指定 base commit 的 GitHub 源码归档，建立仅含原始树和安装基线的本地 Git 仓库，不保留远端、未来历史或 hook。环境实际解析版本记录在机器缓存的 `.ready.json`，运行时复制到宿主 `runs/ID/environment.json`。
 
 服务启动时在原有参数上增加 `--swe-tasks /path/to/external/prepared-swe`。复用同一个看板和专用机器；活动任务运行时不要另起服务或重新准备系统依赖。四题可用 `config/swe-verified-pilot.json` 提交，也可在同一批次加入 Terminal 题。
+
+两种准备命令都支持 `--ids ID1,ID2`。新 SWE 输入的开发检查器从基线 `.pre-commit-config.yaml` 读取固定版本并使用独立缓存，不就地更新旧环境。准备不调用模型，不代表题目已通过。
 
 SWE 的隔离与评分契约：
 

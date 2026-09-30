@@ -98,10 +98,12 @@ export function createRootSessionRuntime({
     resources,
     seed,
     allowBackgroundTasks = true,
+    shellContinuation = allowBackgroundTasks,
 }: {
     resources: RootRuntimeResources;
     seed: RootSessionSeed;
     allowBackgroundTasks?: boolean;
+    shellContinuation?: boolean;
 }): RootSessionRuntime {
     const fileState = createFileStateTracker();
     const approvalEpoch = new ApprovalEpoch();
@@ -120,7 +122,7 @@ export function createRootSessionRuntime({
         taskReceipts: seed.taskNotificationReceipts,
     });
     const taskSession = resources.taskRuntime.forSession({
-        sessionId: seed.sessionId, toolResultStore, allowBackgroundTasks, messageQueue,
+        sessionId: seed.sessionId, toolResultStore, allowBackgroundTasks, shellContinuation, messageQueue,
     });
     const hookSession = createHookSessionRuntime();
     const networkAccess = new NetworkAccessSession();
@@ -216,7 +218,7 @@ export function createRootSessionRuntime({
             ctx.commitToolBatch = async () => {
                 if (!hasCompleteToolPairs(history)) throw new Error("Tool batch is not completely paired; refusing another model request");
                 await persistence.save(snapshot(getSnapshotState()));
-                await ctx.agentJoin?.acknowledgeReported();
+                await ctx.taskJoin?.acknowledge();
             };
             ctx.toolHooks = {
                 get enabled() {return resources.hooks.enabled;},

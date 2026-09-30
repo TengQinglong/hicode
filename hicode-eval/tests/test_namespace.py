@@ -2,7 +2,7 @@ import unittest
 import tempfile
 from unittest.mock import patch
 from pathlib import Path
-from protocol import namespace_argv, package_install_argv
+from protocol import namespace_argv, package_install_argv, prepare_verifier_root
 
 class NamespaceTest(unittest.TestCase):
     def test_task_keeps_app_path_and_does_not_mount_tests(self):
@@ -57,3 +57,26 @@ class NamespaceTest(unittest.TestCase):
             self.assertIn('--timeout',argv)
             for invalid in ['numpy','../../outside==1','numpy==1/../../outside']:
                 with self.assertRaises(ValueError): package_install_argv([invalid],'/app/x',cache)
+
+    def test_public_helpers_are_read_only_and_distinct_from_hidden_verifier(self):
+        a=namespace_argv(['python'],'/p','/h','/l','/c',public_tests='/public')
+        i=a.index('/public');self.assertEqual(a[i-1],'--ro-bind');self.assertEqual(a[i+1],'/tests')
+        with self.assertRaises(ValueError):namespace_argv(['python'],'/p','/h','/l','/c','/hidden',public_tests='/public')
+
+    def test_chroot_verifier_has_one_root_mount_and_scoped_capability(self):
+        with patch('protocol.os.listdir',return_value=['etc','usr','proc','dev','app','tmp']):
+            a=namespace_argv(['python'],'/p','/h','/l','/c','/tests',root_overlay=True,private_root='/private')
+        self.assertEqual(a[a.index('/private')-1],'--bind');self.assertIn('CAP_SYS_CHROOT',a)
+        self.assertNotIn('/p',a);self.assertNotIn('--tmpfs',a)
+        self.assertEqual(a[a.index('/usr')-1],'--ro-bind')
+        with self.assertRaises(ValueError):namespace_argv(['python'],'/p','/h','/l','/c',private_root='/private')
+
+    def test_private_verifier_copy_preserves_executable_and_refuses_escaping_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)/'project';p.mkdir();f=p/'image';f.write_bytes(b'executable');f.chmod(0o755)
+            prepare_verifier_root(p,Path(tmp)/'root')
+            self.assertEqual((Path(tmp)/'root/app/image').read_bytes(),b'executable')
+            self.assertEqual((Path(tmp)/'root/app/image').stat().st_mode & 0o111,0o111)
+            self.assertTrue((Path(tmp)/'root/tmp').is_dir())
+            (p/'escape').symlink_to('/etc/passwd')
+            with self.assertRaises(ValueError):prepare_verifier_root(p,Path(tmp)/'bad')

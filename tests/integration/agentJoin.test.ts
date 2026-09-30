@@ -1,7 +1,7 @@
 import {waitForTaskCompletion} from "../../src/tasks/wait.js";
 import {expect, test} from "bun:test";
 import type {Message} from "../../src/llm/types.js";
-import {AgentTaskJoin} from "../../src/tasks/agentJoin.js";
+import {TaskJoin} from "../../src/tasks/taskJoin.js";
 import type {ApprovalEvent} from "../../src/permissions/approval.js";
 import {RuntimeMessageQueue} from "../../src/runtime/messageQueue.js";
 import {createTurnAbortController} from "../../src/runtime/abort.js";
@@ -75,7 +75,7 @@ test("two authorized delegates join before final answer without UI delivery or a
         const finals: string[] = [];
         try {
             const result = await runAgentForTest("build both parts", history, event => {
-                if (event.type === "agent_wait" && event.taskIds.length) gates[waits++]!.resolve();
+                if (event.type === "task_wait" && event.taskIds.length) gates[waits++]!.resolve();
                 if (event.type === "assistant_text" && event.phase === "final") finals.push(event.content);
             }, ctx, {callLLM: fake.callLLM});
             expect(result.reason).toBe("completed");
@@ -85,7 +85,7 @@ test("two authorized delegates join before final answer without UI delivery or a
             expect(fake.calls).toHaveLength(4);
             for (const call of calls) expect(history.filter(message => message.role === "tool" && message.tool_call_id === call.id)).toHaveLength(1);
             const notifications = await tasks.pendingNotifications();
-            for (const notification of notifications) expect(ctx.agentJoin!.accepts({source: "task_notification", id: notification.notificationId, taskId: notification.taskId, content: notification.message})).toBe(false);
+            for (const notification of notifications) expect(ctx.taskJoin!.accepts({source: "task_notification", id: notification.notificationId, taskId: notification.taskId, content: notification.message})).toBe(false);
         } finally {for (const gate of gates) gate.resolve(); await runtime.close();}
     });
 });
@@ -111,7 +111,7 @@ test.each(["user", "cancel"] as const)("waiting parent responds to %s without wa
         ]);
         try {
             const result = await runAgentForTest("implement", [], event => {
-                if (event.type === "agent_wait" && event.taskIds.length) {
+                if (event.type === "task_wait" && event.taskIds.length) {
                     if (mode === "cancel") controller.abort("user-cancel");
                     else queue.enqueueUser("additional constraint");
                 }
@@ -133,15 +133,15 @@ test("wait sees an already completed failed task and deduplicates its run, but s
         const ctx = createTestContext(cwd, {tasks});
         try {
             const started = await tasks.startAgent({request: {agentType: "Worker", description: "work", prompt: "work", parentToolCallId: "spawn"}, parentContext: ctx});
-            ctx.agentJoin!.register(started);
+            ctx.taskJoin!.register(started);
             await waitForTaskCompletion(tasks, [started.id], ctx.signal, "agent");
             const result = await executeToolResult("task", JSON.stringify({action: "wait", task_id: started.id}), ctx, "join");
             expect(result.outcome).toBe("failed");
             expect(result.modelContent).toContain("could not finish");
-            expect(ctx.agentJoin!.ids).toEqual([]);
+            expect(ctx.taskJoin!.ids).toEqual([]);
             const shell = await tasks.startShell({command: "printf ready", cwd, toolCallId: "shell"});
             await expect(waitForTaskCompletion(tasks, [shell.id], ctx.signal, "agent")).rejects.toThrow("unavailable agent");
-            expect(new AgentTaskJoin(tasks).ids).toEqual([]);
+            expect(new TaskJoin(tasks).ids).toEqual([]);
         } finally {await runtime.close();}
     });
 });
@@ -162,11 +162,11 @@ test("headless joins acknowledge notifications only after paired History is pers
                 host: {canUseTool: async () => ({behavior: "deny", message: "No interaction in this test"}), getPermissionRules: () => ({allow: [], ask: [], deny: []}),
                     getPermissionMode: () => "ask", getCollaborationMode: () => "build", getPermissionPromptPolicy: () => "never", setTodos() {}}});
             const started = await session.taskSession.startAgent({request: {agentType: "Worker", description: "work", prompt: "work", parentToolCallId: "spawn"}, parentContext: ctx});
-            ctx.agentJoin!.register(started);
+            ctx.taskJoin!.register(started);
             await waitForTaskCompletion(session.taskSession, [started.id], ctx.signal, "agent");
-            for (const input of await ctx.agentJoin!.collect()) {
+            for (const input of await ctx.taskJoin!.collect()) {
                 session.history.push({role: "user", origin: "task_notification", content: input.content});
-                await ctx.agentJoin!.consume(input);
+                await ctx.taskJoin!.consume(input);
             }
             expect(await session.taskSession.pendingNotifications()).toHaveLength(1);
             session.history.push({role: "assistant", content: null, tool_calls: [{id: "unpaired", type: "function", function: {name: "read_file", arguments: "{}"}}]});
@@ -198,19 +198,19 @@ test("explicit wait includes sibling delegates and leaves unfinished work pendin
         try {
             const board = await tasks.startAgent({request: {agentType: "Worker", description: "board result", prompt: "work", parentToolCallId: "board"}, parentContext: ctx});
             const ui = await tasks.startAgent({request: {agentType: "Worker", description: "ui result", prompt: "work", parentToolCallId: "ui"}, parentContext: ctx});
-            ctx.agentJoin!.register(board);
-            ctx.agentJoin!.register(ui);
+            ctx.taskJoin!.register(board);
+            ctx.taskJoin!.register(ui);
             const waiting = executeToolResult("task", JSON.stringify({action: "wait", task_id: ui.id}), ctx, "wait");
             gates[0]!.resolve();
             const result = await waiting;
             expect(result.outcome).toBe("ok");
             expect(result.modelContent).toContain("board result");
             expect(result.modelContent).not.toContain("ui result");
-            expect(ctx.agentJoin!.ids).toEqual([ui.id]);
+            expect(ctx.taskJoin!.ids).toEqual([ui.id]);
             const remaining = executeToolResult("task", JSON.stringify({action: "wait"}), ctx, "wait-any");
             gates[1]!.resolve();
             expect((await remaining).modelContent).toContain("ui result");
-            expect(ctx.agentJoin!.ids).toEqual([]);
+            expect(ctx.taskJoin!.ids).toEqual([]);
             expect((await executeToolResult("task", '{"action":"wait"}', ctx, "empty")).modelContent).toContain("No delegated");
         } finally {gates.forEach(gate => gate.resolve()); await runtime.close();}
     });
@@ -232,7 +232,7 @@ test.each(["user", "agent", "cancel"] as const)("task wait wakes on %s and prese
         ctx.agentMessaging = tasks.messaging;
         try {
             const started = await tasks.startAgent({request: {agentType: "Worker", description: "work", prompt: "work", parentToolCallId: "spawn"}, parentContext: ctx});
-            ctx.agentJoin!.register(started);
+            ctx.taskJoin!.register(started);
             let returned = false;
             const waiting = executeToolResult("task", '{"action":"wait"}', ctx, "wait").then(result => {returned = true; return result;});
             queue.enqueueUser("next turn only", "later");
@@ -243,7 +243,7 @@ test.each(["user", "agent", "cancel"] as const)("task wait wakes on %s and prese
             else queue.enqueueAgent("interface question", {sender: started.id, recipient: "parent", runCount: 1, intent: "message"});
             const result = await waiting;
             expect(result.outcome).toBe(kind === "cancel" ? "interrupted" : "ok");
-            expect(ctx.agentJoin!.ids).toEqual([started.id]);
+            expect(ctx.taskJoin!.ids).toEqual([started.id]);
             const inputs = queue.createAgentInputChannel(() => {}).drainSafeBoundary();
             expect(inputs).toHaveLength(kind === "cancel" ? 0 : 1);
             expect(queue.list()).toHaveLength(1);
@@ -293,7 +293,7 @@ test("one explicit wait spans child progress without another model call and pair
             gate.resolve();
             expect((await run).reply).toBe("Integrated the module.");
             expect(fake.calls).toHaveLength(3);
-            expect(ctx.agentJoin!.ids).toEqual([]);
+            expect(ctx.taskJoin!.ids).toEqual([]);
         } finally {progress.resolve(); gate.resolve(); await run; await runtime.close();}
     });
 });

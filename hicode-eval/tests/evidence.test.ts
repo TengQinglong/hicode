@@ -59,7 +59,7 @@ printf '%s\n' '{"type":"result","execution":"completed","grading":"passed","uid"
     }
     return '';
   });
-  const validate=spyOn(adapters,'validatePublicTask').mockResolvedValue({hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPackages:[],verifierPrelude:'none',verifierRootOverlay:false,commands:[],environment:{},verifierEnvironment:{}});
+  const validate=spyOn(adapters,'validatePublicTask').mockResolvedValue({hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPackages:[],verifierPrelude:'none',publicTestInputs:[],verifierChroot:false,verifierRootOverlay:false,commands:[],environment:{},verifierEnvironment:{}});
   const oldPath=process.env.PATH;
   // Advance the collection clock instead of spending 30 seconds on every regression.
   const now=Date.now();let clock=0;const time=spyOn(Date,'now').mockImplementation(()=>now+(clock++)*31000);

@@ -1,0 +1,374 @@
+import {expect, test} from "bun:test";
+import {mkdir, readFile, readdir, writeFile} from "node:fs/promises";
+import {join} from "node:path";
+import {createAgentRunner} from "../../src/agent/runner.js";
+import type {AgentEvent} from "../../src/agent/types.js";
+import {createCompactState} from "../../src/context/state.js";
+import {contentText} from "../../src/images/content.js";
+import {getSessionStorageDirectory} from "../../src/persistence/index.js";
+import {createRootSessionRuntime} from "../../src/runtime/sessionRuntime.js";
+import {runRootTurn} from "../../src/runtime/turnRuntime.js";
+import {createSDKThread} from "../../src/sdk/thread.js";
+import {loadSession} from "../../src/session/index.js";
+import {createChildTaskAccess} from "../../src/tasks/childAccess.js";
+import type {ShellRunnerLike} from "../../src/tools/bash/shellRunner.js";
+import {runAgentForTest} from "../helpers/agent.js";
+import {continuityHost} from "../helpers/continuity.js";
+import {executeToolResult} from "../helpers/executeTool.js";
+import {assistantText, assistantToolCall, createFakeLLM} from "../helpers/fakeLLM.js";
+import {createTestRuntimeResources} from "../helpers/runtimeResources.js";
+import {createTaskRuntimeForTest} from "../helpers/taskRuntime.js";
+import {withTempProject} from "../helpers/tempProject.js";
+import {createTestContext} from "../helpers/testContext.js";
+
+function fixture(cwd: string) {
+    const resources = createTestRuntimeResources(cwd);
+    const base = createTestContext(cwd, {permissionMode: "full-access", fileCommits: resources.fileCommits});
+    const tasks = resources.taskRuntime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
+    const ctx = createTestContext(cwd, {permissionMode: "full-access", tasks,
+        fileCommits: resources.fileCommits, toolResultStore: base.toolResultStore});
+    return {resources, tasks, ctx};
+}
+
+test("default 10s Bash hands off once, wait retrieves the same process exit and output", async () => {
+    await withTempProject(async cwd => {
+        const {resources, tasks, ctx} = fixture(cwd);
+        const events: string[] = [];
+        tasks.subscribe(event => events.push(event.type));
+        try {
+            const started = await executeToolResult("bash", JSON.stringify({
+                command: 'printf "%s\\n" "$$" >> starts; sleep 11; printf finished-once; exit 7',
+            }), ctx, "default-job");
+            expect(started.outcome).toBe("ok");
+            expect(started.runningTask).toBeDefined();
+            expect(started.modelContent).toContain("still running");
+            const id = started.runningTask!;
+            const waited = await executeToolResult("task", JSON.stringify({action: "wait", task_id: id}), ctx, "collect");
+            expect(waited.outcome).toBe("failed");
+            expect(waited.modelContent).toContain("exit code 7");
+            expect(waited.modelContent).toContain("finished-once");
+            expect(waited.completedTask?.taskId).toBe(id);
+            const again = await executeToolResult("task", JSON.stringify({action: "wait", task_id: id}), ctx, "again");
+            expect(again.modelContent).toEqual(waited.modelContent);
+            expect((await readFile(join(cwd, "starts"), "utf8")).trim().split("\n")).toHaveLength(1);
+            expect(events).toEqual(["task_started", "task_finished"]);
+        } finally {await resources.close();}
+    });
+}, 20_000);
+
+test("short ordinary Bash has inline output and no public task, notification or artifact", async () => {
+    await withTempProject(async cwd => {
+        const {resources, tasks, ctx} = fixture(cwd);
+        const events: string[] = [];
+        tasks.subscribe(event => events.push(event.type));
+        try {
+            const result = await executeToolResult("bash", '{"command":"printf short; exit 3"}', ctx, "short");
+            expect(result.outcome).toBe("failed");
+            expect(result.modelContent).toContain("short");
+            expect(result.modelContent).toContain("exit code 3");
+            expect(result.runningTask).toBeUndefined();
+            expect(result.completedTask).toBeUndefined();
+            expect(await tasks.list()).toEqual([]);
+            expect(await tasks.pendingNotifications()).toEqual([]);
+            expect(events).toEqual([]);
+            const files = await readdir(ctx.toolResultStore.sessionDir);
+            expect(files.filter(name => name.endsWith(".txt") || name.endsWith(".meta.json"))).toEqual([]);
+        } finally {await resources.close();}
+    });
+});
+
+test.each([{yieldMs: 500, timeoutMs: 100}, {yieldMs: 100, timeoutMs: 400}])(
+    "hard limit $timeoutMs remains independent of yield $yieldMs", async ({yieldMs, timeoutMs}) => {
+        await withTempProject(async cwd => {
+            const {resources, ctx} = fixture(cwd);
+            try {
+                const start = performance.now();
+                const result = await executeToolResult("bash", JSON.stringify({command: "sleep 30",
+                    yield_time_ms: yieldMs, timeout_ms: timeoutMs}), ctx, "limited");
+                const final = result.runningTask ? await executeToolResult("task", JSON.stringify({action: "wait", task_id: result.runningTask}), ctx, "wait") : result;
+                expect(final.outcome).toBe("failed");
+                expect(final.modelContent).toContain(`${timeoutMs}ms`);
+                expect(performance.now() - start).toBeLessThan(2000);
+            } finally {await resources.close();}
+        });
+    });
+
+test("waiting window begins after actual spawn, not Sandbox preparation", async () => {
+    await withTempProject(async cwd => {
+        const base = createTestContext(cwd, {permissionMode: "full-access"});
+        let prepare!: () => void;
+        const prepared = new Promise<void>(resolve => {prepare = resolve;});
+        let entered!: () => void;
+        const entering = new Promise<void>(resolve => {entered = resolve;});
+        const runner: ShellRunnerLike = {sandboxStatus: base.shellRunner.sandboxStatus, async run(input) {
+            entered(); await prepared; return base.shellRunner.run(input);
+        }};
+        const runtime = createTaskRuntimeForTest(cwd, runner);
+        const tasks = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
+        let handedOff = false;
+        const operation = tasks.runShell({command: "printf prepared", cwd, toolCallId: "prepare", waitMs: 100,
+            signal: base.signal, onHandoff() {handedOff = true;}});
+        try {
+            await entering;
+            await Bun.sleep(150);
+            expect(handedOff).toBe(false);
+            expect(await tasks.list()).toEqual([]);
+            prepare();
+            const result = await operation;
+            expect(result.kind).toBe("inline");
+            if (result.kind === "inline") expect(result.result.stdout).toBe("prepared");
+        } finally {prepare(); await operation; await runtime.close();}
+    });
+});
+
+test("handed-off finite Shell retains shared file coordination until completion", async () => {
+    await withTempProject(async cwd => {
+        const {resources, tasks, ctx} = fixture(cwd);
+        let acquired = false;
+        let commit: Promise<void> | undefined;
+        try {
+            const start = await executeToolResult("bash", '{"command":"sleep 0.4; printf complete","yield_time_ms":100}', ctx, "coordinated");
+            expect(start.runningTask).toBeDefined();
+            commit = resources.fileCommits.exclusive(ctx.signal, async () => {acquired = true;});
+            await Bun.sleep(30);
+            expect(acquired).toBe(false);
+            await executeToolResult("task", JSON.stringify({action: "wait", task_id: start.runningTask}), ctx, "wait");
+            await commit;
+            expect(acquired).toBe(true);
+            await tasks.startShell({command: "sleep 30", cwd, toolCallId: "service"});
+            await resources.fileCommits.exclusive(ctx.signal, async () => {});
+        } finally {await resources.close(); await commit;}
+    });
+});
+
+test("TaskJoin waits for finite Bash before accepting final text, but excludes explicit services", async () => {
+    await withTempProject(async cwd => {
+        const {resources, tasks, ctx} = fixture(cwd);
+        const fake = createFakeLLM([
+            assistantToolCall("bash", {command: 'node -e \'const fs = require("fs"); const timer = setInterval(() => {if (fs.existsSync("release")) {clearInterval(timer); process.stdout.write("verified");}}, 10);\'', yield_time_ms: 100}, "finite"),
+            assistantText("premature final"),
+            options => {
+                expect(JSON.stringify(options.messages)).toContain("is completed");
+                expect(JSON.stringify(options.messages)).not.toContain("premature final");
+                return assistantText("Result collected.");
+            },
+        ]);
+        const events: AgentEvent[] = [];
+        try {
+            const service = await tasks.startShell({command: "sleep 30", cwd, toolCallId: "service"});
+            const result = await runAgentForTest("run", [], event => {
+                events.push(event);
+                if (event.type === "task_wait" && event.taskIds.length) void writeFile(join(cwd, "release"), "go");
+            }, ctx, {callLLM: fake.callLLM});
+            expect(result.reply).toBe("Result collected.");
+            expect(events.some(event => event.type === "task_wait" && event.taskIds.length === 1)).toBe(true);
+            expect(ctx.taskJoin!.ids).toEqual([]);
+            expect((await tasks.get(service.id))?.status).toBe("running");
+        } finally {await resources.close();}
+    });
+});
+
+test("iteration budget cannot turn a pending finite Shell into a successful final answer", async () => {
+    await withTempProject(async cwd => {
+        const {resources, ctx} = fixture(cwd);
+        const fake = createFakeLLM([
+            assistantToolCall("bash", {command: "sleep 30", yield_time_ms: 100}, "finite"),
+            assistantText("all finished"),
+        ]);
+        try {
+            const result = await runAgentForTest("run", [], () => {}, ctx, {callLLM: fake.callLLM, maxIterations: 2});
+            expect(result.reason).toBe("max_turns");
+            expect(result.reply).not.toContain("all finished");
+        } finally {await resources.close();}
+    });
+});
+
+test("Shell result receipt is ACKed only after paired History is saved, and wait emits no duplicate notification", async () => {
+    await withTempProject(async (cwd, storage) => {
+        const resources = createTestRuntimeResources(cwd, {storage});
+        let id: string | undefined;
+        const fake = createFakeLLM([
+            assistantToolCall("bash", {command: "sleep 0.3; printf durable-evidence", yield_time_ms: 100}, "start"),
+            options => {
+                id = contentText(options.messages.find(message => message.role === "tool" && message.tool_call_id === "start")?.content ?? "").match(/Task: ([0-9a-f-]+)/)?.[1];
+                expect(id).toBeDefined();
+                return assistantToolCall("task", {action: "wait", task_id: id}, "wait");
+            },
+            async options => {
+                const saved = loadSession(storage, cwd, "durable-shell", resources.model)!;
+                expect(saved.history.find(message => message.role === "tool" && message.tool_call_id === "wait")?.content).toContain("durable-evidence");
+                expect(await session.taskSession.pendingNotifications()).toEqual([]);
+                expect(options.messages.filter(message => message.role === "user" && contentText(message.content).includes("<task-notification>"))).toEqual([]);
+                return assistantText("Collected once.");
+            },
+        ]);
+        resources.agentRuntime.runAgent = createAgentRunner({callLLM: fake.callLLM,
+            compactHistory: async ({preTokenCount}) => ({compacted: false, preTokenCount, threshold: Number.MAX_SAFE_INTEGER})});
+        const session = createRootSessionRuntime({resources, seed: {sessionId: "durable-shell",
+            history: [{role: "system", content: "fixture"}], compactState: createCompactState()}});
+        const state = () => ({todos: [], permissionMode: "full-access" as const, collaborationMode: "build" as const, uiEvents: []});
+        try {
+            const result = await runRootTurn({resources, session, prompt: "run", signal: new AbortController().signal,
+                host: continuityHost, onEvent() {}, onHookResult() {}, onLifecycleIssue(issue) {throw issue.error;}, getSnapshotState: state});
+            expect(result.reply).toBe("Collected once.");
+            expect(id).toBeDefined();
+        } finally {await resources.close();}
+    });
+});
+
+test("SDK finite continuation is available while services stay disabled; Thread.close cleans pending Shell", async () => {
+    await withTempProject(async (cwd, storage) => {
+        const resources = createTestRuntimeResources(cwd, {storage});
+        const fake = createFakeLLM([
+            assistantToolCall("bash", {command: "sleep 30", run_in_background: true}, "service"),
+            assistantToolCall("bash", {command: 'printf "%s" "$$" > sdk-pid; sleep 30', yield_time_ms: 100}, "finite"),
+        ]);
+        resources.agentRuntime.runAgent = createAgentRunner({callLLM: fake.callLLM,
+            compactHistory: async ({preTokenCount}) => ({compacted: false, preTokenCount, threshold: Number.MAX_SAFE_INTEGER})});
+        const thread = await createSDKThread({resources, seed: {sessionId: "sdk-shell", history: [{role: "system", content: "fixture"}], compactState: createCompactState()},
+            state: {todos: [], permissionMode: "full-access", collaborationMode: "build", uiEvents: []}, resumed: false, onClose() {}});
+        const tasks = resources.taskRuntime.forSession({sessionId: thread.id, toolResultStore: createTestContext(cwd).toolResultStore});
+        try {
+            expect((await thread.run("run", {maxIterations: 2})).stopReason).toBe("max_turns");
+            expect((await tasks.list()).filter(task => task.status === "running")).toHaveLength(1);
+            const pid = Number(await readFile(join(cwd, "sdk-pid"), "utf8"));
+            expect(pid).toBeGreaterThan(0);
+            await thread.close();
+            expect(() => process.kill(pid, 0)).toThrow();
+            expect(tasks.hasRunning()).toBe(false);
+        } finally {await thread.close(); await resources.close();}
+    });
+});
+
+test("child default continuation cannot wait for or stop parent Shells", async () => {
+    await withTempProject(async cwd => {
+        const {resources, tasks, ctx} = fixture(cwd);
+        const child = createChildTaskAccess(tasks, ctx.toolResultStore).tasks;
+        try {
+            const parent = await tasks.startShell({command: "sleep 30", cwd, toolCallId: "parent"});
+            const own = await child.runShell({command: "sleep 0.3; printf child", cwd, toolCallId: "child", waitMs: 100,
+                signal: ctx.signal, onHandoff() {}});
+            expect(own.kind).toBe("task");
+            expect(await child.get(parent.id)).toBeUndefined();
+            expect(await child.stop(parent.id)).toBeUndefined();
+            expect((await child.list()).filter(task => task.kind === "shell").map(task => task.owner.toolCallId)).toEqual(["child"]);
+        } finally {await resources.close();}
+    });
+});
+
+test("output promotion failure preserves real exit and returns a failed delivery", async () => {
+    await withTempProject(async cwd => {
+        const {resources, ctx, tasks} = fixture(cwd);
+        ctx.toolResultStore.promoteFile = async () => {throw new Error("fixture storage failure");};
+        try {
+            const start = await executeToolResult("bash", '{"command":"sleep 0.3; printf done","yield_time_ms":100}', ctx, "storage");
+            const result = await executeToolResult("task", JSON.stringify({action: "wait", task_id: start.runningTask}), ctx, "wait");
+            expect(result.outcome).toBe("failed");
+            expect(result.modelContent).toContain("exit code 0");
+            expect(result.modelContent).toContain("fixture storage failure");
+            expect((await tasks.get(start.runningTask!))?.status).toBe("failed");
+        } finally {await resources.close();}
+    });
+});
+
+test("startup service output failure is visible alongside captured output and real exit", async () => {
+    await withTempProject(async cwd => {
+        const {resources, ctx} = fixture(cwd);
+        ctx.toolResultStore.promoteFile = async () => {throw new Error("fixture storage failure");};
+        try {
+            const result = await executeToolResult("bash", '{"command":"printf captured","run_in_background":true}', ctx, "failed-output");
+            expect(result.outcome).toBe("failed");
+            expect(result.modelContent).toContain("captured");
+            expect(result.modelContent).toContain("exit 0");
+            expect(result.modelContent).toContain("fixture storage failure");
+        } finally {await resources.close();}
+    });
+});
+
+test("failed handoff terminates its process instead of leaking a running Task", async () => {
+    await withTempProject(async cwd => {
+        const {resources, ctx, tasks} = fixture(cwd);
+        try {
+            await expect(tasks.runShell({command: 'printf "%s" "$$" > failed-pid; sleep 30', cwd, toolCallId: "handoff", waitMs: 100,
+                signal: ctx.signal, onHandoff() {throw new Error("fixture handoff failure");}})).rejects.toThrow("fixture handoff failure");
+            const pid = Number(await readFile(join(cwd, "failed-pid"), "utf8"));
+            expect(() => process.kill(pid, 0)).toThrow();
+            expect(tasks.hasRunning()).toBe(false);
+        } finally {await resources.close();}
+    });
+});
+
+test("failed Task publication cleans the process and exposes no unregistered task", async () => {
+    await withTempProject(async cwd => {
+        const {resources, ctx, tasks} = fixture(cwd);
+        try {
+            await tasks.initialize();
+            const path = join(getSessionStorageDirectory(resources.storage, cwd, ctx.sessionId), "tasks", "events.jsonl");
+            await mkdir(path, {recursive: true});
+            const result = await executeToolResult("bash", JSON.stringify({command: 'printf "%s" "$$" > publication-pid; sleep 30', yield_time_ms: 100}), ctx, "publication");
+            expect(result.outcome).toBe("failed");
+            const pid = Number(await readFile(join(cwd, "publication-pid"), "utf8"));
+            expect(() => process.kill(pid, 0)).toThrow();
+            expect(await tasks.list()).toEqual([]);
+            expect(tasks.hasRunning()).toBe(false);
+        } finally {await resources.close();}
+    });
+});
+
+test.each(["turn-cancel", "root-close"] as const)("%s before handoff terminates the private Shell", async mode => {
+    await withTempProject(async cwd => {
+        const base = createTestContext(cwd);
+        let spawned!: () => void;
+        const running = new Promise<void>(resolve => {spawned = resolve;});
+        const runner: ShellRunnerLike = {...base.shellRunner, run(input) {
+            return base.shellRunner.run({...input, onStarted() {input.onStarted?.(); spawned();}});
+        }};
+        const runtime = createTaskRuntimeForTest(cwd, runner);
+        const tasks = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
+        const controller = new AbortController();
+        const operation = tasks.runShell({command: "sleep 30", cwd, toolCallId: "private", waitMs: 10_000,
+            signal: controller.signal, onHandoff() {throw new Error("Must not hand off after cancellation");}});
+        try {
+            await running;
+            expect(await tasks.list()).toEqual([]);
+            if (mode === "turn-cancel") controller.abort("user-cancel");
+            else await runtime.close();
+            const result = await operation;
+            expect(result.kind).toBe("inline");
+            if (result.kind === "inline") expect(result.result.termination).toMatchObject({kind: "aborted"});
+            expect(tasks.hasRunning()).toBe(false);
+        } finally {controller.abort("shutdown"); await operation; await runtime.close();}
+    });
+});
+
+test("large inline output is stored without publishing a short-lived Task", async () => {
+    await withTempProject(async cwd => {
+        const {resources, ctx, tasks} = fixture(cwd);
+        try {
+            const result = await executeToolResult("bash", JSON.stringify({command: 'node -e "process.stdout.write(String.fromCharCode(120).repeat(40000))"'}), ctx, "large");
+            expect(result.outcome).toBe("ok");
+            expect(result.persisted).toBeDefined();
+            expect(await readFile(result.persisted!.path, "utf8")).toHaveLength(40000);
+            expect(await tasks.list()).toEqual([]);
+            expect(await tasks.pendingNotifications()).toEqual([]);
+        } finally {await resources.close();}
+    });
+});
+
+test("one-shot Host omits hard timeout and rejects explicit yield without starting a Task", async () => {
+    await withTempProject(async cwd => {
+        const {resources, ctx} = fixture(cwd);
+        const tasks = resources.taskRuntime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore,
+            allowBackgroundTasks: false, shellContinuation: false});
+        const limits: Array<number | null | undefined> = [];
+        const runner: ShellRunnerLike = {...ctx.shellRunner, async run(input) {limits.push(input.timeoutMs); return ctx.shellRunner.run(input);}};
+        const oneShot = {...ctx, tasks, shellRunner: runner};
+        try {
+            expect((await executeToolResult("bash", '{"command":"printf once"}', oneShot, "oneshot")).outcome).toBe("ok");
+            expect(limits).toEqual([null]);
+            expect((await executeToolResult("bash", '{"command":"printf never","yield_time_ms":100}', oneShot, "yield")).outcome).toBe("failed");
+            expect(limits).toHaveLength(1);
+            expect(await tasks.list()).toEqual([]);
+        } finally {await resources.close();}
+    });
+});

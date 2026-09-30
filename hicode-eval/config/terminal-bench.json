@@ -759,7 +759,10 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "gcc"
+    ]
   },
   "cobol-modernization": {
     "hashes": {
@@ -1140,7 +1143,11 @@
       "setuptools==78.1.1"
     ],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "gcc",
+      "g++"
+    ]
   },
   "video-processing": {
     "hashes": {
@@ -1168,7 +1175,10 @@
       "opencv-contrib-python==4.11.0.86",
       "toml==0.10.2"
     ],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "ffmpeg"
+    ]
   },
   "adaptive-rejection-sampler": {
     "hashes": {
@@ -1309,7 +1319,10 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "gcc"
+    ]
   },
   "path-tracing": {
     "hashes": {
@@ -1338,7 +1351,9 @@
       "pillow==11.2.1",
       "numpy==2.3.1"
     ],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "verifierRootOverlay": true,
+    "verifierChroot": true
   },
   "path-tracing-reverse": {
     "hashes": {
@@ -1367,7 +1382,9 @@
       "pillow==11.2.1",
       "numpy==2.3.1"
     ],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "verifierRootOverlay": true,
+    "verifierChroot": true
   },
   "query-optimize": {
     "hashes": {
@@ -1395,7 +1412,10 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "sqlite3"
+    ]
   },
   "tune-mjcf": {
     "hashes": {
@@ -1672,6 +1692,12 @@
     },
     "verifierEnvironment": {
       "SE_CHROMEDRIVER": "/usr/bin/chromedriver"
-    }
+    },
+    "publicTestInputs": [
+      {
+        "source": "environment/filter.py",
+        "target": "filter.py"
+      }
+    ]
   }
 }

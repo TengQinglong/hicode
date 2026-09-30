@@ -19,6 +19,7 @@ import {prepareCommandReadAccess} from "./readAccess.js";
 import {checkMemoryStoragePath} from "../../memory/publicationAccess.js";
 import {analyzeReadCommand} from "../../permissions/shellRead.js";
 import {isPathInside} from "../../permissions/pathGuard.js";
+import {taskNotificationId} from "../../tasks/notifications.js";
 
 const inputSchema = z.object({
     command: z.string().describe(
@@ -35,13 +36,13 @@ const inputSchema = z.object({
         .min(100)
         .max(600_000)
         .optional()
-        .describe("Execution timeout in milliseconds, maximum 600000; foreground default is 30000. Set a sufficient timeout for finite installs/builds/tests instead of using a shell timeout utility. Foreground and yielded commands terminate on expiry. Omit with run_in_background=true; an accidental value is ignored safely."),
+        .describe("Optional total execution limit in milliseconds, maximum 600000. Omit for no implicit hard timeout; explicit limits start when the process starts and remain in effect after yielding. Omit with run_in_background=true; an accidental value is ignored safely."),
     run_in_background: z
         .boolean()
         .optional()
         .describe("For services, GUIs and watchers. Returns a task ID immediately; use task to inspect/stop. Omit timeout_ms. Runs until exit, explicit stop or Runtime shutdown. In Ask mode background tasks can use existing Session network grants but cannot request new ones; run installs in the foreground when approval may be needed."),
     yield_time_ms: z.number().int().min(100).max(30_000).optional()
-        .describe("Wait 100-30000ms; return final output if done, otherwise a Task ID while the same process continues. Requires a host supporting background tasks. timeout_ms still caps total execution; omitting it leaves no timeout. In Ask mode this invocation cannot request new network approvals, even before yielding. Do not combine with run_in_background=true."),
+        .describe("Wait 100-30000ms (default 10000 in continuable execution); return final output or the same running process as a Task ID. timeout_ms is a separate total execution limit. In restricted Ask, explicit yield has no human network approval channel; omit it to keep foreground interaction. One-shot hosts and protected file searches do not accept yield. Do not combine with run_in_background=true."),
     sandbox_permissions: z
         .enum(["use_default", "require_escalated"])
         .optional()
@@ -210,7 +211,8 @@ function formatObservedBackgroundTask(task: ShellTaskSnapshot, yielded = false):
         `Task: ${task.id}`,
         `Status: ${task.status}`,
         `Termination: ${shellTaskTermination(task)}`,
-        task.output || task.outputIssue || "(no output)",
+        task.output || "(no output)",
+        ...(task.outputIssue ? [`Output delivery issue: ${task.outputIssue}`] : []),
         ...(task.outputResult
             ? [`Saved output: ${JSON.stringify(task.outputResult.path)}`]
             : []),
@@ -224,7 +226,7 @@ export const bashTool: Tool<typeof inputSchema> = {
 - Each call is a separate process: pass cwd rather than relying on a previous cd. Run tests/builds directly; the runtime preserves and budgets output. Do not add tail/head/grep just to shorten results or mask failures with || echo. Search returned saved paths with rg, then read_file at relevant lines; rerun only after a relevant change or for a new check. Avoid byte truncation of non-ASCII text.
 - Access uses the runtime's current sandbox and approval policy. Network authorization follows actual domains/ports; dependency downloads do not inherently require leaving the sandbox. For a necessary command blocked by sandbox permissions, request require_escalated for that operation rather than changing implementation to evade the restriction. A denial or unavailable approval channel is not permission to bypass it.
 - Local search uses rg --files (paths), ls (directory entries), rg -n (content) and rg -F (literal text). Quote globs and paths; use -e for the pattern. Recognized read commands run with no writes or network, trusted host programs, no rg config/global-ignore files, and exact authorized read scopes. Read-only roles support literal rg/ls/pwd/cat/head/tail/wc/echo commands and safe combinations, not shell expansion, redirection, preprocessing or arbitrary programs. Search saved output using its exact provided path; private storage directory scans are forbidden. Use read_file before editing: Bash output does not establish a file read version. Missing rg is a host setup issue, not a reason to install during the task.
-- Run a minimal existing syntax/build/test check before starting a server. Use run_in_background for services, GUIs and watchers, omit timeout_ms, and manage the returned task ID with task. For a finite command, yield_time_ms can return the same running process as a Task; use task wait with its ID when its result blocks work, not sleep/pgrep loops. Do not use shell &. For finite subprocess/signal tests, use one foreground test program to create, signal, wait for and clean up its own children in a finally block; keep normal Sandbox and permission checks. A foreground timeout terminates the process and its children. Reuse an existing managed service; stop it before restarting and do not overlap instances or take over unrelated processes with lsof/kill.
+- Run a minimal existing syntax/build/test check before starting a server. Use run_in_background for services, GUIs and watchers, omit timeout_ms, and manage the returned task ID with task. Ordinary continuable commands wait 10 seconds by default, then return the same running process as a Task; yield_time_ms changes only that window. Use task wait with its ID when its result blocks work, not sleep/pgrep loops. Omitted timeout_ms sets no hard execution limit; an explicit timeout terminates the process and its children even after yield. Restricted Ask commands stay foreground for network interaction unless explicitly yielded; one-shot Hosts and protected file commands stay foreground. Do not use shell &. For finite subprocess/signal tests, use one foreground test program to create, signal, wait for and clean up its own children in a finally block; keep normal Sandbox and permission checks. Reuse an existing managed service; stop it before restarting and do not overlap instances or take over unrelated processes with lsof/kill.
 - For a port conflict, use supported temporary CLI/env options without changing project defaults or stopping unrelated processes. A genuine permission denial must not be bypassed by switching ports.
 - Local HTTP probes verify endpoints only: use bounded readiness retries and fail on HTTP errors (for example --fail-with-body); inspect required status/fields. Do not use fixed sleeps or treat HTTP 200 as browser verification. Do not create missing browser capability; existing E2E runs unchanged, and new automation infrastructure requires an explicit user request.
 - Git: inspect status/diff/log. Commit and push each require authorization; check staged, unstaged and untracked changes before committing. Stage exact paths with git add -- <paths>. Do not use git add . or git add -A, skip hooks, change Git config, auto-stash/reset/clean or amend without authorization. Check branch, remote and outgoing commits before pushing; verify actual results.`,
@@ -347,28 +349,39 @@ export const bashTool: Tool<typeof inputSchema> = {
         const readAccess = sandbox_permissions !== "require_escalated"
             ? await prepareCommandReadAccess(command, commandCwd, ctx) : undefined;
         if (readAccess && (run_in_background || yield_time_ms !== undefined)) {
-            return {content: "Read-only searches run in the foreground with a timeout; do not start them as background tasks.", outcome: "failed" as const};
+            return {content: "Read-only searches must finish in the foreground; do not yield or start them as background tasks.", outcome: "failed" as const};
         }
         const effectiveSandboxPermissions = readAccess || workspace ? "use_default" as const : ctx.permissionMode === "full-access" && ctx.allowFullAccess
             ? "require_escalated" as const : sandbox_permissions;
         const networkEvidence = structuredClone(ctx.approvalEvidence?.() ?? []);
-        const detached = run_in_background === true || yield_time_ms !== undefined;
+        const restrictedHuman = ctx.permissionMode === "ask" && effectiveSandboxPermissions !== "require_escalated" &&
+            ctx.shellRunner.sandboxStatus.kind === "ready" && ctx.shellRunner.sandboxStatus.networkMode === "restricted";
+        const canContinue = !!ctx.tasks?.shellContinuation && !workspace && !readAccess && (!restrictedHuman || yield_time_ms !== undefined);
+        if (yield_time_ms !== undefined && !canContinue) return {content:
+            "This command requires foreground execution (one-shot Host or protected file access). Omit yield_time_ms; it will wait for completion, explicit timeout, or cancellation without an implicit 30-second limit.", outcome: "failed" as const};
+        const managed = run_in_background === true || canContinue;
+        let interaction: Pick<ToolContext, "canUseTool" | "onApprovalEvent"> | undefined = run_in_background || (restrictedHuman && yield_time_ms !== undefined)
+            ? undefined : {canUseTool: ctx.canUseTool, onApprovalEvent: ctx.onApprovalEvent};
         const networkBudget = new ApprovalBudget();
+        const networkBase: ToolContext = {...ctx, canUseTool: async () => ({behavior: "deny", message: "Task has no human interaction channel"}),
+            onApprovalEvent: undefined, signal: AbortSignal.abort("task-request-signal-required"), approvalBudget: networkBudget};
         const networkAccess = ctx.networkAccess ? {
             session: ctx.networkAccess,
             canUseTool: async (_tool: string, message: string, input: unknown, options?: Parameters<ToolContext["canUseTool"]>[3]) => {
-                const requestSignal = options?.signal ?? ctx.signal;
-                const networkContext: ToolContext = {...ctx, signal: requestSignal,
-                    approvalBudget: networkBudget, approvalEvidence: () => networkEvidence,
-                    onApprovalEvent: detached ? undefined : ctx.onApprovalEvent,
-                    permissionPromptPolicy: detached || ctx.signal.aborted ? "never" : ctx.permissionPromptPolicy};
+                const requestSignal = options?.signal ?? networkBase.signal;
+                const networkContext: ToolContext = {...networkBase, signal: requestSignal,
+                    canUseTool: (tool, message, input, options) => interaction?.canUseTool(tool, message, input, options) ??
+                        Promise.resolve({behavior: "deny", message: "Task has no human interaction channel"}),
+                    approvalEvidence: () => networkEvidence,
+                    onApprovalEvent: event => interaction?.onApprovalEvent?.(event),
+                    permissionPromptPolicy: interaction && !ctx.signal.aborted ? ctx.permissionPromptPolicy : "never"};
                 const resolution = await requestApproval(networkContext, "bash", {command, cwd: commandCwd,
                     connection: input}, message, invocation.toolCallId, {...options, signal: requestSignal});
                 return resolution.decision;
             },
-            canReview: () => ctx.permissionMode === "auto-review" || (!detached && !ctx.signal.aborted && ctx.permissionPromptPolicy === "onRequest"),
+            canReview: () => networkBase.permissionMode === "auto-review" || (!!interaction && !ctx.signal.aborted && ctx.permissionPromptPolicy === "onRequest"),
         } : undefined;
-        if (run_in_background || yield_time_ms !== undefined) {
+        if (managed) {
             if (
                 effectiveSandboxPermissions !== "require_escalated" &&
                 ctx.shellRunner.sandboxStatus.kind === "unavailable"
@@ -400,7 +413,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                         outcome: "failed" as const,
                     };
                 }
-                const task = await ctx.tasks.startShell({
+                const taskInput = {
                     command,
                     cwd: commandCwd,
                     toolCallId: invocation.toolCallId,
@@ -408,12 +421,24 @@ export const bashTool: Tool<typeof inputSchema> = {
                     sandboxPermissions: effectiveSandboxPermissions,
                     writableRoots: ctx.directoryAccess.listDirectories(),
                     networkAccess,
-                    ...(yield_time_ms !== undefined ? {waitMs: yield_time_ms, timeoutMs: timeout_ms, signal: ctx.signal} : {}),
-                });
+                };
+                const started = run_in_background ? {kind: "task" as const, task: await ctx.tasks.startShell(taskInput)}
+                    : await ctx.tasks.runShell({...taskInput, waitMs: yield_time_ms ?? 10_000, timeoutMs: timeout_ms,
+                        signal: ctx.signal, onHandoff: () => {interaction = undefined;}});
+                if (started.kind === "inline") {
+                    const status = started.outputIssue ? `\nOutput delivery failed: ${started.outputIssue}` : "";
+                    return {content: (started.persisted ? formatShellStatus(started.result) : formatShellResult(started.result)) + status,
+                        ...(started.persisted ? {persisted: started.persisted, displayContent: formatShellStatus(started.result) + "\n" + started.persisted.preview + status} : {}),
+                        outcome: started.outputIssue ? "failed" as const : shellOutcome(started.result)};
+                }
+                const task = started.task;
                 if (task.status !== "running") {
                     return {
-                        content: formatObservedBackgroundTask(task, yield_time_ms !== undefined),
-                        outcome: task.status === "completed"
+                        content: formatObservedBackgroundTask(task, !run_in_background),
+                        completedTask: {taskId: task.id, notificationId: taskNotificationId(task.id, 1)},
+                        outcome: task.outputIssue
+                            ? "failed" as const
+                            : task.status === "completed"
                             ? "ok" as const
                             : task.status === "cancelled"
                                 ? "interrupted" as const
@@ -421,14 +446,15 @@ export const bashTool: Tool<typeof inputSchema> = {
                     };
                 }
                 return {
+                    ...(!run_in_background ? {runningTask: task.id} : {}),
                     content: [
-                        yield_time_ms !== undefined ? "Command is still running and moved to the background (same process)." : "Background task started.",
+                        !run_in_background ? "Command is still running and moved to the background (same process). This is not a successful command result." : "Background task started.",
                         `Task: ${task.id}`,
                         "Lifecycle: managed by the current HiCode Runtime; terminates when HiCode exits.",
                         `Status: ${task.status}`,
                         `Cwd: ${displayToolPath(ctx.cwd, commandCwd) || "."}`,
-                        ...(timeout_ms !== undefined && yield_time_ms === undefined
-                            ? ["Ignored timeout_ms: background tasks do not use the foreground execution timeout."]
+                        ...(timeout_ms !== undefined && run_in_background
+                            ? ["Ignored timeout_ms: explicit background services do not use a hard execution timeout."]
                             : []),
                         runningOutput(task),
                         "Use task to inspect output, completion status or stop the task.",
@@ -449,7 +475,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                     command,
                     cwd: commandCwd,
                     signal: ctx.signal,
-                    ...(timeout_ms !== undefined ? {timeoutMs: timeout_ms} : {}),
+                    timeoutMs: timeout_ms ?? null,
                     outputFilePath: capturePath,
                     maxOutputBytes: ctx.toolResultStore.maxArtifactBytes,
                     previewChars: 30_000,
@@ -488,7 +514,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                 } catch (error) {
                     return {
                         content: `${formatShellResult(result)}\n\nFailed to save full output: ${error instanceof Error ? error.message : String(error)}`,
-                        outcome: shellOutcome(result),
+                        outcome: "failed" as const,
                     };
                 }
             } finally {

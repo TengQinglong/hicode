@@ -32,7 +32,7 @@ function streamLabel(
     activityLabel?: string
 ): string {
     if (!modelStream) return activityLabel ?? "Thinking...";
-    if (modelStream.waitingAgents) return `Waiting for ${modelStream.waitingAgents} ${modelStream.waitingAgents === 1 ? "agent" : "agents"} · /tasks`;
+    if (modelStream.waitingTasks) return `Waiting for ${modelStream.waitingTasks} ${modelStream.waitingTasks === 1 ? "task" : "tasks"} · /tasks`;
     switch (modelStream.phase) {
         case "requesting":
             return "Waiting for model response...";

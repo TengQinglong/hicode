@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { prepareTaskInputs, profiles } from '../src/host/publicTasks.js';
+import { prepareTaskInputs, preparePublicTestInputs, profiles } from '../src/host/publicTasks.js';
 import { tree } from '../src/host/store.js';
 
 const content = Buffer.from([0, 255, 10, 128, 42]);
@@ -95,8 +95,25 @@ test('catalog includes reviewed tasks with the exact newly required inputs', asy
   expect(available['fix-git']!.initializer).toEqual({ kind: 'bash', file: 'setup.sh' });
   expect(available['vulnerable-secret']!.initializer).toEqual({ kind: 'bash', file: 'eval-setup.sh' });
   expect(available['query-optimize']!.inputs.map(file => file.target)).toEqual(['my-sql-query.sql', 'oewn.sqlite']);
+  expect(available['query-optimize']!.commands).toContain('sqlite3');
+  expect(available['break-filter-js-from-html']!.publicTestInputs).toEqual([{source:'environment/filter.py',target:'filter.py'}]);
+  expect(available['path-tracing']!.verifierChroot).toBe(true);
+  expect(available['path-tracing-reverse']!.verifierChroot).toBe(true);
   expect(available['financial-document-processor']!.inputs.filter(file => file.target.startsWith('seed-documents/'))).toHaveLength(17);
   expect(available['tune-mjcf']!.packages).toEqual(['mujoco==3.3.5']);
   expect(available['bn-fit-modify']!.verifierPackages).toEqual(['pandas==2.3.2', 'scipy==1.16.1']);
   expect(available['overfull-hbox']!.inputs.map(file => file.target)).toEqual(['main.tex', 'input.tex', 'synonyms.txt']);
+});
+
+test('public test mount only stages already-public files, never hidden tests', async () => {
+  await fixture(async (root, task) => {
+    await mkdir(join(task,'tests'));await writeFile(join(task,'tests','answer.py'),'hidden');
+    const helpers=join(root,'helpers');
+    await preparePublicTestInputs(task,helpers,{...profile,publicTestInputs:[{source:'environment/input.bin',target:'filter.py'}]});
+    expect(await readFile(join(helpers,'filter.py'))).toEqual(content);
+    expect(Object.keys(await tree(helpers))).toEqual(['filter.py']);
+    await expect(preparePublicTestInputs(task,join(root,'hidden'),{...profile,publicTestInputs:[{source:'tests/answer.py',target:'answer.py'}]})).rejects.toThrow('already be public');
+    await expect(preparePublicTestInputs(task,join(root,'escape'),{...profile,publicTestInputs:[{source:'environment/input.bin',target:'../escape'}]})).rejects.toThrow();
+    await expect(preparePublicTestInputs(task,join(root,'invalid'),{...profile,verifierChroot:true})).rejects.toThrow('private root');
+  });
 });

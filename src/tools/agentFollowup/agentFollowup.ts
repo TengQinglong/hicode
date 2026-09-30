@@ -31,7 +31,7 @@ export const agentFollowupTool: Tool<typeof inputSchema> = {
         ctx.signal.throwIfAborted();
         try {
             const {task, delivery} = await ctx.tasks.followup(target, message);
-            ctx.agentJoin?.register(task);
+            ctx.taskJoin?.register(task);
             const queued = delivery === "queued";
             return {content: [
                 `${queued ? "Assignment queued" : "Agent continued"}: ${task.agentName ?? task.agentType}`,

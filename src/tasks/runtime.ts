@@ -19,6 +19,7 @@ import {
 } from "./managed.js";
 import {TaskNotificationCenter, taskNotificationId, isExpectedShellShutdown} from "./notifications.js";
 import {createShellTask, runShellTask} from "./shellTask.js";
+import type {FileCommitCoordinator} from "../tools/shared/fileCommit.js";
 import {
     createAgentTask,
     resetAgentRun,
@@ -31,6 +32,8 @@ import type {
     ShellTaskSnapshot,
     StartAgentTaskInput,
     StartShellTaskInput,
+    RunShellTaskInput,
+    RunShellTaskResult,
     TaskEventEnvelope,
     TaskNotification,
     RunningTaskSummary,
@@ -81,6 +84,7 @@ class TaskSession implements TaskSessionLike {
     initialize(): Promise<void> {
         return this.ready;
     }
+    get shellContinuation(): boolean {return this.binding.shellContinuation ?? this.binding.allowBackgroundTasks !== false;}
 
     async startShell(input: StartShellTaskInput): Promise<ShellTaskSnapshot> {
         if (this.binding.allowBackgroundTasks === false) {
@@ -88,6 +92,12 @@ class TaskSession implements TaskSessionLike {
         }
         await this.ready;
         return this.runtime.startShell(this.binding, input);
+    }
+
+    async runShell(input: RunShellTaskInput): Promise<RunShellTaskResult> {
+        if (!this.shellContinuation) throw new Error("This execution mode requires one-shot Shell execution");
+        await this.ready;
+        return this.runtime.runShell(this.binding, input);
     }
 
     async startAgent(input: StartAgentTaskInput): Promise<AgentTaskSnapshot> {
@@ -172,7 +182,8 @@ class TaskRuntime implements TaskRuntimeLike {
         private readonly createSubagentThread: CreateSubagentThread,
         private readonly journal: TaskJournalLike,
         private readonly subagents: SubagentRegistry,
-        private readonly memory:MemoryRuntimeLike
+        private readonly memory:MemoryRuntimeLike,
+        private readonly fileCommits: FileCommitCoordinator
     ) {
     }
 
@@ -199,7 +210,14 @@ class TaskRuntime implements TaskRuntimeLike {
         return this.trackStart(() => this.startMemoryOwned(binding, input));
     }
     startShell(binding: TaskSessionBinding, input: StartShellTaskInput): Promise<ShellTaskSnapshot> {
-        return this.trackStart(() => this.startShellOwned(binding, input));
+        return this.trackStart(async () => {
+            const result = await this.startShellOwned(binding, input);
+            if (result.kind !== "task") throw new Error("Background Shell did not create a Task");
+            return result.task;
+        });
+    }
+    runShell(binding: TaskSessionBinding, input: RunShellTaskInput): Promise<RunShellTaskResult> {
+        return this.trackStart(() => this.startShellOwned(binding, input, input));
     }
     startAgent(binding: TaskSessionBinding, input: StartAgentTaskInput): Promise<AgentTaskSnapshot> {
         return this.trackStart(() => this.startAgentOwned(binding, input));
@@ -245,12 +263,13 @@ class TaskRuntime implements TaskRuntimeLike {
 
     private async startShellOwned(
         binding: TaskSessionBinding,
-        input: StartShellTaskInput
-    ): Promise<ShellTaskSnapshot> {
+        input: StartShellTaskInput,
+        continuation?: RunShellTaskInput
+    ): Promise<RunShellTaskResult> {
         this.assertOpen();
-        if (input.waitMs !== undefined && (!Number.isInteger(input.waitMs) || input.waitMs < 100 || input.waitMs > 30_000)) throw new Error("Wait time must be 100–30000ms");
-        if (input.timeoutMs !== undefined && (!Number.isInteger(input.timeoutMs) || input.timeoutMs < 100 || input.timeoutMs > 600_000)) throw new Error("Execution timeout must be 100–600000ms");
-        input.signal?.throwIfAborted();
+        if (continuation && (!Number.isInteger(continuation.waitMs) || continuation.waitMs < 100 || continuation.waitMs > 30_000)) throw new Error("Wait time must be 100–30000ms");
+        if (continuation?.timeoutMs !== undefined && (!Number.isInteger(continuation.timeoutMs) || continuation.timeoutMs < 100 || continuation.timeoutMs > 600_000)) throw new Error("Execution timeout must be 100–600000ms");
+        continuation?.signal.throwIfAborted();
         const releaseSlot = this.reserveTaskSlot();
         try {
             const task = await createShellTask(binding, input);
@@ -259,38 +278,75 @@ class TaskRuntime implements TaskRuntimeLike {
                 throw new Error("Task Runtime is closed");
             }
             this.tasks.set(task.id, task);
-            try {
-                await this.publish("task_started", task, true);
-            } catch (error) {
-                this.tasks.delete(task.id);
-                await task.store.removeTemporaryFile(task.outputPath).catch(() => undefined);
-                throw error;
+            if (!continuation) {
+                task.published = true;
+                task.publication = this.publish("task_started", task, true);
+                try {await task.publication;}
+                catch (error) {
+                    this.tasks.delete(task.id);
+                    await task.store.removeTemporaryFile(task.outputPath).catch(() => undefined);
+                    throw error;
+                }
             }
-            const onAbort = () => task.controller.abort(input.signal?.reason);
-            input.signal?.addEventListener("abort", onAbort, {once: true});
-            if (input.signal?.aborted) onAbort();
+            const onAbort = () => task.controller.abort(continuation?.signal.reason);
+            continuation?.signal.addEventListener("abort", onAbort, {once: true});
+            if (continuation?.signal.aborted) onAbort();
             task.suppressTerminalNotification = true;
+            let started!: () => void;
+            const processStarted = new Promise<void>(resolve => {started = resolve;});
             task.completion = runShellTask(
                 task,
                 input,
                 this.shellRunner,
-                (finished) => this.publish("task_finished", finished)
+                {kind: continuation ? "continuation" : "background", timeoutMs: continuation?.timeoutMs ?? null,
+                    fileCommits: this.fileCommits, onStarted: () => {task.startedAt = new Date().toISOString(); started();}},
+                async finished => {
+                    if (!finished.published) return;
+                    await finished.publication;
+                    await this.publish("task_finished", finished);
+                }
             );
-            let finishedDuringStartup: boolean;
-            try {finishedDuringStartup = await observeShellStartup(task.completion, input.waitMs);}
-            finally {input.signal?.removeEventListener("abort", onAbort);}
-            if (!finishedDuringStartup) task.suppressTerminalNotification = false;
-            let snapshot = await snapshotShell(task);
-            if (snapshot.status !== "running") {
-                // runShellTask sets the in-memory terminal state before it finishes
-                // publishing task_finished. Wait for that publication so the claimed
-                // notification can never be journaled ahead of the terminal event.
-                await task.completion;
-                snapshot = await snapshotShell(task);
-                task.notificationPending = false;
-                await this.markNotificationClaimed(binding.sessionId, task.id, taskNotificationId(task.id, 1));
+            void task.completion.catch(() => {});
+            let publicationAccepted = !continuation;
+            try {
+                if (continuation) await Promise.race([processStarted, task.completion]);
+                const finished = await observeShellStartup(task.completion, continuation?.waitMs);
+                if (continuation && (finished || task.status !== "running")) {
+                    await task.completion;
+                    this.tasks.delete(task.id);
+                    if (!task.inlineResult) throw new Error("Completed Shell is missing its execution result");
+                    return {kind: "inline", result: task.inlineResult,
+                        ...(task.outputResult ? {persisted: task.outputResult} : {}),
+                        ...(task.outputIssue ? {outputIssue: task.outputIssue} : {})};
+                }
+                if (continuation) {
+                    continuation.signal.throwIfAborted();
+                    task.published = true;
+                    task.inlineResult = undefined;
+                    task.publication = this.publish("task_started", task, true);
+                    await task.publication;
+                    publicationAccepted = true;
+                }
+                let snapshot = await snapshotShell(task);
+                if (task.status !== "running") {
+                    await task.completion;
+                    snapshot = await snapshotShell(task);
+                    task.suppressTerminalNotification = false;
+                    task.notificationPending = !isExpectedShellShutdown(task);
+                } else {
+                    continuation?.signal.throwIfAborted();
+                    continuation?.onHandoff();
+                    task.suppressTerminalNotification = false;
+                }
+                return {kind: "task", task: snapshot};
+            } catch (error) {
+                task.controller.abort("shutdown");
+                await task.completion.catch(() => {});
+                if (!publicationAccepted) this.tasks.delete(task.id);
+                throw error;
+            } finally {
+                continuation?.signal.removeEventListener("abort", onAbort);
             }
-            return snapshot;
         } finally {
             releaseSlot();
         }
@@ -391,7 +447,7 @@ class TaskRuntime implements TaskRuntimeLike {
 
     async get(binding: TaskSessionBinding, id: string): Promise<TaskSnapshot | undefined> {
         const task = this.ownedTask(binding.sessionId, id);
-        if (task) {
+        if (task && (!isShellTask(task) || task.published)) {
             return snapshotTask(task);
         }
         const archived = this.archived.get(id);
@@ -402,7 +458,7 @@ class TaskRuntime implements TaskRuntimeLike {
     async list(sessionId: string): Promise<readonly TaskSnapshot[]> {
         return Promise.all([
             ...[...this.tasks.values()]
-                .filter((task) => task.owner.sessionId === sessionId)
+                .filter((task) => task.owner.sessionId === sessionId && (!isShellTask(task) || task.published))
                 .map(snapshotTask),
             ...[...this.archived.values()]
                 .filter((task) => task.owner.sessionId === sessionId)
@@ -724,13 +780,15 @@ export function createTaskRuntime(
     shellRunner: ShellRunnerLike,
     createSubagentThread: CreateSubagentThread,
     subagents: SubagentRegistry,
-    memory:MemoryRuntimeLike
+    memory:MemoryRuntimeLike,
+    fileCommits: FileCommitCoordinator
 ): TaskRuntimeLike {
     return new TaskRuntime(
         shellRunner,
         createSubagentThread,
         createTaskJournal(storage, cwd),
         subagents,
-        memory
+        memory,
+        fileCommits
     );
 }

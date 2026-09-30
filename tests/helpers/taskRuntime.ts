@@ -8,6 +8,7 @@ import type {CreateSubagentThread} from "../../src/subagents/types.js";
 import type {ShellRunnerLike} from "../../src/tools/bash/shellRunner.js";
 import {createHiCodeStorageLayout} from "../../src/persistence/index.js";
 import {join} from "node:path";
+import {FileCommitCoordinator} from "../../src/tools/shared/fileCommit.js";
 
 export function createTaskRuntimeForTest(
     cwd: string,
@@ -20,7 +21,8 @@ export function createTaskRuntimeForTest(
     }),
     hicodeHome = join(cwd, ".test-task-storage"),
     subagents: SubagentRegistry = BUILTIN_SUBAGENT_REGISTRY,
-    memory:MemoryRuntimeLike = createTestMemoryRuntime(cwd,{enabled:false})
+    memory:MemoryRuntimeLike = createTestMemoryRuntime(cwd,{enabled:false}),
+    fileCommits = new FileCommitCoordinator()
 ): TaskRuntimeLike {
     const storage = createHiCodeStorageLayout({hicodeHome});
     return createTaskRuntime(
@@ -29,6 +31,7 @@ export function createTaskRuntimeForTest(
         shellRunner,
         createSubagentThread,
         subagents,
-        memory
+        memory,
+        fileCommits
     );
 }

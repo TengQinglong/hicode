@@ -89,5 +89,5 @@ async function tick(){if(ticking)return;ticking=true;try{
       if(current===generation){revision=packet.revision;if(bottom)terminal.scrollToBottom();else terminal.scrollToLine(scroll);}
     }
   }
-}catch(e){$('connection').textContent='连接暂不可用';$('error').textContent=e.message;}finally{ticking=false;if(refreshPending){refreshPending=false;void tick();}else timer=setTimeout(tick,1500);}}
+}catch(e){$('connection').textContent='连接暂不可用';$('error').textContent=e.message;}finally{ticking=false;if(refreshPending){refreshPending=false;void tick();}else timer=setTimeout(tick,1000);}}
 tick();

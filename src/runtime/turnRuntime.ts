@@ -18,6 +18,8 @@ import type {RootRuntimeResources} from "./resources.js";
 import type {RootSessionRuntime} from "./sessionRuntime.js";
 import {normalizeTurnAbortReason} from "./abort.js";
 import {randomUUID} from "node:crypto";
+import {createTaskNotificationDelivery} from "./taskNotificationDelivery.js";
+import type {TaskJoin} from "../tasks/taskJoin.js";
 
 interface RootTurnSnapshotState {
     todos: readonly Todo[];
@@ -92,6 +94,7 @@ export function createRootTurnRunnerFactory(
         let result: AgentResult | undefined;
         let interruptionEmitted = false;
         let failed = false;
+        let taskJoin: TaskJoin | undefined;
 
         const emitEvent = (event: AgentEvent): void | Promise<void> => {
             if (event.type === "turn_interrupted") interruptionEmitted = true;
@@ -118,8 +121,14 @@ export function createRootTurnRunnerFactory(
 
         try {
             const initialState = getSnapshotState();
+            await session.initialize();
+            await createTaskNotificationDelivery({tasks: session.taskSession, queue: session.messageQueue,
+                persist: () => session.saveSnapshot(session.createSnapshot({...initialState, allowEmpty: true})),
+                onQueued() {},
+            }).drain();
             await session.beginTurn(prompt, initialState);
             const ctx = session.createContext({signal, host, onEvent: emitEvent, turnId, getSnapshotState});
+            taskJoin = ctx.taskJoin;
             const promptHooks = await ctx.runHook!({hook_event_name: "UserPromptSubmit", session_id: session.sessionId,
                 turn_id: turnId, prompt: contentText(prompt), permission_mode: initialState.permissionMode});
             const rejected: AgentResult | undefined = promptHooks.error ? {reply: `UserPromptSubmit Hook error: ${promptHooks.error}`, reason: "hook_error", iterations: 0}
@@ -205,6 +214,12 @@ export function createRootTurnRunnerFactory(
             }
             for (const message of session.takeStorageIssues()) {
                 try { await onLifecycleIssue({scope: "session", message, error: new Error(message)}); } catch {}
+            }
+            if (sessionSaved) {
+                try {await taskJoin?.acknowledge();}
+                catch (error) {
+                    try {await onLifecycleIssue({scope: "session", message: "Task result notification acknowledgement failed; pending delivery is retained", error});} catch {}
+                }
             }
             try {
                 const input: Extract<HookInput, {hook_event_name: "TurnEnd"}> = {

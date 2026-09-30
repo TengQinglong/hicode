@@ -105,6 +105,8 @@ Original tests are uploaded and run after execution finishes; the Agent does not
 
 The verifier can read task-installed Python dependencies, with pinned verifier packages taking priority. FEAL builds in a private verifier copy of the tests; Headless uses a private temporary root for its required paths. pytest caches go to writable logs. Displayed warnings are summarized; full output remains in `evidence/logs/verifier/output.txt`.
 
+Explicitly public self-check helpers may have a separate read-only mount without exposing hidden tests. Path-tracing graders use a sealed workspace copy with `/app` and `/tmp` on one isolated mount. Chroot capability exists only inside the grader user namespace; system paths stay read-only. Startup checks pip entry points and required commands, and saves initializer output to `initializer.txt`. Terminal capture and web polling use approximately one-second intervals.
+
 - `passed` / `failed`: the pytest exit code agrees with the current CTRF report, producing a valid score.
 - Verifier timeout, startup failure, missing tests, or inconsistent reports: an infrastructure error with no valid score, not a fabricated zero.
 - An execution timeout stops the Agent before grading; user cancellation skips grading. Execution and grading states are recorded separately.
@@ -194,6 +196,8 @@ bash hicode-eval/eval.sh prepare-swe \
 Preparation requires an idle evaluation machine and network access. Python, the official harness and all original Django dependencies are cached once, including native build headers. Each task gets the source archive for its exact base commit and a local repository containing only that source tree and its installation baseline. No future Git history, remotes or hooks are retained. Resolved package versions are copied into `runs/ID/environment.json` when an attempt starts. Failed preparation retains caches; the output directory must be a new external directory.
 
 Add `--swe-tasks /path/to/external/prepared-swe` to the normal service command. Reuse the same dashboard and machine; do not start another service or prepare system dependencies during active attempts. Submit `config/swe-verified-pilot.json`, or mix the selected SWE and Terminal IDs in a batch.
+
+Both preparation commands accept `--ids ID1,ID2`. New SWE bundles pin development checkers from the source `.pre-commit-config.yaml` in separate caches, without modifying previous attempts. Preparation makes no model calls and does not establish a passing score.
 
 The Actor receives only the public problem, original base code and public repository tests, with an independent writable Python environment at `/testbed`. Gold patches, hints, hidden test patches and scoring test lists are withheld. After completion/timeout, stop every Actor process, then export the actual tree against a protected prepared baseline using host-owned Git. This includes additions, deletions, binaries and executable modes without trusting Actor-controlled Git state or self-reported patches.
 

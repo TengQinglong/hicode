@@ -44,8 +44,7 @@ import {ResumeDialog} from "./resume/ResumeDialog.js";
 
 function runningActivityLabel(
     threads: UIThread[],
-    subagents: SubagentRegistry,
-    runningAgents: number
+    subagents: SubagentRegistry
 ): string | undefined {
     const hook = [...threads].reverse().find(thread => thread.role === "hook" && thread.status === "running");
     if (hook?.role === "hook") return `Running Hook ${hook.execution.event}...`;
@@ -56,7 +55,7 @@ function runningActivityLabel(
     if (!running) return undefined;
     if (running.approvalReview) return running.approvalReview;
     if (isCoordinationWait(running)) return running.name === "task"
-        ? `Waiting for agents · ${runningAgents} running · /tasks`
+        ? "Waiting for task results · /tasks"
         : "Waiting for an agent message...";
     if (running.name !== "agent") return `Executing ${running.name}...`;
 
@@ -241,8 +240,7 @@ export function App({
         }, [mcpManager]);
         const activityLabel = runningActivityLabel(
             turn.liveThreads,
-            resources.subagents,
-            turn.backgroundTasks.agent
+            resources.subagents
         );
         return (
             <DraftLayoutProvider store={turn.draftStore}><Box flexDirection="column">

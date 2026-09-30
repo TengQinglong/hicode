@@ -27,9 +27,12 @@ export async function processToolOutput(input: {
     const outcome = normalized.outcome ?? input.outcome ?? "ok";
     const uiData = outcome === "ok" ? normalized.uiData : undefined;
     const displayContent = normalized.displayContent ?? normalized.content;
+    const receipt = {...(normalized.completedTask ? {completedTask: normalized.completedTask} : {}),
+        ...(normalized.runningTask ? {runningTask: normalized.runningTask} : {})};
     if (normalized.persisted) {
         const reference = buildPersistedToolResultMessage(normalized.persisted);
         return {
+            ...receipt,
             modelContent: replaceContentText(original.content, normalized.content.trim() ? `${normalized.content}\n\n${reference}` : reference),
             displayContent: createPreview(displayContent, DEFAULT_DISPLAY_CHARS),
             outcome,
@@ -43,6 +46,7 @@ export async function processToolOutput(input: {
     const threshold = input.maxResultSizeChars ?? DEFAULT_MAX_RESULT_CHARS;
     if (!Number.isFinite(threshold) || content.length <= threshold) {
         return {
+            ...receipt,
             modelContent: typeof original.content === "string" ? content : original.content,
             displayContent: createPreview(displayContent, DEFAULT_DISPLAY_CHARS),
             outcome,
@@ -57,6 +61,7 @@ export async function processToolOutput(input: {
             content,
         });
         return {
+            ...receipt,
             modelContent: replaceContentText(original.content, buildPersistedToolResultMessage(persisted)),
             displayContent: preview,
             outcome,
@@ -65,6 +70,7 @@ export async function processToolOutput(input: {
         };
     } catch (error) {
         return {
+            ...receipt,
             modelContent: replaceContentText(original.content, buildPersistFailureMessage(input.toolName, preview, error)),
             displayContent: `${preview}\n\n(Failed to save full result)`,
             outcome,

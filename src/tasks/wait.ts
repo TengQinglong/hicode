@@ -1,7 +1,7 @@
 import type {TaskSessionLike} from "./types.js";
 
 /** Subscribe before reading so completion between registration and inspection cannot be lost. */
-export function waitForTaskCompletion(tasks: Pick<TaskSessionLike, "get" | "subscribe">, ids: readonly string[], signal: AbortSignal, kind: "agent" | "shell"): Promise<void> {
+export function waitForTaskCompletion(tasks: Pick<TaskSessionLike, "get" | "subscribe">, ids: readonly string[], signal: AbortSignal, kind: "agent" | "shell" | "result"): Promise<void> {
     signal.throwIfAborted();
     return new Promise((resolve, reject) => {
         let settled = false;
@@ -17,7 +17,7 @@ export function waitForTaskCompletion(tasks: Pick<TaskSessionLike, "get" | "subs
         const inspect = async () => {
             try {
                 const snapshots = await Promise.all(ids.map(id => tasks.get(id)));
-                if (snapshots.some(task => !task || task.kind !== kind)) throw new Error(`Cannot wait for an unavailable ${kind} task`);
+                if (snapshots.some(task => !task || (kind === "result" ? task.kind === "memory" : task.kind !== kind))) throw new Error(`Cannot wait for an unavailable ${kind} task`);
                 if (!snapshots.length || snapshots.some(task => task?.status !== "running")) finish();
             } catch (error) {finish(error);}
         };
@@ -34,7 +34,7 @@ export async function waitForTaskActivity(
     tasks: Pick<TaskSessionLike, "get" | "subscribe">,
     ids: readonly string[],
     signal: AbortSignal,
-    kind: "agent" | "shell",
+    kind: "agent" | "shell" | "result",
     waitForInput: (signal: AbortSignal) => Promise<void>,
 ): Promise<void> {
     signal.throwIfAborted();

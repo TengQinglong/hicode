@@ -254,7 +254,10 @@ export function createSubagentFactories(
                         prepare: history => prepareSessionArchive(parentContext.storage, storageCwd, childSessionId, history),
                         commit: (history, state, draft) => persistence.compact(snapshot(history, state), draft, input.signal),
                     };
-                    childContext.commitToolBatch = () => persistence.save(snapshot());
+                    childContext.commitToolBatch = async () => {
+                        await persistence.save(snapshot());
+                        await childContext.taskJoin?.acknowledge();
+                    };
                     const executeChildTool: typeof runtime.executeTool = async (name, args, context, callId) => {
                         try {
                             const current = await resolveSubagentDirectory(parentContext, request.cwd);

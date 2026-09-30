@@ -1,5 +1,5 @@
 import type {ChildTaskAccess} from "../tasks/childAccess.js";
-import type {AgentTaskJoin} from "../tasks/agentJoin.js";
+import type {TaskJoin} from "../tasks/taskJoin.js";
 import type {AgentMessaging} from "../runtime/agentMessaging.js";
 import type {ContextUsageTracker} from "../context/usage.js";
 import type {ImageAccess} from "../images/access.js";
@@ -160,7 +160,7 @@ export interface ToolContext {
 
     // Session task view; Root owns task state and children do not inherit it by default.
     tasks?: TaskSessionLike | ChildTaskAccess;
-    agentJoin?: AgentTaskJoin;
+    taskJoin?: TaskJoin;
     agentMessaging?: AgentMessaging;
 
     // Session Hook lifecycle state for atomic once claims.

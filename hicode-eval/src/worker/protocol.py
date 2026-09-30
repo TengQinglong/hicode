@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import stat
 from pathlib import Path
 
 
@@ -110,18 +112,49 @@ class Events:
                 and not self.pending_tools and self.ending is not None and self.ending['persistence_status'] == 'saved')
 
 
-def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False, workdir="/app", environment=None, readonly_logs=False):
+def prepare_verifier_root(project, target):
+    """A sealed copy on one mount lets original /app -> /tmp renames work."""
+    project, target = Path(project), Path(target)
+    if project.is_symlink() or not project.is_dir():raise ValueError('Invalid sealed project')
+    target.mkdir(mode=0o700)
+    total=0;count=0
+    def copy_tree(source, destination):
+        nonlocal total,count
+        destination.mkdir()
+        for entry in sorted(os.scandir(source),key=lambda e:e.name):
+            count+=1
+            if count>20000:raise ValueError('Verifier file budget exceeded')
+            out=destination/entry.name;mode=entry.stat(follow_symlinks=False).st_mode
+            if stat.S_ISLNK(mode):
+                resolved=Path(entry.path).resolve()
+                if not resolved.is_relative_to(project.resolve()):raise ValueError('Verifier link escapes project')
+                out.symlink_to(os.readlink(entry.path))
+            elif stat.S_ISDIR(mode):copy_tree(Path(entry.path),out)
+            elif stat.S_ISREG(mode):
+                total+=entry.stat(follow_symlinks=False).st_size
+                if total>512*1024*1024:raise ValueError('Verifier byte budget exceeded')
+                shutil.copy2(entry.path,out,follow_symlinks=False)
+            else:raise ValueError('Special verifier input')
+    copy_tree(project,target/'app');(target/'tmp').mkdir(mode=0o700)
+
+
+def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False, workdir="/app", environment=None, readonly_logs=False, public_tests=None, private_root=None):
     if tests is None and (writable_tests or root_overlay):raise ValueError('Verifier-only filesystem options')
+    if private_root is not None and (tests is None or not root_overlay or workdir!='/app'):raise ValueError('Private chroot is verifier-only')
+    if public_tests is not None and tests is not None:raise ValueError('Public helpers and hidden verifier are separate views')
     result=['bwrap','--unshare-user','--unshare-pid','--die-with-parent']
     if root_overlay:
         # A verifier may create new top-level directories in a private tmpfs;
         # every existing system entry remains read-only. The host root is never writable.
-        result+=['--tmpfs','/']
+        result+=['--bind',str(private_root),'/','--uid','0','--gid','0','--cap-add','CAP_SYS_CHROOT'] if private_root is not None else ['--tmpfs','/']
         for name in sorted(os.listdir('/')):
             if name not in {'proc','dev','tmp','app','tests','logs','testbed','server'}:result+=['--ro-bind','/'+name,'/'+name]
     else:result+=['--ro-bind','/','/']
     if workdir not in {'/app','/testbed'}:raise ValueError('Unsupported dataset workspace')
-    result+=['--proc','/proc','--dev','/dev','--tmpfs','/tmp','--bind',str(project),workdir,'--bind',str(home),str(home),'--ro-bind' if readonly_logs else '--bind',str(logs),str(logs),'--ro-bind',str(control),str(control),'--chdir',workdir]
+    result+=['--proc','/proc','--dev','/dev']
+    if private_root is None:result+=['--tmpfs','/tmp','--bind',str(project),workdir]
+    result+=['--bind',str(home),str(home),'--ro-bind' if readonly_logs else '--bind',str(logs),str(logs),'--ro-bind',str(control),str(control),'--chdir',workdir]
     if environment is not None:result+=['--bind',str(environment),'/opt/hicode-swe/env']
     if tests is not None:result+=['--bind' if writable_tests else '--ro-bind',str(tests),'/tests','--ro-bind' if readonly_logs else '--bind',str(Path(logs)/'verifier'),'/logs/verifier']
+    if public_tests is not None:result+=['--ro-bind',str(public_tests),'/tests']
     return result+args
