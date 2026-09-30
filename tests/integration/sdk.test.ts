@@ -965,7 +965,7 @@ test("SDK 自动压缩保存有界交接，关闭 Resume 后经标准工具回�
  test("SDK default input channel consumes restored coordination as agent evidence and exposes a distinct item", async () => {
     await withTempProject(async (cwd, storage) => {
         const inbox = new RuntimeMessageQueue();
-        inbox.enqueueAgent("Worker found a boundary issue", {sender: "00000000-0000-0000-0000-000000000000", recipient: "parent", runCount: 1, intent: "message"});
+        inbox.enqueueAgent("Worker found a boundary issue", {sender: "t_000000000000", recipient: "parent", runCount: 1, intent: "message"});
         const fake = createFakeLLM([options => {
             expect(options.messages.find(message => message.role === "user" && typeof message.content === "string" && message.content.includes("Worker found a boundary issue")))
                 .toMatchObject({origin: "agent"});

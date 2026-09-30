@@ -17,8 +17,8 @@ describe("RuntimeMessageQueue", () => {
 
     test("终态 Agent 可以按顺序取出下一条消息作为新 Run 输入", () => {
         const queue = new RuntimeMessageQueue();
-        queue.enqueueAgent("第一条继续消息", {sender: "parent", recipient: "00000000-0000-0000-0000-000000000000", runCount: 1, intent: "followup"});
-        queue.enqueueAgent("第二条继续消息", {sender: "parent", recipient: "00000000-0000-0000-0000-000000000000", runCount: 1, intent: "followup"});
+        queue.enqueueAgent("第一条继续消息", {sender: "parent", recipient: "t_000000000000", runCount: 1, intent: "followup"});
+        queue.enqueueAgent("第二条继续消息", {sender: "parent", recipient: "t_000000000000", runCount: 1, intent: "followup"});
 
         expect(queue.dequeueFollowup()?.content).toBe("第一条继续消息");
         expect(queue.list()).toHaveLength(1);
@@ -125,7 +125,7 @@ describe("RuntimeMessageQueue", () => {
 
 test("agent messages retain validated routing on restore, cannot be edited as user input, and waits cancel", async () => {
     const queue = new RuntimeMessageQueue();
-    const route = {sender: "00000000-0000-0000-0000-000000000000", recipient: "parent", runCount: 2, intent: "message" as const};
+    const route = {sender: "t_000000000000", recipient: "parent", runCount: 2, intent: "message" as const};
     const controller = new AbortController();
     const waiting = queue.createAgentInputChannel(() => {}).waitForInput(controller.signal);
     queue.enqueueAgent("question", route);

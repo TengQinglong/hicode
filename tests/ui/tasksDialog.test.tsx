@@ -13,6 +13,27 @@ import {Text, Box} from "ink";
 import {layoutTerminalMarkdown} from "../../src/ui/conversation/TerminalMarkdown.js";
 
 afterEach(cleanup);
+
+test("queued Shell is shown as unstarted and does not refresh periodically", async () => {
+  await withTempProject(async cwd => {
+    const ctx = createTestContext(cwd);
+    const resources = createTestRuntimeResources(cwd);
+    const tasks = resources.taskRuntime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
+    let release!: () => void;
+    const lock = resources.fileCommits.exclusive(ctx.signal, () => new Promise<void>(resolve => {release = resolve;}));
+    let view: ReturnType<typeof render> | undefined;
+    try {
+      const result = await tasks.runShell({command: "printf later", cwd, toolCallId: "queued", waitMs: 100,
+        signal: ctx.signal, onHandoff() {}});
+      expect(result.kind).toBe("task");
+      view = render(<TasksDialog tasks={tasks} stopTask={async () => {}} onClose={() => {}}/>);
+      await until(() => view?.lastFrame()?.includes("queued (file commit lock)") === true);
+      const count = view.frames.length;
+      await new Promise(resolve => setTimeout(resolve, 150));
+      expect(view.frames.length).toBe(count);
+    } finally {view?.unmount(); await resources.close(); release(); await lock;}
+  });
+});
 async function until(predicate: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 100; i++) {if (await predicate()) return; await new Promise(resolve => setTimeout(resolve, 10));}
   throw new Error("UI did not settle");

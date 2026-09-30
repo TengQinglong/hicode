@@ -131,9 +131,11 @@ Linux 数据卷：/eval/runs/<run-id>/
 Linux 运行版本与依赖：/opt/hicode/
 ```
 
-事件与画面持续传回，完整现场每 30 秒尝试复制到宿主，结束时再次收集。突然关闭机器可能丢失尚未导出的内容；保留数据卷检查。日志可能含源码、提示词和工具输出，分享前需脱敏。
+事件与画面持续传回并增量落盘；完整现场在任务结束时导出，不在事件消费循环中周期复制，避免阻塞判题交接。突然关闭机器可能丢失尚未导出的内容；保留数据卷检查。日志可能含源码、提示词和工具输出，分享前需脱敏。
 
-证据快照记录符号链接目标，不跟随链接。周期收集失败写入 `collection-error.txt`，不打断答题；最终导出仍须成功才能提交终态。 导出失败时保留已经确认的执行／判题事实，但不发布分数；页面的执行与判题记录面板可查看失败摘要和采集诊断。
+判题交接使用独立的、关联 run ID 的请求与原子回执：宿主先确认接收，再上传隐藏测试，最后确认就绪或返回上传失败。接收等待最多 30 秒，交接总等待最多 180 秒；取消会结束等待。隐藏测试只在作答进程全部停止后上传。
+
+证据快照记录符号链接目标，不跟随链接。最终导出仍须成功才能提交终态。 导出失败时保留已经确认的执行／判题事实，但不发布分数；页面的执行与判题记录面板可查看失败摘要和采集诊断。
 
 关闭网页不影响任务。Ctrl+C 关闭评测服务会取消当前任务；`bash .devcontainer/linux.sh eval-stop` 停止整台评测机，保留数据卷。服务重启不自动重跑或接续已执行的题；从未启动且无执行痕迹的题保留排队，发现其他未完成现场会停止新调度，需先核查现场。确认异常任务已收尾后，可用 `bash hicode-eval/eval.sh resume --batch BATCH_ID` 显式恢复现有排队调度；此命令不清除异常、不重跑已完成题。
 
@@ -159,7 +161,7 @@ bash hicode-eval/eval.sh recover --run RUN_ID
 
 ```bash
 bun test hicode-eval/tests
-PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker python3 -B -m unittest discover -s hicode-eval/tests
+PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker:hicode-eval/src/datasets python3 -B -m unittest discover -s hicode-eval/tests
 bun run check
 ```
 

@@ -4,6 +4,8 @@ import {testChildEnvironment} from "../helpers/childEnvironment.js";
 
 describe("web_fetch request lifecycle", () => {
     test.each([
+        "gzip", "deflate", "br", "compressed-corrupt", "compressed-limit", "compressed-abort", "unknown-encoding",
+        "dns-error", "tls-error", "error-redaction",
         "declared-limit", "body-limit", "invalid-location", "response-close",
         "request-close", "pre-abort", "dns-abort", "dns-deadline", "body-abort",
         "redirect", "redirect-deadline", "late-error",

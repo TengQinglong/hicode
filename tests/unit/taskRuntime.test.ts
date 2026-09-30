@@ -280,7 +280,8 @@ describe("TaskRuntime", () => {
             await expect(first.followup(started.id, "继续"))
                 .rejects.toThrow(`Task ${started.id} is not an Agent`);
             expect(await second.get(started.id)).toBeUndefined();
-            expect(events.map((event) => event.sequence)).toEqual([1, 2]);
+            expect(events.map((event) => event.sequence)).toEqual(events.map((_, index) => index + 1));
+            expect(events.map(event => event.type)).toEqual(["task_started", "task_progress", "task_finished"]);
             const concurrentClaims = await Promise.all([
                 first.pendingNotifications(),
                 first.pendingNotifications(),

@@ -1,3 +1,4 @@
+import {formatTaskHeader} from "../../tasks/format.js";
 import {z} from "zod";
 import {ApprovalBudget, requestApproval} from "../../permissions/approval.js";
 import {realpath, stat} from "node:fs/promises";
@@ -207,9 +208,8 @@ function formatObservedBackgroundTask(task: ShellTaskSnapshot, yielded = false):
             ? "Background task was cancelled during the startup observation window."
             : "Background task failed during the startup observation window.";
     return [
+        formatTaskHeader(task),
         yielded ? `Command ended: ${task.status}.` : heading,
-        `Task: ${task.id}`,
-        `Status: ${task.status}`,
         `Termination: ${shellTaskTermination(task)}`,
         task.output || "(no output)",
         ...(task.outputIssue ? [`Output delivery issue: ${task.outputIssue}`] : []),
@@ -408,7 +408,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                 if (duplicate) {
                     return {
                         content:
-                            `The same background command is already running in this directory. Task: ${duplicate.id}\n` +
+                            `The same background command is already running in this directory. task_id: ${duplicate.id}\n` +
                             "Inspect with task status first; if a restart is needed, use task stop. Do not start duplicates or kill processes by port.",
                         outcome: "failed" as const,
                     };
@@ -448,10 +448,10 @@ export const bashTool: Tool<typeof inputSchema> = {
                 return {
                     ...(!run_in_background ? {runningTask: task.id} : {}),
                     content: [
-                        !run_in_background ? "Command is still running and moved to the background (same process). This is not a successful command result." : "Background task started.",
-                        `Task: ${task.id}`,
+                        formatTaskHeader(task),
+                        !run_in_background ? (task.phase === "running" ? "Command is still running and moved to the background (same process). This is not a successful command result." : "Command has not started; the existing task continues waiting. Do not resubmit it.") : "Background task registered.",
+                        `phase: ${task.phase}${task.phase === "queued" ? " (waiting for the file commit lock)" : ""}`,
                         "Lifecycle: managed by the current HiCode Runtime; terminates when HiCode exits.",
-                        `Status: ${task.status}`,
                         `Cwd: ${displayToolPath(ctx.cwd, commandCwd) || "."}`,
                         ...(timeout_ms !== undefined && run_in_background
                             ? ["Ignored timeout_ms: explicit background services do not use a hard execution timeout."]

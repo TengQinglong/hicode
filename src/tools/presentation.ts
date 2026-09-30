@@ -1,4 +1,5 @@
 import {analyzeReadCommand} from "../permissions/shellRead.js";
+import {displayWebUrl} from "./webFetch/errors.js";
 import {stripVTControlCharacters} from "node:util";
 import type {ToolOutcome} from "../toolResults/index.js";
 
@@ -202,7 +203,7 @@ export function describeToolCall(
                 detail: summarizeShellCommand(raw)};
         }
         case "agent_followup":
-            return {label: "Continue Agent", detail: stringArg(args, "target") ?? ""};
+            return {label: "Continue Agent", detail: stringArg(args, "task_id") ?? ""};
         case "task":
             return {label: "Task", detail: taskDetail(args)};
         case "write_file":
@@ -232,11 +233,13 @@ export function describeToolCall(
                 label: "Skill",
                 detail: stringArg(args, "skill") ?? "",
             };
-        case "web_fetch":
+        case "web_fetch": {
+            const url = stringArg(args, "url");
             return {
                 label: "Fetch",
-                detail: stringArg(args, "url") ?? "URL",
+                detail: url ? displayWebUrl(url) : "URL",
             };
+        }
         case "agent":
             return {
                 label: "Agent",
@@ -298,7 +301,7 @@ export function summarizeToolResult(
     if (name === "web_fetch") {
         const status = result.match(/^HTTP:\s*(.+)$/m)?.[1];
         const url = result.match(/^URL:\s*(.+)$/m)?.[1];
-        if (status) return [`${status}${url ? ` · ${url}` : ""}`];
+        if (status) return [`${status}${url ? ` · ${displayWebUrl(url)}` : ""}`];
     }
 
     if (name === "bash") {

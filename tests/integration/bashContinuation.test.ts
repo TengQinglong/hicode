@@ -30,6 +30,50 @@ function fixture(cwd: string) {
     return {resources, tasks, ctx};
 }
 
+test("queued Shell returns its ID, remains unstarted, and cancellation never spawns it", async () => {
+    await withTempProject(async cwd => {
+        const {resources, tasks, ctx} = fixture(cwd);
+        try {
+            const first = await tasks.runShell({command: "sleep 30", cwd, toolCallId: "lock-owner", waitMs: 100,
+                signal: ctx.signal, onHandoff() {}});
+            expect(first.kind).toBe("task");
+            const queued = await tasks.runShell({command: "printf never > queued-start", cwd, toolCallId: "queued", waitMs: 100,
+                timeoutMs: 100, signal: ctx.signal, onHandoff() {}});
+            if (queued.kind !== "task") throw new Error("Expected queued task");
+            expect(queued.task.phase).toBe("queued");
+            expect(queued.task.id).toMatch(/^t_[a-f0-9]{12}$/);
+            const status = await executeToolResult("task", JSON.stringify({action: "status", task_id: queued.task.id}), ctx, "queue-status");
+            expect(status.modelContent).toContain("process not started");
+            expect((await tasks.stop(queued.task.id))?.status).toBe("cancelled");
+            if (first.kind === "task") await tasks.stop(first.task.id);
+            await expect(readFile(join(cwd, "queued-start"))).rejects.toThrow();
+            expect((await tasks.get(queued.task.id))?.status).toBe("cancelled");
+        } finally {await resources.close();}
+    });
+});
+
+test("task mistakes return accessible IDs without rerunning work or exposing another Session", async () => {
+    await withTempProject(async cwd => {
+        const {resources, tasks, ctx} = fixture(cwd);
+        try {
+            const task = await tasks.startShell({command: "printf original", cwd, toolCallId: "original"});
+            for (const task_id of [undefined, "12", "t_000000000000"]) {
+                const result = await executeToolResult("task", JSON.stringify({action: "status", task_id}), ctx, "mistake");
+                expect(result.outcome).toBe("failed");
+                expect(result.modelContent).toContain(`task_id: ${task.id}`);
+                expect(result.modelContent).toContain('"action":"status"');
+            }
+            const interrupted = await executeToolResult("task", JSON.stringify({action: "interrupt", task_id: task.id}), ctx, "wrong-action");
+            expect(interrupted.modelContent).toContain("Use stop");
+            const foreign = resources.taskRuntime.forSession({sessionId: "another", toolResultStore: ctx.toolResultStore});
+            const hidden = await executeToolResult("task", JSON.stringify({action: "status", task_id: task.id}), {...ctx, tasks: foreign}, "foreign");
+            expect(hidden.modelContent).toContain("No accessible tasks");
+            expect(hidden.modelContent).not.toContain(task.id);
+            expect(await tasks.list()).toHaveLength(1);
+        } finally {await resources.close();}
+    });
+});
+
 test("default 10s Bash hands off once, wait retrieves the same process exit and output", async () => {
     await withTempProject(async cwd => {
         const {resources, tasks, ctx} = fixture(cwd);
@@ -93,7 +137,7 @@ test.each([{yieldMs: 500, timeoutMs: 100}, {yieldMs: 100, timeoutMs: 400}])(
         });
     });
 
-test("waiting window begins after actual spawn, not Sandbox preparation", async () => {
+test("waiting window includes Sandbox preparation and hands off the same pending task", async () => {
     await withTempProject(async cwd => {
         const base = createTestContext(cwd, {permissionMode: "full-access"});
         let prepare!: () => void;
@@ -111,12 +155,14 @@ test("waiting window begins after actual spawn, not Sandbox preparation", async 
         try {
             await entering;
             await Bun.sleep(150);
-            expect(handedOff).toBe(false);
-            expect(await tasks.list()).toEqual([]);
-            prepare();
             const result = await operation;
-            expect(result.kind).toBe("inline");
-            if (result.kind === "inline") expect(result.result.stdout).toBe("prepared");
+            expect(handedOff).toBe(true);
+            expect(result.kind).toBe("task");
+            if (result.kind !== "task") throw new Error("Expected a pending task");
+            expect(result.task.phase).toBe("starting");
+            prepare();
+            const waited = await executeToolResult("task", JSON.stringify({action: "wait", task_id: result.task.id}), {...base, tasks}, "prepared-wait");
+            expect(waited.modelContent).toContain("prepared");
         } finally {prepare(); await operation; await runtime.close();}
     });
 });
@@ -129,10 +175,10 @@ test("handed-off finite Shell retains shared file coordination until completion"
         try {
             const start = await executeToolResult("bash", '{"command":"sleep 0.4; printf complete","yield_time_ms":100}', ctx, "coordinated");
             expect(start.runningTask).toBeDefined();
-            commit = resources.fileCommits.exclusive(ctx.signal, async () => {acquired = true;});
-            await Bun.sleep(30);
+            await expect(resources.fileCommits.exclusive(ctx.signal, async () => {acquired = true;})).rejects.toThrow(`task_id: ${start.runningTask}`);
             expect(acquired).toBe(false);
             await executeToolResult("task", JSON.stringify({action: "wait", task_id: start.runningTask}), ctx, "wait");
+            commit = resources.fileCommits.exclusive(ctx.signal, async () => {acquired = true;});
             await commit;
             expect(acquired).toBe(true);
             await tasks.startShell({command: "sleep 30", cwd, toolCallId: "service"});
@@ -190,7 +236,7 @@ test("Shell result receipt is ACKed only after paired History is saved, and wait
         const fake = createFakeLLM([
             assistantToolCall("bash", {command: "sleep 0.3; printf durable-evidence", yield_time_ms: 100}, "start"),
             options => {
-                id = contentText(options.messages.find(message => message.role === "tool" && message.tool_call_id === "start")?.content ?? "").match(/Task: ([0-9a-f-]+)/)?.[1];
+                id = contentText(options.messages.find(message => message.role === "tool" && message.tool_call_id === "start")?.content ?? "").match(/task_id: (t_[0-9a-f]{12})/)?.[1];
                 expect(id).toBeDefined();
                 return assistantToolCall("task", {action: "wait", task_id: id}, "wait");
             },

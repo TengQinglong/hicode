@@ -1,3 +1,4 @@
+import {isTaskId} from "../tasks/format.js";
 import type {AgentMessageRoute} from "./agentMessaging.js";
 import {contentText, messageContentSchema, type MessageContent} from "../images/content.js";
 import {randomUUID} from "node:crypto";
@@ -108,8 +109,8 @@ function parseRoute(value: unknown): AgentMessageRoute | undefined {
     if (!value || typeof value !== "object") return undefined;
     const route = value as Record<string, unknown>;
     if (Object.keys(route).some(key => !["sender", "recipient", "runCount", "intent"].includes(key)) ||
-        typeof route.sender !== "string" || !/^(parent|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(route.sender) ||
-        typeof route.recipient !== "string" || !/^(parent|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(route.recipient) ||
+        typeof route.sender !== "string" || (route.sender !== "parent" && !isTaskId(route.sender)) ||
+        typeof route.recipient !== "string" || (route.recipient !== "parent" && !isTaskId(route.recipient)) ||
         (route.sender === "parent") === (route.recipient === "parent") ||
         (route.intent === "followup" && route.sender !== "parent") ||
         typeof route.runCount !== "number" || !Number.isSafeInteger(route.runCount) || route.runCount < 1 ||

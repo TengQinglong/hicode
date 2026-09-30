@@ -34,6 +34,15 @@ function completeTool(
 }
 
 describe("phase-based tool presentation", () => {
+    test("Web Fetch summary hides query signatures and fragments", () => {
+        const url = "https://example.com/doc?signature=private-query#private-fragment";
+        const threads = completeTool([], {id: "fetch", name: "web_fetch", args: {url}, result: `URL: ${url}\nHTTP: 200 OK\n\nDocument`});
+        const view = render(<MessageList threads={threads}/>);
+        expect(view.lastFrame()).toContain("example.com/doc");
+        expect(view.lastFrame()).not.toContain("private-query");
+        expect(view.lastFrame()).not.toContain("private-fragment");
+        view.unmount();
+    });
     test("Skill success is compact while expanded and restored views retain the complete result", () => {
         const result = '<skill-source>\n{"source":"project","filePath":"/project/.hicode/skills/westock-data/SKILL.md","resourceRoot":"/project/.hicode/skills/westock-data"}\nResolve Skill-relative scripts/references/assets against resourceRoot.\n</skill-source>\n\nRead the stock data documentation.';
         const args = JSON.stringify({skill: "westock-data"});

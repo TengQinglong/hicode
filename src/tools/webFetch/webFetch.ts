@@ -1,3 +1,4 @@
+import {displayWebUrl} from "./errors.js";
 import {z} from "zod";
 import TurndownService from "turndown";
 import {matchPattern} from "../../permissions/index.js";
@@ -97,8 +98,8 @@ export const webFetchTool: Tool<typeof inputSchema> = {
         ) {
             return [
                 `Cross-domain redirect was not followed automatically (HTTP ${response.status}).`,
-                `Original URL: ${response.url}`,
-                `Target URL: ${response.redirectUrl}`,
+                `Original URL: ${displayWebUrl(response.url)}`,
+                `Target URL: ${displayWebUrl(response.redirectUrl)}`,
                 "To continue, call web_fetch on the target URL to check and authorize the new domain separately.",
             ].join("\n");
         }
@@ -116,7 +117,7 @@ export const webFetchTool: Tool<typeof inputSchema> = {
         const truncated = body.length > max_chars;
         const visibleBody = truncated ? body.slice(0, max_chars) : body;
         const header = [
-            `URL: ${response.url}`,
+            `URL: ${displayWebUrl(response.url)}`,
             `HTTP: ${response.status} ${response.statusText}`.trim(),
             `Content-Type: ${response.contentType || "unknown"}`,
         ];

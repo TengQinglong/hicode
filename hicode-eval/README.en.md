@@ -131,9 +131,11 @@ Linux data volume: /eval/runs/<run-id>/
 Linux source releases and dependencies: /opt/hicode/
 ```
 
-Events and screens stream back continuously; full evidence collection is attempted every 30 seconds and again at completion. Abrupt machine shutdown can lose evidence not yet exported; retain the volume for inspection. Logs may contain source code, prompts, and tool output. Redact them before sharing.
+Events and screens stream back continuously and are persisted incrementally. Full evidence is exported at completion, outside the live event loop, so collection cannot block verifier handoff. Abrupt machine shutdown can lose evidence not yet exported; retain the volume for inspection. Logs may contain source code, prompts, and tool output. Redact them before sharing.
 
-Evidence records symlink targets without following them. Periodic collection errors are saved in `collection-error.txt` and do not interrupt solving; final export remains required before completion. Confirmed execution and grading facts survive an export failure, but no reward is published. The execution and grading panel shows failure summaries and collection diagnostics.
+Verifier handoff uses a dedicated request and atomic, run-scoped receipts: accepted, ready, or failed. The host acknowledges before uploading hidden tests. Acknowledgement has a 30-second deadline and the entire handoff has a 180-second deadline; cancellation ends the wait. Hidden tests are uploaded only after assignment processes have stopped.
+
+Evidence records symlink targets without following them. Final export remains required before completion. Confirmed execution and grading facts survive an export failure, but no reward is published. The execution and grading panel shows failure summaries and collection diagnostics.
 
 Closing the browser does not stop tasks. Ctrl+C in the service terminal cancels active tasks. `bash .devcontainer/linux.sh eval-stop` stops the evaluation machine while preserving its volume. Restarting the service does not resume or rerun attempted tasks. Unstarted tasks without execution evidence remain queued; other unfinished evidence blocks scheduling until inspected. After recovery, use `bash hicode-eval/eval.sh resume --batch BATCH_ID` to explicitly continue queued scheduling. This command does not clear errors or rerun completed tasks.
 
@@ -159,7 +161,7 @@ Each task has its own UID, home directory, and `/app` mount, but shares the syst
 
 ```bash
 bun test hicode-eval/tests
-PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker python3 -B -m unittest discover -s hicode-eval/tests
+PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker:hicode-eval/src/datasets python3 -B -m unittest discover -s hicode-eval/tests
 bun run check
 ```
 

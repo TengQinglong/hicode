@@ -4,6 +4,26 @@ import {createPrimaryModelRuntime} from "../../src/runtime/primaryModel.js";
 import {resolveHiCodeSettings} from "../../src/settings/resolve.js";
 
 describe("primary model catalog", () => {
+    test("ordinary Qwen and Token Plan expose independent models and credentials", () => {
+        const sources = resolveHiCodeSettings([]).values.sources;
+        const ordinary = listConfiguredPrimaryModels(sources, {DASHSCOPE_API_KEY: "ordinary"});
+        const plan = listConfiguredPrimaryModels(sources, {QWEN_TOKEN_PLAN_API_KEY: "plan"});
+        expect(ordinary.every(model => model.source === "qwen")).toBe(true);
+        expect(plan.map(model => [model.source, model.model])).toEqual([
+            ["qwen-token-plan", "qwen3.8-flash"],
+            ["qwen-token-plan", "deepseek-v4.1-flash"],
+        ]);
+        const available = listConfiguredPrimaryModels(sources, {DASHSCOPE_API_KEY: "ordinary", QWEN_TOKEN_PLAN_API_KEY: "plan"});
+        const ordinaryFlash = ordinary.find(model => model.model === "qwen3.8-flash")!;
+        const planFlash = plan[0]!;
+        expect(ordinaryFlash.label).not.toBe(planFlash.label);
+        const runtime = createPrimaryModelRuntime(ordinaryFlash, sources, available);
+        runtime.select(planFlash);
+        expect(runtime.target.source).toBe("qwen-token-plan");
+        runtime.select(ordinaryFlash);
+        expect(runtime.target.source).toBe("qwen");
+    });
+
     test("一个有凭证的 source 暴露其全部已配置模型与 label", () => {
         const sources = resolveHiCodeSettings([]).values.sources;
         const models = listConfiguredPrimaryModels(sources, {

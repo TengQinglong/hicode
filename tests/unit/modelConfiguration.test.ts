@@ -19,6 +19,39 @@ function setup(storage: Parameters<typeof createModelConfiguration>[0], cwd: str
     return {runtime, config: createModelConfiguration(storage, cwd, runtime)};
 }
 
+test("Token Plan settings and credentials coexist with ordinary Qwen and survive selection reload", async () => {
+    const keys = ["DASHSCOPE_API_KEY", "QWEN_TOKEN_PLAN_API_KEY"] as const;
+    const previous = keys.map(key => process.env[key]);
+    try {
+        await withTempProject(async (cwd, storage) => {
+            const {runtime, config} = setup(storage, cwd);
+            await config.saveKey("qwen", "ordinary-fixture");
+            await config.saveEndpoint("qwen", "https://ordinary.example/v1");
+            const ordinary = structuredClone(runtime.sources.qwen);
+            await config.saveKey("qwen-token-plan", "plan-fixture");
+            await config.saveEndpoint("qwen-token-plan", "https://plan.example/v1");
+            expect(runtime.sources.qwen).toEqual(ordinary);
+            expect(parseEnv(await readFile(join(storage.hicodeHome, ".env"), "utf8"))).toEqual({
+                DASHSCOPE_API_KEY: "ordinary-fixture", QWEN_TOKEN_PLAN_API_KEY: "plan-fixture",
+            });
+            const target = runtime.available.find(model => model.source === "qwen-token-plan")!;
+            await config.saveSelection(target);
+            const loaded = loadHiCodeSettings({cwd, storage});
+            expect(loaded.issues).toHaveLength(0);
+            expect(loaded.values.models.primary).toEqual(target);
+            expect(loaded.values.sources.qwen).toEqual(ordinary);
+            expect(loaded.values.sources["qwen-token-plan"].baseUrl).toBe("https://plan.example/v1");
+            await config.saveSelection(runtime.available.find(model => model.source === "qwen")!);
+            expect(loadHiCodeSettings({cwd, storage}).values.models.primary.source).toBe("qwen");
+        });
+    } finally {
+        keys.forEach((key, index) => {
+            if (previous[index] === undefined) delete process.env[key];
+            else process.env[key] = previous[index];
+        });
+    }
+});
+
 test("Key, custom model and endpoint save safely, refresh immediately and selection survives restart", async () => {
     await withTempProject(async (cwd, storage) => {
         const {runtime, config} = setup(storage, cwd);

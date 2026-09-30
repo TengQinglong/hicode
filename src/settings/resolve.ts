@@ -42,6 +42,15 @@ const DEFAULT_SOURCES: Record<LLMProviderName, ModelSourceSettings> = {
             {id: "qwen3.6-flash", label: "Qwen 3.6 Flash"},
         ],
     },
+    "qwen-token-plan": {
+        id: "qwen-token-plan",
+        label: "Qwen Token Plan",
+        apiKeyEnv: "QWEN_TOKEN_PLAN_API_KEY",
+        models: [
+            {id: "qwen3.8-flash", label: "Qwen 3.8 Flash (Token Plan)", imageInput: true},
+            {id: "deepseek-v4.1-flash", label: "DeepSeek 4.1 Flash (Token Plan)", imageInput: true},
+        ],
+    },
     deepseek: {
         id: "deepseek",
         label: "DeepSeek",

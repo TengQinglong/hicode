@@ -34,24 +34,24 @@ test("followup has a strict standalone tool, respects ownership and never relaun
             const done = finished(tasks);
             const task = await tasks.startAgent({request, parentContext: parent});
             await done;
-            for (const args of [{message: "next"}, {target: task.id}, {task_id: task.id, message: "next"}, {target: task.id, message: " "}, {target: task.id, message: "界".repeat(12000)}]) {
+            for (const args of [{message: "next"}, {task_id: task.id}, {target: task.id, message: "next"}, {task_id: task.id, message: " "}, {task_id: task.id, message: "界".repeat(12000)}]) {
                 expect((await executeToolResult("agent_followup", JSON.stringify(args), parent, "bad-input")).outcome).not.toBe("ok");
             }
             expect((await executeToolResult("task", JSON.stringify({action: "followup", task_id: task.id, message: "next"}), parent, "old-tool")).outcome).not.toBe("ok");
             const stranger = createTestContext(cwd, {sessionId: "stranger"});
             stranger.tasks = runtime.forSession({sessionId: stranger.sessionId, toolResultStore: stranger.toolResultStore});
-            expect((await executeToolResult("agent_followup", JSON.stringify({target: task.id, message: "next"}), stranger, "wrong-owner")).outcome).toBe("denied");
+            expect((await executeToolResult("agent_followup", JSON.stringify({task_id: task.id, message: "next"}), stranger, "wrong-owner")).outcome).toBe("denied");
             const restrictedCwd = join(cwd, "restricted");
             await mkdir(restrictedCwd);
             const restricted = createTestContext(restrictedCwd);
             restricted.tasks = tasks;
-            expect((await executeToolResult("agent_followup", JSON.stringify({target: task.id, message: "next"}), restricted, "outside-directory")).outcome).toBe("denied");
+            expect((await executeToolResult("agent_followup", JSON.stringify({task_id: task.id, message: "next"}), restricted, "outside-directory")).outcome).toBe("denied");
             parent.permissionRules.deny.push({toolName: "agent_followup", source: "host"});
-            expect((await executeToolResult("agent_followup", JSON.stringify({target: task.id, message: "next"}), parent, "explicit-deny")).outcome).toBe("denied");
+            expect((await executeToolResult("agent_followup", JSON.stringify({task_id: task.id, message: "next"}), parent, "explicit-deny")).outcome).toBe("denied");
             parent.permissionRules.deny.pop();
             expect(runs).toBe(1);
             const nextDone = finished(tasks);
-            const reply = await executeToolResult("agent_followup", JSON.stringify({target: task.id, message: "next"}), parent, "valid");
+            const reply = await executeToolResult("agent_followup", JSON.stringify({task_id: task.id, message: "next"}), parent, "valid");
             expect(reply.outcome).toBe("ok");
             expect(reply.uiData).toMatchObject({type: "agent_receipt", receipt: {name: "board", delivery: "continued"}});
             expect(reply.modelContent).toContain("Agent continued: board");
@@ -59,9 +59,9 @@ test("followup has a strict standalone tool, respects ownership and never relaun
             await nextDone;
             expect(runs).toBe(2);
             await tasks.stop(task.id);
-            expect((await executeToolResult("agent_followup", JSON.stringify({target: task.id, message: "next"}), parent, "stopped")).outcome).not.toBe("ok");
+            expect((await executeToolResult("agent_followup", JSON.stringify({task_id: task.id, message: "next"}), parent, "stopped")).outcome).not.toBe("ok");
             expect(runs).toBe(2);
-            expect(describeToolCall("agent_followup", JSON.stringify({target: task.id}))).toEqual({label: "Continue Agent", detail: task.id});
+            expect(describeToolCall("agent_followup", JSON.stringify({task_id: task.id}))).toEqual({label: "Continue Agent", detail: task.id});
         } finally {await runtime.close();}
     });
 });
@@ -105,7 +105,7 @@ test("per-run time excludes idle gaps, queued work keeps the clock, and journal 
             expect(result.progress.runCount).toBe(3);
             expect(result.startedAt).toBe(task.startedAt);
             expect(agentRunTiming(result)).toEqual({runMs: 5000, totalMs: 35000});
-            const envelope: TaskEventEnvelope = {version: 6, type: "task_finished", sequence: 1, sessionId: parent.sessionId, task: result};
+            const envelope: TaskEventEnvelope = {version: 7, type: "task_finished", sequence: 1, sessionId: parent.sessionId, task: result};
             const decoded = decodeTaskJournalEntry(JSON.parse(JSON.stringify(envelope)), parent.sessionId);
             expect(decoded).toEqual(envelope);
             for (const progress of [{...result.progress, previousDurationMs: -1}, {...result.progress, runStartedAt: "bad"}, {...result.progress, todosUpdated: "yes"}]) {

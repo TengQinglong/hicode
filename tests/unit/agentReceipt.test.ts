@@ -10,7 +10,7 @@ test("Agent receipts survive the normal event codec and history restoration with
     const collector = new SessionUIEventCollector();
     const receipt = createAgentReceipt("board", "state logic", "continued");
     const uiData = {type: "agent_receipt" as const, receipt};
-    collector.handleEvent({type: "tool_call_start", turnId: "turn", toolCallId: "followup", name: "agent_followup", args: '{"target":"id","message":"next"}'});
+    collector.handleEvent({type: "tool_call_start", turnId: "turn", toolCallId: "followup", name: "agent_followup", args: '{"task_id":"id","message":"next"}'});
     collector.handleEvent({type: "tool_call_end", turnId: "turn", toolCallId: "followup", outcome: "ok", result: "opaque receipt", uiData});
     expect(toolFileChanges(uiData, "ok")).toEqual([]);
     const events = collector.getEvents().map(event => {
@@ -21,7 +21,7 @@ test("Agent receipts survive the normal event codec and history restoration with
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({type: "tool_call", agentReceipt: receipt});
     const threads = threadsFromHistory([
-        {role: "assistant", content: null, tool_calls: [{id: "followup", type: "function", function: {name: "agent_followup", arguments: '{"target":"id","message":"next"}'}}]},
+        {role: "assistant", content: null, tool_calls: [{id: "followup", type: "function", function: {name: "agent_followup", arguments: '{"task_id":"id","message":"next"}'}}]},
         {role: "tool", tool_call_id: "followup", content: "opaque receipt"},
     ], events);
     expect(threads[0]).toMatchObject({name: "agent_followup", uiData, result: "opaque receipt"});

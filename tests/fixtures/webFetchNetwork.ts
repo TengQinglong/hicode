@@ -1,3 +1,4 @@
+import {gzipSync, deflateSync, brotliCompressSync} from "node:zlib";
 // Node transport mocks are confined to this process so they cannot affect other suites.
 import assert from "node:assert/strict";
 import {EventEmitter} from "node:events";
@@ -58,6 +59,14 @@ class RequestFixture extends EventEmitter {
         queueMicrotask(() => {
             if (this.destroyed) return;
             if (mode === "request-close") { this.destroy(); return; }
+            if (mode === "tls-error") {
+                this.emit("error", Object.assign(new Error("certificate rejected", {cause: Object.assign(new Error("certificate chain detail"), {code: "CERT_CHAIN"})}), {code: "CERT_HAS_EXPIRED"}));
+                return;
+            }
+            if (mode === "error-redaction") {
+                this.emit("error", new Error("request https://example.com/doc?signature=private-value failed: private-value", {cause: new Error("cause private-value")}));
+                return;
+            }
             const response = new ResponseFixture();
             this.response = response;
             responses.push(response);
@@ -67,7 +76,18 @@ class RequestFixture extends EventEmitter {
                 response.statusCode = 302;
                 response.headers.location = "/next";
             }
+            const compression = mode === "gzip" || mode === "deflate" || mode === "br" ? mode : mode?.startsWith("compressed-") ? "gzip" : undefined;
+            if (compression) response.headers["content-encoding"] = compression;
+            if (mode === "unknown-encoding") response.headers["content-encoding"] = "unknown";
             this.respond(response);
+            if (mode === "unknown-encoding") return;
+            if (compression) {
+                if (mode === "compressed-corrupt") {response.end("invalid compressed bytes"); return;}
+                if (mode === "compressed-abort") {response.write(gzipSync("partial").subarray(0, 8)); controller.abort(); return;}
+                const text = mode === "compressed-limit" ? Buffer.alloc(6 * 1024 * 1024, 120) : Buffer.from("complete");
+                response.end(compression === "gzip" ? gzipSync(text) : compression === "deflate" ? deflateSync(text) : brotliCompressSync(text));
+                return;
+            }
             if (mode === "declared-limit") return;
             if (mode === "body-limit") { response.end(Buffer.alloc(6 * 1024 * 1024)); return; }
             if (mode === "response-close") { response.destroy(); return; }
@@ -86,8 +106,13 @@ class RequestFixture extends EventEmitter {
     }
 }
 
-const request = (_url: URL, options: {signal: AbortSignal; lookup: LookupFunction}, callback: (response: ResponseFixture) => void) => {
+const request = (_url: URL, options: {signal: AbortSignal; lookup: LookupFunction; autoSelectFamily: boolean}, callback: (response: ResponseFixture) => void) => {
     requests++;
+    assert.equal(options.autoSelectFamily, true);
+    options.lookup(_url.hostname, {all: true}, (error, addresses) => {
+        assert.equal(error, null);
+        assert.deepEqual(addresses, [{address: "8.8.8.8", family: 4}]);
+    });
     options.lookup(_url.hostname, {family: 4}, (error, address) => {
         assert.equal(error, null);
         assert.equal(address, "8.8.8.8", "only validated public addresses reach transport");
@@ -100,6 +125,7 @@ mock.module("node:http", () => ({...http, request}));
 mock.module("node:https", () => ({...https, request}));
 mock.module("node:dns/promises", () => ({...dns, lookup: async () => {
     lookups++;
+    if (mode === "dns-error") throw Object.assign(new Error("DNS resolution failed"), {code: "EAI_AGAIN"});
     if (mode === "dns-abort" || mode === "dns-deadline") {
         await new Promise<void>(resolve => {
             releaseDns = resolve;
@@ -124,7 +150,7 @@ const watchdog = realSetTimeout(() => {
 let error: unknown;
 let body: string | undefined;
 try {
-    body = (await fetchPublicWebUrl("https://example.com/doc", controller.signal)).body.toString();
+    body = (await fetchPublicWebUrl(mode === "error-redaction" ? "https://example.com/doc?signature=private-value" : "https://example.com/doc", controller.signal)).body.toString();
 } catch (caught) {
     error = caught;
 } finally {
@@ -135,12 +161,17 @@ await new Promise<void>(resolve => setImmediate(resolve));
 process.removeListener("uncaughtException", captureUncaught);
 assert.equal(watchdogExpired, false, "request must settle before the fixture watchdog");
 assert.deepEqual(uncaught, [], "response errors must not escape the request Promise");
-if (mode === "redirect" || mode === "late-error" || mode === "dns-mixed") {
+if (mode === "redirect" || mode === "late-error" || mode === "dns-mixed" || ["gzip", "deflate", "br"].includes(mode ?? "")) {
     assert.equal(error, undefined);
     assert.equal(body, "complete");
 } else {
     assert.ok(error instanceof Error, `expected failure for ${mode}`);
     assert.doesNotMatch(error.message, /watchdog/);
+    if (mode === "dns-error") assert.match(error.message, /during dns[\s\S]*EAI_AGAIN/);
+    if (mode === "tls-error") assert.match(error.message, /during request[\s\S]*CERT_HAS_EXPIRED[\s\S]*CERT_CHAIN/);
+    if (mode === "error-redaction") {assert.doesNotMatch(error.message, /private-value/); assert.match(error.message, /redacted/);}
+    if (mode === "compressed-corrupt" || mode === "unknown-encoding" || mode === "compressed-limit") assert.match(error.message, /during response_body/);
+    if (mode === "compressed-limit") assert.match(error.message, /Decoded response exceeds/);
     if (mode === "declared-limit" || mode === "body-limit") assert.match(error.message, /byte limit/);
     if (mode === "dns-deadline" || mode === "redirect-deadline") {
         assert.match(error.message, /30000 ms/);

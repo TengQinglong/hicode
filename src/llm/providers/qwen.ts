@@ -40,7 +40,7 @@ export const qwenProvider: LLMProvider = {
             displayName: source.label,
             toolImages: supportsToolImages(source, options.model),
             ...(supportsReasoningReplay(options.model) ? {reasoningSource: source.id} : {}),
-            baseUrl: source.baseUrl || PROVIDER_BASE_URLS.qwen,
+            baseUrl: source.baseUrl || PROVIDER_BASE_URLS[source.id],
             apiKey,
             requestFields: createQwenRequestFields(
                 options.model,

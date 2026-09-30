@@ -70,6 +70,12 @@ function getReplayConnection(provider: LLMProviderName): ReplayConnection {
                     process.env.QWEN_BASE_URL ||
                     "https://trial.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
             };
+        case "qwen-token-plan":
+            return {
+                apiKeyVariable: "QWEN_TOKEN_PLAN_API_KEY",
+                apiKey: process.env.QWEN_TOKEN_PLAN_API_KEY,
+                baseUrl: "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
+            };
         case "deepseek":
             return {
                 apiKeyVariable: "DEEPSEEK_API_KEY",

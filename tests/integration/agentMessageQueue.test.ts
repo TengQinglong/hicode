@@ -53,7 +53,7 @@ test("a failed host message projection does not lose queued evidence or the new 
     await withTempProject(async cwd => {
         const queue = new RuntimeMessageQueue();
         for (const content of ["first finding", "second finding"]) queue.enqueueAgent(content, {
-            sender: "00000000-0000-0000-0000-000000000000", recipient: "parent", runCount: 1, intent: "message",
+            sender: "t_000000000000", recipient: "parent", runCount: 1, intent: "message",
         });
         const history: Message[] = [{role: "system", content: "system"}];
         const fake = createFakeLLM([]);

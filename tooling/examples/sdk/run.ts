@@ -208,7 +208,7 @@ Options:
       --cwd <path>                Workspace (default: process cwd)
       --hicode-home <path>        Host data root (default: ~/.hicode)
       --env-file <path>           Explicit env file; values override current env
-      --source <source>           glm | qwen | deepseek | openrouter
+      --source <source>           glm | qwen | deepseek | openrouter | qwen-token-plan
       --model <model>             Primary model override
       --permission-mode <mode>    ask | auto-review | full-access
       --resume <sessionId>        Resume an existing SDK Thread
@@ -320,7 +320,7 @@ function optionalModelSource(value: string | undefined): ModelSource | undefined
     }
     throw new HiCodeSDKError(
         "invalid_runner_option",
-        "--source 必须是 glm | qwen | deepseek | openrouter"
+        "--source 必须是 glm | qwen | deepseek | openrouter | qwen-token-plan"
     );
 }
 

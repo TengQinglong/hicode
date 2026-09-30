@@ -1,7 +1,7 @@
 """One assignment, one Linux user, one tmux session. No installs or per-task containers."""
 import base64,fcntl,json,os,pwd,signal,subprocess,sys,time,shutil
 from pathlib import Path
-from protocol import Events,atomic_json,namespace_argv,package_install_argv,prepare_verifier_root
+from protocol import Events,atomic_json,namespace_argv,package_install_argv,prepare_verifier_root,wait_verifier_handoff
 from verifier import verify,verifier_environment
 from terminal import capture,settle,submit_prompt
 from cleanup import stop_task_processes,finalize_task,open_task_cli,terminate_task_cli
@@ -195,11 +195,8 @@ try:
         stop_user();terminal_started=False
         emit('phase',phase='Awaiting local verification')
         # Host uploads checks only after the assignment is sealed.
-        deadline=time.monotonic()+30
-        while not (root/'verify.ready').exists():
-            if cancelled or (root/'cancel').exists():status='cancelled';break
-            if time.monotonic()>deadline:raise RuntimeError('Verifier handoff timed out')
-            time.sleep(.2)
+        emit('verification_request',runId=run_id)
+        if not wait_verifier_handoff(root,run_id,lambda:cancelled or (root/'cancel').exists()):status='cancelled'
         if status in ['completed','timeout']:
             emit('phase',phase='Verifying result')
             try:

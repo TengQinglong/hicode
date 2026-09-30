@@ -9,6 +9,7 @@ import {
     qwenProvider,
 } from "../../src/llm/providers/qwen.js";
 import {createTestStorage, withTempProject} from "../helpers/tempProject.js";
+import {resolveHiCodeSettings} from "../../src/settings/resolve.js";
 import type {LLMCallOptions, LLMProvider} from "../../src/llm/types.js";
 
 const QWEN_SOURCE = {
@@ -30,11 +31,45 @@ function callQwenProvider(
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env.DASHSCOPE_API_KEY;
+const originalPlanKey = process.env.QWEN_TOKEN_PLAN_API_KEY;
 
 afterEach(() => {
     globalThis.fetch = originalFetch;
     if (originalApiKey === undefined) delete process.env.DASHSCOPE_API_KEY;
     else process.env.DASHSCOPE_API_KEY = originalApiKey;
+    if (originalPlanKey === undefined) delete process.env.QWEN_TOKEN_PLAN_API_KEY;
+    else process.env.QWEN_TOKEN_PLAN_API_KEY = originalPlanKey;
+});
+
+test("Token Plan routes both models with its own key and never falls back to ordinary Qwen", async () => {
+    await withTempProject(async (cwd, storage) => {
+        const sources = resolveHiCodeSettings([]).values.sources;
+        process.env.DASHSCOPE_API_KEY = "ordinary-fixture";
+        process.env.QWEN_TOKEN_PLAN_API_KEY = "plan-fixture";
+        const requests: {url: string; authorization: string | null; body: Record<string, unknown>}[] = [];
+        globalThis.fetch = (async (input, init) => {
+            requests.push({url: String(input), authorization: new Headers(init?.headers).get("authorization"),
+                body: JSON.parse(String(init?.body)) as Record<string, unknown>});
+            return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+        }) as typeof fetch;
+        const messages = [{role: "user", origin: "user", content: "hi"}] as const;
+        for (const model of ["qwen3.8-flash", "deepseek-v4.1-flash"]) {
+            await createLLMCaller(sources["qwen-token-plan"])([...messages], [], storage, cwd, model, "main");
+        }
+        await createLLMCaller(sources.qwen)([...messages], [], storage, cwd, "qwen3.8-flash", "main");
+        expect(requests.map(request => [request.url, request.authorization])).toEqual([
+            ["https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1/chat/completions", "Bearer plan-fixture"],
+            ["https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1/chat/completions", "Bearer plan-fixture"],
+            ["https://trial.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions", "Bearer ordinary-fixture"],
+        ]);
+        expect(requests[0]!.body).toMatchObject({model: "qwen3.8-flash", enable_thinking: true, preserve_thinking: true});
+        expect(requests[1]!.body).toMatchObject({model: "deepseek-v4.1-flash", enable_thinking: true});
+        expect(requests[1]!.body).not.toHaveProperty("thinking");
+        delete process.env.QWEN_TOKEN_PLAN_API_KEY;
+        await expect(createLLMCaller(sources["qwen-token-plan"])([...messages], [], storage, cwd, "qwen3.8-flash", "main"))
+            .rejects.toThrow("Missing QWEN_TOKEN_PLAN_API_KEY");
+        expect(requests).toHaveLength(3);
+    });
 });
 
 describe("Qwen provider", () => {

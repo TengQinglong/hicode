@@ -24,7 +24,7 @@ test('evidence records dangling, external and cyclic links without reading their
 
 // Real execute/collection control flow, with only Docker transport and dataset validation replaced.
 // The fake runner emits sealed packets; no Linux machine, network, user state or model is used.
-test.each([false,true])('collection errors do not cancel solving or erase confirmed facts (finalFailure=%s)', async finalFailure => {
+test.each([{finalFailure:false,uploadFailure:false},{finalFailure:true,uploadFailure:false},{finalFailure:false,uploadFailure:true}])('handoff precedes final collection and preserves facts: %j', async ({finalFailure,uploadFailure}) => {
   const {createHash}=await import('node:crypto');
   const {LinuxMachine,EvidenceCollectionError}=await import('../src/host/linux.js');
   const {configSchema,runSchema}=await import('../src/host/types.js');
@@ -39,20 +39,38 @@ test.each([false,true])('collection errors do not cancel solving or erase confir
   await writeFile(join(path,'task','fixture','task.toml'),'[agent]\ntimeout_sec=30\n[verifier]\ntimeout_sec=30\n');
   await writeFile(join(tools,'docker'),`#!/bin/sh
 printf '%s\n' '{"type":"phase","phase":"Running HiCode"}'
-sleep 0.01
-printf '%s\n' '{"type":"result","execution":"completed","grading":"passed","uid":20001}'
+printf '%s\n' '{"type":"screen","screen":"final screen"}'
+sleep 0.05
+printf '%s\n' '{"type":"phase","phase":"Awaiting local verification"}'
+printf '%s\n' '{"type":"verification_request","runId":"0123456789abcdef"}'
+for i in $(seq 1 100); do test ! -f '${join(tools,'handoff-done')}' || break; sleep 0.01; done
+test -f '${join(tools,'handoff-done')}' || exit 1
+printf '%s\n' '{"type":"result","execution":"completed","grading":"${uploadFailure?'unavailable':'passed'}","uid":20001}'
 `);
   await chmod(join(tools,'docker'),0o700);
   const config=configSchema.parse({version:3,data:root,tasks:join(root,'tasks'),payload,context:'fixture',machine:'fixture-machine',concurrency:1,budget:{},model:{source:'qwen',model:'fixture',apiKeyEnv:'FIXTURE_KEY',baseUrl:'http://127.0.0.1:1'}});
   const state=runSchema.parse({version:2,id:'0123456789abcdef',batchId:'fedcba9876543210',task:'fixture',state:'preparing',createdAt:1,updatedAt:1,model:'fixture',budget:{}});
-  const calls:string[][]=[];let copies=0;
+  const calls:string[][]=[];let copies=0;const acknowledgements:string[]=[];
   const run=spyOn(transport,'run').mockImplementation(async command => {
     calls.push(command);
     if(command.includes('inspect'))return JSON.stringify([{State:{Running:true},Config:{Labels:{'dev.hicode.role':'eval'}}}]);
     if(command.includes('/opt/hicode-eval/bootstrap.py'))return '/opt/hicode/releases/'+hash;
+    if(command.includes('/eval/runs/'+state.id+'/verification.json')){
+      const value=JSON.parse(command.at(-1)!);
+      expect(value.runId).toBe(state.id);expect(value.version).toBe(1);expect(copies).toBe(0);
+      acknowledgements.push(value.status);
+      if(value.status==='failed')expect(value.message).toBe('Error: hidden tests upload failed [redacted]');
+      if(value.status!=='accepted')await writeFile(join(tools,'handoff-done'),'done');
+    }
+    if(command.at(-1)==='fixture-machine:/eval/runs/'+state.id+'/tests'){
+      expect(acknowledgements).toEqual(['accepted']);
+      expect(await readFile(join(path,'live/screen.txt'),'utf8')).toBe('final screen');
+      if(uploadFailure)throw Error('hidden tests upload failed fixture-secret');
+    }
     if(command.includes('fixture-machine:/eval/runs/'+state.id+'/.')){
       copies++;
-      if(copies===1||finalFailure)throw Error('temporary snapshot transport failure');
+      expect(acknowledgements).toEqual(['accepted',uploadFailure?'failed':'ready']);
+      if(finalFailure)throw Error('temporary snapshot transport failure');
       const stage=command.at(-1)!;
       await writeFile(join(stage,'result.json'),JSON.stringify({execution:'completed',grading:'passed'}));
       await symlink('/app/sqlite/sqlite3',join(stage,'sqlite3'));
@@ -61,7 +79,7 @@ printf '%s\n' '{"type":"result","execution":"completed","grading":"passed","uid"
   });
   const validate=spyOn(adapters,'validatePublicTask').mockResolvedValue({hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPackages:[],verifierPrelude:'none',publicTestInputs:[],verifierChroot:false,verifierRootOverlay:false,commands:[],environment:{},verifierEnvironment:{}});
   const oldPath=process.env.PATH;
-  // Advance the collection clock instead of spending 30 seconds on every regression.
+  // Make the old periodic-copy condition true without waiting 30 seconds.
   const now=Date.now();let clock=0;const time=spyOn(Date,'now').mockImplementation(()=>now+(clock++)*31000);
   process.env.PATH=tools+':'+oldPath;
   try {
@@ -75,12 +93,11 @@ printf '%s\n' '{"type":"result","execution":"completed","grading":"passed","uid"
         expect(error.result).toMatchObject({execution:'completed',grading:'passed'});
       }
     }else{
-      expect(await executing).toMatchObject({execution:'completed',grading:'passed'});
+      expect(await executing).toMatchObject({execution:'completed',grading:uploadFailure?'unavailable':'passed'});
       const receipt=JSON.parse(await readFile(join(path,'collection.json'),'utf8'));
       expect(receipt.files.sqlite3.symlink).toBe('/app/sqlite/sqlite3');
     }
-    expect(copies).toBeGreaterThanOrEqual(2);
-    expect(await readFile(join(path,'collection-error.txt'),'utf8')).toContain('snapshot transport failure');
+    expect(copies).toBe(1);
     expect(calls.some(command=>command.some(arg=>arg.includes('/cancel')))).toBe(false);
   }finally{
     if(oldPath===undefined)delete process.env.PATH;else process.env.PATH=oldPath;

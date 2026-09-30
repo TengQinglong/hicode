@@ -21,6 +21,7 @@ import type {HiCodeStorageLayout} from "../persistence/index.js";
 const providers: Record<LLMProviderName, LLMProvider> = {
     glm: glmProvider,
     qwen: qwenProvider,
+    "qwen-token-plan": {name: "qwen-token-plan", call: qwenProvider.call},
     deepseek: deepseekProvider,
     openrouter: openrouterProvider,
 };

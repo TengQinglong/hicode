@@ -7,8 +7,20 @@ import {htmlToReadableText} from "../../src/tools/webFetch/webFetch.js";
 import {generateRuleForTool} from "../../src/permissions/index.js";
 import {fileURLToPath} from "node:url";
 import {testChildEnvironment} from "../helpers/childEnvironment.js";
+import {displayWebUrl, webFetchFailure} from "../../src/tools/webFetch/errors.js";
 
 describe("web_fetch boundaries", () => {
+  test("diagnostics redact signed URLs and bound cyclic and aggregate causes", () => {
+    const url = new URL("https://example.com/doc?signature=secret-value#private-fragment");
+    expect(displayWebUrl(url.toString())).toBe("https://example.com/doc?[redacted]");
+    const inner = Object.assign(new Error("secret-value"), {code: "ECONNRESET"});
+    inner.cause = inner;
+    const error = webFetchFailure("request", new AggregateError([inner, ...Array.from({length: 100}, () => new Error("x".repeat(5000)))], url.toString()), url);
+    expect(error.message).toContain("ECONNRESET");
+    expect(error.message).not.toContain("secret-value");
+    expect(error.message).not.toContain("private-fragment");
+    expect(error.message.length).toBeLessThan(3000);
+  });
   test.each(["default", "maximum", "http-error", "save-failure"])("全文证据 %s", async mode => {
     const child = Bun.spawn([process.execPath,
       fileURLToPath(new URL("../fixtures/webFetchEvidence.ts", import.meta.url)), mode],

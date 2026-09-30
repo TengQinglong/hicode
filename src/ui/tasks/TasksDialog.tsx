@@ -34,7 +34,7 @@ function duration(ms: number): string {
 function metadata(task: TaskSnapshot): string {
     if (task.kind === "agent") return `${clean(task.agentName ?? task.agentType)} · Run ${task.progress.runCount} · ${duration(agentRunTiming(task).runMs)}`;
     const elapsed = (task.completedAt ? Date.parse(task.completedAt) : Date.now()) - Date.parse(task.startedAt);
-    return `${task.kind === "shell" ? "Command" : "Memory"} · ${duration(elapsed)}`;
+    return `${task.kind === "shell" ? `Command · ${task.phase}${task.phase === "queued" ? " (file commit lock)" : ""}` : "Memory"} · ${duration(elapsed)}`;
 }
 
 export function TasksDialog({tasks, stopTask, onClose}: {

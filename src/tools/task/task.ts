@@ -1,3 +1,5 @@
+import {formatTaskHeader, formatTaskSummary, isTaskId} from "../../tasks/format.js";
+import {taskLookupFailure} from "./recovery.js";
 import {zodToJsonSchema} from "zod-to-json-schema";
 import {z} from "zod";
 import type {AgentTaskSnapshot, ShellTaskSnapshot, TaskSnapshot} from "../../tasks/index.js";
@@ -37,7 +39,7 @@ function formatTermination(snapshot: ShellTaskSnapshot): string | undefined {
 }
 
 function formatTask(task: TaskSnapshot): string {
-    if(task.kind==="memory")return `Task: ${task.id} · memory · ${task.status}\n${task.resultPreview??task.outputIssue??"Extracting and consolidating Memory"}`;
+    if(task.kind==="memory")return `${formatTaskHeader(task)}\n${task.resultPreview??task.outputIssue??"Extracting and consolidating Memory"}`;
     const result = task.outputResult
         ? `\nSaved output: ${JSON.stringify(task.outputResult.path)}`
         : "";
@@ -45,9 +47,8 @@ function formatTask(task: TaskSnapshot): string {
     if (task.kind === "shell") {
         const termination = formatTermination(task);
         return [
-            `Task: ${task.id}`,
-            "Type: shell",
-            `Status: ${task.status}`,
+            formatTaskHeader(task),
+            `phase: ${task.phase}${task.phase === "queued" ? " (waiting for the file commit lock; process not started)" : ""}`,
             `Command: ${task.command}`,
             `Cwd: ${task.cwd}`,
             ...(termination ? [`Termination: ${termination}`] : []),
@@ -67,10 +68,8 @@ function formatTask(task: TaskSnapshot): string {
             : undefined,
     ].filter(Boolean).join(" · ");
     return [
-        `Task: ${task.id}`,
-        "Type: agent",
+        formatTaskHeader(task),
         `Cwd: ${task.cwd}`,
-        `Status: ${task.status}`,
         `Agent: ${task.agentName ? `${task.agentName} (${task.agentType})` : task.agentType}`,
         `Description: ${task.description}`,
         `Progress: ${progress}`,
@@ -105,12 +104,13 @@ export const taskTool: Tool<typeof inputSchema> = {
             const tasks = await ctx.tasks.list();
             return tasks.length === 0
                 ? "This Session has no background tasks."
-                : tasks.map(formatTask).join("\n\n");
+                : tasks.map(formatTaskSummary).join("\n\n");
         }
+        if (task_id !== undefined && !isTaskId(task_id)) return {content: await taskLookupFailure(ctx, task_id, action), outcome: "failed"};
         if (action === "wait") {
             if (task_id) {
                 const target = await ctx.tasks.get(task_id);
-                if (!target) return {content: `Background task not found: ${task_id}`, outcome: "failed"};
+                if (!target) return {content: await taskLookupFailure(ctx, task_id, action), outcome: "failed"};
                 if (target.kind === "shell") {
                     await waitForTaskActivity(ctx.tasks, [task_id], ctx.signal, "shell",
                         signal => ctx.agentMessaging ? ctx.agentMessaging.wait(signal) : EMPTY_AGENT_INPUT_CHANNEL.waitForInput(signal));
@@ -121,6 +121,7 @@ export const taskTool: Tool<typeof inputSchema> = {
                         outcome: completed.status === "failed" || completed.outputIssue ? "failed" : "ok"};
                 }
             }
+            if (task_id && (await ctx.tasks.get(task_id))?.kind === "memory") return {content: "Memory tasks do not support wait; use status.", outcome: "failed"};
             if (!isParentTaskSession(ctx.tasks)) return {content: "Child Shell wait requires task_id", outcome: "failed"};
             const ids = [...new Set([...(ctx.taskJoin?.agentIds ?? []), ...(task_id ? [task_id] : [])])];
             if (!ids.length) return "No delegated Agent results are pending.";
@@ -137,7 +138,10 @@ export const taskTool: Tool<typeof inputSchema> = {
                 outcome: completed.some(task => task.status === "failed") ? "failed" : "ok",
             };
         }
-        if (!task_id) return {content: `${action} requires task_id`, outcome: "failed"};
+        if (!task_id) return {content: await taskLookupFailure(ctx, task_id, action), outcome: "failed"};
+        const target = await ctx.tasks.get(task_id);
+        if (!target) return {content: await taskLookupFailure(ctx, task_id, action), outcome: "failed"};
+        if (action === "interrupt" && target.kind !== "agent") return {content: `${formatTaskHeader(target)}\ninterrupt only applies to Agent runs. Use stop to terminate this task.`, outcome: "failed"};
         if (action === "interrupt" && !(action in ctx.tasks)) return {content: "Child Agents can manage only their own Shell tasks", outcome: "denied"};
         if (action === "interrupt" && "interrupt" in ctx.tasks) {
             try {return {content: formatTask(await ctx.tasks.interrupt(task_id)), outcome: "ok"};}
@@ -147,7 +151,7 @@ export const taskTool: Tool<typeof inputSchema> = {
             ? await ctx.tasks.stop(task_id)
             : await ctx.tasks.get(task_id);
         if (!task) {
-            return {content: `Background task not found: ${task_id}`, outcome: "failed"};
+            return {content: await taskLookupFailure(ctx, task_id, action), outcome: "failed"};
         }
         return {
             content: formatTask(task),

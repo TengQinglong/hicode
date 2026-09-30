@@ -2,7 +2,7 @@ import type {AgentMessaging} from "../runtime/agentMessaging.js";
 import type {MemoryRuntimeLike} from "../memory/runtime.js";
 import {isMemoryTask,isAgentTask,snapshotMemory,type ManagedMemoryTask} from "./managed.js";
 import type {StartMemoryTaskInput,MemoryTaskSnapshot} from "./types.js";
-import {randomUUID} from "node:crypto";
+import {randomBytes} from "node:crypto";
 import {createTurnAbortController} from "../runtime/abort.js";
 import type {ShellRunnerLike} from "../tools/bash/shellRunner.js";
 import type {CreateSubagentThread} from "../subagents/types.js";
@@ -162,6 +162,14 @@ class TaskSession implements TaskSessionLike {
 }
 
 class TaskRuntime implements TaskRuntimeLike {
+    private readonly issuedIds = new Set<string>();
+    private allocateId(): string {
+        let id: string;
+        do {id = `t_${randomBytes(6).toString("hex")}`;} while (this.issuedIds.has(id) || this.archived.has(id));
+        this.issuedIds.add(id);
+        return id;
+    }
+
     private readonly tasks = new Map<string, ManagedTask>();
     private readonly archived = new Map<string, TaskSnapshot>();
     private readonly sessionLoads = new Map<string, Promise<void>>();
@@ -233,7 +241,7 @@ class TaskRuntime implements TaskRuntimeLike {
         if([...this.tasks.values()].some(task=>isMemoryTask(task)&&task.status==="running"))return undefined;
         const release=this.reserveTaskSlot();
         try{
-            const task:ManagedMemoryTask={id:randomUUID(),kind:"memory",owner:{sessionId:binding.sessionId,turnId:input.turnId},status:"running",startedAt:new Date().toISOString(),
+            const task:ManagedMemoryTask={id:this.allocateId(),kind:"memory",owner:{sessionId:binding.sessionId,turnId:input.turnId},status:"running",startedAt:new Date().toISOString(),
                 store:binding.toolResultStore,controller:createTurnAbortController(),notificationPending:false,suppressTerminalNotification:!input.background,completion:Promise.resolve()};
             this.tasks.set(task.id,task);
             try{await this.publish("task_started",task,true);}catch(error){this.tasks.delete(task.id);throw error;}
@@ -272,7 +280,7 @@ class TaskRuntime implements TaskRuntimeLike {
         continuation?.signal.throwIfAborted();
         const releaseSlot = this.reserveTaskSlot();
         try {
-            const task = await createShellTask(binding, input);
+            const task = await createShellTask(this.allocateId(), binding, input);
             if (this.closed) {
                 await task.store.removeTemporaryFile(task.outputPath);
                 throw new Error("Task Runtime is closed");
@@ -292,14 +300,18 @@ class TaskRuntime implements TaskRuntimeLike {
             continuation?.signal.addEventListener("abort", onAbort, {once: true});
             if (continuation?.signal.aborted) onAbort();
             task.suppressTerminalNotification = true;
-            let started!: () => void;
-            const processStarted = new Promise<void>(resolve => {started = resolve;});
             task.completion = runShellTask(
                 task,
                 input,
                 this.shellRunner,
                 {kind: continuation ? "continuation" : "background", timeoutMs: continuation?.timeoutMs ?? null,
-                    fileCommits: this.fileCommits, onStarted: () => {task.startedAt = new Date().toISOString(); started();}},
+                    fileCommits: this.fileCommits, onPhaseChanged: () => {
+                        if (task.published) void snapshotShell(task).then(snapshot => {
+                            if (task.status === "running" && task.phase === snapshot.phase) {
+                                this.notifyListeners(this.createEvent("task_progress", snapshot));
+                            }
+                        }).catch(error => appendTaskIssue(task, `Task progress unavailable: ${String(error)}`));
+                    }},
                 async finished => {
                     if (!finished.published) return;
                     await finished.publication;
@@ -309,7 +321,6 @@ class TaskRuntime implements TaskRuntimeLike {
             void task.completion.catch(() => {});
             let publicationAccepted = !continuation;
             try {
-                if (continuation) await Promise.race([processStarted, task.completion]);
                 const finished = await observeShellStartup(task.completion, continuation?.waitMs);
                 if (continuation && (finished || task.status !== "running")) {
                     await task.completion;
@@ -362,7 +373,7 @@ class TaskRuntime implements TaskRuntimeLike {
         let releaseAgentSlot: (() => void) | undefined;
         try {
             releaseAgentSlot = this.reserveAgentSlot(binding.sessionId);
-            const id = randomUUID();
+            const id = this.allocateId();
             const task = createAgentTask(
                 id,
                 binding,
@@ -702,7 +713,7 @@ class TaskRuntime implements TaskRuntimeLike {
         task: TaskSnapshot
     ): TaskEventEnvelope {
         return {
-            version: 6,
+            version: 7,
             sequence: ++this.sequence,
             sessionId: task.owner.sessionId,
             task,
@@ -754,6 +765,7 @@ class TaskRuntime implements TaskRuntimeLike {
                 restored = {
                     ...restored,
                     status: "cancelled",
+                    ...(restored.kind === "shell" ? {phase: "finished" as const} : {}),
                     completedAt: new Date().toISOString(),
                     outputIssue: [
                         restored.outputIssue,

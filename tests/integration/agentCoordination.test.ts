@@ -81,7 +81,7 @@ test("background worker exchanges bounded messages through tools; idle messages 
             expect(await tasks.get(started.id)).toMatchObject({status: "completed", progress: {runCount: 1, pendingMessages: 1}});
             expect(child.calls).toHaveLength(2);
             const nextDone = finished(tasks);
-            const continued = await executeToolResult("agent_followup", JSON.stringify({target: started.id, message: "Now check the interface"}), parent, "followup");
+            const continued = await executeToolResult("agent_followup", JSON.stringify({task_id: started.id, message: "Now check the interface"}), parent, "followup");
             expect(continued.outcome).toBe("ok");
             await nextDone;
             expect(await tasks.get(started.id)).toMatchObject({status: "completed", progress: {runCount: 2, pendingMessages: 0}});

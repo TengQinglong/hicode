@@ -54,6 +54,7 @@ function assertContent(version: FileVersion, expected: string | Buffer | null, p
 /** Root owns ordering, while each Session owns its separate observation ledger. */
 export class FileCommitCoordinator {
     private active: Promise<void> | undefined;
+    private shellOwner: string | undefined;
 
     async run<T>(path: string, signal: AbortSignal, operation: (canonical: string) => Promise<T>): Promise<T> {
         const canonical = canonicalPath(resolve(path));
@@ -61,8 +62,9 @@ export class FileCommitCoordinator {
     }
 
     /** Root-owned foreground Shell and file commits share a write ordering boundary. */
-    async exclusive<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    async exclusive<T>(signal: AbortSignal, operation: () => Promise<T>, shellTaskId?: string): Promise<T> {
         while (this.active) {
+            if (this.shellOwner && !shellTaskId) throw new Error(`File commit blocked by Shell task_id: ${this.shellOwner}. Use task wait or stop before retrying; no file was changed.`);
             const pending = this.active;
             throwIfTurnAborted(signal);
             await new Promise<void>((done, reject) => {
@@ -77,7 +79,8 @@ export class FileCommitCoordinator {
         throwIfTurnAborted(signal);
         let release!: () => void;
         this.active = new Promise<void>(done => {release = done;});
-        try {return await operation();} finally {this.active = undefined; release();}
+        this.shellOwner = shellTaskId;
+        try {return await operation();} finally {this.shellOwner = undefined; this.active = undefined; release();}
     }
 
 }

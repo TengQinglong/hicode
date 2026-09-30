@@ -1,7 +1,10 @@
+import {createGunzip, createInflate, createBrotliDecompress} from "node:zlib";
+import type {Transform} from "node:stream";
+import {webFetchFailure} from "./errors.js";
 import {lookup} from "node:dns/promises";
-import {request as requestHttp, type ClientRequest, type IncomingMessage} from "node:http";
+import {request as requestHttp, type ClientRequest, type IncomingMessage, type RequestOptions} from "node:http";
 import {request as requestHttps} from "node:https";
-import {BlockList, isIP, type LookupFunction} from "node:net";
+import {BlockList, isIP, type LookupFunction, type TcpNetConnectOpts} from "node:net";
 
 const WEB_FETCH_MAX_BYTES = 5 * 1024 * 1024;
 const WEB_FETCH_TIMEOUT_MS = 30_000;
@@ -154,13 +157,20 @@ async function resolveWithAbort(hostname: string, signal: AbortSignal) {
 }
 
 async function requestOnce(url: URL, signal: AbortSignal): Promise<WebFetchResponse> {
-    const addresses = await resolveWithAbort(url.hostname, signal);
+    let addresses: Awaited<ReturnType<typeof resolvePublicAddresses>>;
+    try {addresses = await resolveWithAbort(url.hostname, signal);}
+    catch (error) {
+        if (signal.aborted && !(signal.reason instanceof Error && "code" in signal.reason && signal.reason.code === "ETIMEDOUT")) throw requestAbortError(signal);
+        throw webFetchFailure("dns", error, url);
+    }
     if (signal.aborted) throw requestAbortError(signal);
     const request = url.protocol === "https:" ? requestHttps : requestHttp;
     return new Promise((resolve, reject) => {
         let req: ClientRequest | undefined;
         let response: IncomingMessage | undefined;
         let settled = false;
+        let responseEnded = false;
+        let decoder: Transform | undefined;
         const chunks: Buffer[] = [];
         const cleanup = () => {
             signal.removeEventListener("abort", abort);
@@ -171,30 +181,43 @@ async function requestOnce(url: URL, signal: AbortSignal): Promise<WebFetchRespo
             settled = true;
             cleanup();
             // Keep error listeners until disposal: destroy/late transport events can emit again.
+            decoder?.destroy();
             response?.destroy();
             req?.destroy();
-            reject(error);
+            reject(signal.aborted && !(signal.reason instanceof Error && "code" in signal.reason && signal.reason.code === "ETIMEDOUT")
+                ? requestAbortError(signal) : webFetchFailure(response ? "response_body" : "request", error, url));
         };
         const abort = () => fail(requestAbortError(signal));
         signal.addEventListener("abort", abort, {once: true});
         try {
-            req = request(url, {
+            const options: RequestOptions & Pick<TcpNetConnectOpts, "autoSelectFamily" | "autoSelectFamilyAttemptTimeout"> = {
                 method: "GET",
                 headers: {
                     Accept: "text/markdown, text/html, text/plain, application/json, application/xml;q=0.9, */*;q=0.1",
+                    "Accept-Encoding": "gzip, deflate, br",
                     "User-Agent": "hicode-agent/0.1 web_fetch",
                 },
                 lookup: createPinnedLookup(addresses),
+                autoSelectFamily: true,
+                autoSelectFamilyAttemptTimeout: 250,
                 signal,
-            }, (incoming) => {
+            };
+            req = request(url, options, (incoming) => {
                 response = incoming;
                 response.on("error", fail);
                 response.on("aborted", () => fail(new Error("Web response was interrupted before completion")));
                 response.on("close", () => {
-                    if (!settled) fail(new Error("Web response closed before completion"));
+                    if (!settled && !responseEnded) fail(new Error("Web response closed before completion"));
                 });
                 if (settled) { response.destroy(); return; }
+                const encoding = String(response.headers["content-encoding"] ?? "identity").trim().toLowerCase();
+                if (!["identity", "gzip", "deflate", "br"].includes(encoding)) {fail(new Error(`Unsupported Content-Encoding: ${encoding.slice(0, 80)}`)); return;}
+                try {
+                    decoder = encoding === "gzip" ? createGunzip() : encoding === "deflate" ? createInflate() : encoding === "br" ? createBrotliDecompress() : undefined;
+                } catch (error) {fail(error instanceof Error ? error : new Error(String(error))); return;}
+                decoder?.on("error", fail);
                 let bytes = 0;
+                let decodedBytes = 0;
                 const declaredLength = Number(response.headers["content-length"] ?? 0);
                 if (Number.isFinite(declaredLength) && declaredLength > WEB_FETCH_MAX_BYTES) {
                     fail(new Error(`Response exceeds the ${WEB_FETCH_MAX_BYTES} byte limit`));
@@ -208,9 +231,17 @@ async function requestOnce(url: URL, signal: AbortSignal): Promise<WebFetchRespo
                         fail(new Error(`Response exceeds the ${WEB_FETCH_MAX_BYTES} byte limit`));
                         return;
                     }
+                });
+                const bodyStream = decoder ?? response;
+                bodyStream.on("data", (chunk: Buffer | string) => {
+                    if (settled) return;
+                    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                    decodedBytes += buffer.length;
+                    if (decodedBytes > WEB_FETCH_MAX_BYTES) {fail(new Error(`Decoded response exceeds the ${WEB_FETCH_MAX_BYTES} byte limit`)); return;}
                     chunks.push(buffer);
                 });
-                response.on("end", () => {
+                response.on("end", () => {responseEnded = true;});
+                bodyStream.on("end", () => {
                     if (settled) return;
                     try {
                         const result: WebFetchResponse = {
@@ -230,6 +261,7 @@ async function requestOnce(url: URL, signal: AbortSignal): Promise<WebFetchRespo
                         fail(error instanceof Error ? error : new Error(String(error)));
                     }
                 });
+                if (decoder) response.pipe(decoder);
             });
             req.on("error", fail);
             req.on("close", () => {
@@ -251,7 +283,7 @@ export async function fetchPublicWebUrl(
     const abort = () => controller.abort(requestAbortError(signal));
     signal.addEventListener("abort", abort, {once: true});
     const deadline = setTimeout(() => {
-        controller.abort(new Error(`Request did not complete within ${WEB_FETCH_TIMEOUT_MS} ms`));
+        controller.abort(Object.assign(new Error(`Request did not complete within ${WEB_FETCH_TIMEOUT_MS} ms`), {code: "ETIMEDOUT"}));
     }, WEB_FETCH_TIMEOUT_MS);
     deadline.unref?.();
     try {

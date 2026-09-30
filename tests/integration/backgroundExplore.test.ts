@@ -330,14 +330,14 @@ describe("background Explore", () => {
             const continued = await executeToolResult(
                 "agent_followup",
                 JSON.stringify({
-                    target: started.id,
+                    task_id: started.id,
                     message: "继续检查测试覆盖",
                 }),
                 ctx,
                 "continue-agent-message"
             );
             expect(continued.outcome).toBe("ok");
-            expect(continued.modelContent).toContain(`Task: ${started.id}`);
+            expect(continued.modelContent).toContain(`task_id: ${started.id}`);
             expect(continued.modelContent).toContain("Run: 2");
             await finished;
             expect(finishedCount).toBe(2);

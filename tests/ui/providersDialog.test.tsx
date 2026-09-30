@@ -9,6 +9,7 @@ import {resolveHiCodeSettings} from "../../src/settings/resolve.js";
 import {withTempProject} from "../helpers/tempProject.js";
 import {AppForTest} from "../helpers/AppForTest.js";
 import {createTestRuntimeResources} from "../helpers/runtimeResources.js";
+import {LLM_PROVIDER_NAMES} from "../../src/llm/providerRegistry.js";
 
 const oldKey = process.env.GLM_API_KEY;
 afterEach(() => {cleanup(); if (oldKey === undefined) delete process.env.GLM_API_KEY; else process.env.GLM_API_KEY = oldKey;});
@@ -152,7 +153,9 @@ test("provider list has a visible finish action and failed selection stays open"
         await tick();
         expect(app.lastFrame()).toContain("Choose model and start");
         expect(app.lastFrame()).toContain("Back to chat");
-        for (let index = 0; index < 4; index++) {app.stdin.write("\u001b[B"); await tick();}
+        expect(app.lastFrame()).toContain("Alibaba Bailian");
+        expect(app.lastFrame()).toContain("Qwen Token Plan");
+        for (let index = 0; index < LLM_PROVIDER_NAMES.length; index++) {app.stdin.write("\u001b[B"); await tick();}
         app.stdin.write("\r"); await tick();
         expect(app.lastFrame()).toContain("◆ MODEL");
         app.stdin.write("\r");

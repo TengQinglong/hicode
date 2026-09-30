@@ -88,7 +88,7 @@ test("creation and followup share compact rows; receipts do not depend on result
     const created = agent("board");
     created.args = JSON.stringify({name: "board", description: "board：状态逻辑与单元测试", run_in_background: true});
     const followup: ToolCallThread = {id: "followup", role: "tool_call", toolCallId: "followup", name: "agent_followup",
-        args: '{"target":"private-id","message":"long task instructions"}', status: "done", outcome: "ok", result: "Raw receipt wording may change",
+        args: '{"task_id":"private-id","message":"long task instructions"}', status: "done", outcome: "ok", result: "Raw receipt wording may change",
         uiData: {type: "agent_receipt", receipt: {name: "board", description: "board：状态逻辑与单元测试", delivery: "continued"}}};
     const frame = render(<MessageList threads={[created, followup]}/>).lastFrame()!;
     expect(frame.match(/● Agent board · 状态逻辑与单元测试/g)).toHaveLength(2);

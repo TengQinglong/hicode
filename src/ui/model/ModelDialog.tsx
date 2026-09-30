@@ -9,6 +9,7 @@ import {useTerminalWidth} from "../terminalSize.js";
 const SOURCE_LABELS: Record<ModelTargetSettings["source"], string> = {
     glm: "ZHIPU GLM",
     qwen: "ALIBABA QWEN",
+    "qwen-token-plan": "QWEN TOKEN PLAN",
     deepseek: "DEEPSEEK",
     openrouter: "OPENROUTER",
 };

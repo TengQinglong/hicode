@@ -13,7 +13,7 @@ import type {
 export type TaskJournalEntry =
     | TaskEventEnvelope
     | {
-    version: 6;
+    version: 7;
     type: "task_notification_claimed";
     sequence: number;
     sessionId: string;
@@ -172,7 +172,7 @@ function decodeCommon(value: Record<string, unknown>): {
 function decodeShellTask(value: Record<string, unknown>): ShellTaskSnapshot | undefined {
     if (!hasOnlyKeys(value, [
         "id", "kind", "owner", "command", "cwd", "status", "startedAt",
-        "completedAt", "output", "outputResult", "outputIssue", "termination", "executionMode",
+        "completedAt", "output", "outputResult", "outputIssue", "termination", "executionMode", "phase",
     ])) return undefined;
     const common = decodeCommon(value);
     const outputResult = value.outputResult === undefined
@@ -181,7 +181,10 @@ function decodeShellTask(value: Record<string, unknown>): ShellTaskSnapshot | un
     const termination = value.termination === undefined
         ? undefined
         : decodeTermination(value.termination);
+    const phase = value.phase;
     if (
+        (phase !== "queued" && phase !== "starting" && phase !== "running" && phase !== "finished") ||
+        (value.status === "running" ? phase === "finished" : phase !== "finished") ||
         value.kind !== "shell" || !common || common.status === "interrupted" ||
         (value.executionMode !== "sandbox" && value.executionMode !== "host") ||
         !boundedString(value.command, MAX_COMMAND_CHARACTERS) ||
@@ -195,6 +198,7 @@ function decodeShellTask(value: Record<string, unknown>): ShellTaskSnapshot | un
         status: common.status,
         kind: "shell",
         executionMode: value.executionMode,
+        phase,
         command: value.command,
         cwd: value.cwd,
         output: value.output,
@@ -292,13 +296,13 @@ export function decodeTaskJournalEntry(
     value: unknown,
     expectedSessionId: string
 ): TaskJournalEntry | undefined {
-    if (!isRecord(value) || value.version !== 6 || !safeCount(value.sequence) ||
+    if (!isRecord(value) || value.version !== 7 || !safeCount(value.sequence) ||
         value.sequence === 0 || value.sessionId !== expectedSessionId) return undefined;
     if (value.type === "task_notification_claimed") {
         if (!hasOnlyKeys(value, ["version", "type", "sequence", "sessionId", "taskId", "notificationId"]) ||
             !boundedString(value.taskId, MAX_ID_CHARACTERS) || typeof value.notificationId !== "string" || !/^[a-f0-9]{64}$/.test(value.notificationId)) return undefined;
         return {
-            version: 6,
+            version: 7,
             type: "task_notification_claimed",
             sequence: value.sequence,
             sessionId: expectedSessionId,
@@ -321,7 +325,7 @@ export function decodeTaskJournalEntry(
         (value.type === "task_finished" && task.status === "running")
     ) return undefined;
     return {
-        version: 6,
+        version: 7,
         type: value.type,
         sequence: value.sequence,
         sessionId: expectedSessionId,

@@ -26,6 +26,7 @@ interface ManagedTaskBase<Status extends string = TaskStatus> {
 }
 
 export interface ManagedShellTask extends ManagedTaskBase {
+    phase: ShellTaskSnapshot["phase"];
     published: boolean;
     publication: Promise<void>;
     inlineResult?: ShellExecutionResult;
@@ -106,6 +107,7 @@ export async function snapshotShell(
         id: task.id,
         kind: "shell",
         executionMode: task.executionMode,
+        phase: task.phase,
         owner: task.owner,
         command: task.command,
         cwd: task.cwd,

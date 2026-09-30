@@ -520,13 +520,13 @@ describe("bash tool contract", () => {
             ...execution,
           }), ctx, `startup-${JSON.stringify(execution)}`);
           expect(started.outcome).toBe("ok");
-          expect(started.modelContent).toContain("Status: running");
+          expect(started.modelContent).toContain("status: running");
           expect(started.modelContent).toContain("http://127.0.0.1:5174/");
           expect(started.modelContent).toContain("Earlier output omitted");
           expect(started.modelContent).toContain("not a readiness check");
           expect(started.modelContent).not.toContain("�");
           expect(Buffer.byteLength(contentText(started.modelContent))).toBeLessThan(5000);
-          const id = contentText(started.modelContent).match(/Task: ([0-9a-f-]+)/)?.[1];
+          const id = contentText(started.modelContent).match(/task_id: (t_[0-9a-f]{12})/)?.[1];
           expect(id).toBeDefined();
           const status = await executeToolResult("task", JSON.stringify({action: "status", task_id: id}), ctx, "read-startup");
           expect(Buffer.byteLength(contentText(status.modelContent))).toBeGreaterThan(10_000);
@@ -566,7 +566,7 @@ describe("bash tool contract", () => {
         );
         expect(started.outcome).toBe("ok");
         expect(started.modelContent).toContain("completed during the startup observation window");
-        const taskId = contentText(started.modelContent).match(/Task: ([0-9a-f-]+)/)?.[1];
+        const taskId = contentText(started.modelContent).match(/task_id: (t_[0-9a-f]{12})/)?.[1];
         expect(taskId).toBeDefined();
 
         await new Promise((resolve) => setTimeout(resolve, 150));
@@ -577,7 +577,7 @@ describe("bash tool contract", () => {
           "background-status"
         );
         expect(status.outcome).toBe("ok");
-        expect(status.modelContent).toContain("Status: completed");
+        expect(status.modelContent).toContain("status: completed");
         expect(status.modelContent).toContain(`Cwd: ${await realpath(cwd)}`);
         expect(status.modelContent).toContain("Termination: exit code 0");
         expect(status.modelContent).toContain("bytes omitted");
@@ -620,7 +620,7 @@ describe("bash tool contract", () => {
 
         expect(result.outcome).toBe("failed");
         expect(result.modelContent).toContain("failed during the startup observation window");
-        expect(result.modelContent).toContain("Status: failed");
+        expect(result.modelContent).toContain("status: failed");
         expect(result.modelContent).toContain("Termination: exit 1");
         expect(result.modelContent).toContain("listen EPERM");
         expect(result.modelContent).not.toContain("HiCode Sandbox: 本地端口监听被");
@@ -652,9 +652,9 @@ describe("bash tool contract", () => {
         );
         expect(started.outcome).toBe("ok");
         expect(started.modelContent).toContain("Ignored timeout_ms");
-        expect(contentText(started.modelContent).split("\n").slice(0, 3).join("\n")).toContain("terminates when HiCode exits");
+        expect(contentText(started.modelContent)).toContain("terminates when HiCode exits");
         expect(started.displayContent).toContain("terminates when HiCode exits");
-        const taskId = contentText(started.modelContent).match(/Task: ([0-9a-f-]+)/)?.[1];
+        const taskId = contentText(started.modelContent).match(/task_id: (t_[0-9a-f]{12})/)?.[1];
         expect(taskId).toBeDefined();
 
         await new Promise((resolve) => setTimeout(resolve, 180));
@@ -679,7 +679,7 @@ describe("bash tool contract", () => {
           }),
           ctx
         );
-        const taskId = started.match(/Task: ([0-9a-f-]+)/)?.[1];
+        const taskId = started.match(/task_id: (t_[0-9a-f]{12})/)?.[1];
         expect(taskId).toBeDefined();
 
         const stopped = await executeToolResult(
@@ -689,7 +689,7 @@ describe("bash tool contract", () => {
           "background-stop"
         );
         expect(stopped.outcome).toBe("ok");
-        expect(stopped.modelContent).toContain("Status: cancelled");
+        expect(stopped.modelContent).toContain("status: cancelled");
         expect(stopped.modelContent).toContain("aborted user-cancel");
         expect(await tasks.pendingNotifications()).toEqual([]);
       } finally {
@@ -713,7 +713,7 @@ describe("bash tool contract", () => {
           ctx,
           "first-background"
         );
-        const taskId = contentText(started.modelContent).match(/Task: ([0-9a-f-]+)/)?.[1];
+        const taskId = contentText(started.modelContent).match(/task_id: (t_[0-9a-f]{12})/)?.[1];
         expect(taskId).toBeDefined();
 
         const duplicate = await executeToolResult(
@@ -723,7 +723,7 @@ describe("bash tool contract", () => {
           "duplicate-background"
         );
         expect(duplicate.outcome).toBe("failed");
-        expect(duplicate.modelContent).toContain(`Task: ${taskId}`);
+        expect(duplicate.modelContent).toContain(`task_id: ${taskId}`);
         expect(duplicate.modelContent).toContain("task stop");
 
         await tasks.stop(taskId!);

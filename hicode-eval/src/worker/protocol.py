@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import stat
+import time
 from pathlib import Path
 
 
@@ -33,6 +34,32 @@ def atomic_json(path, value):
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temp, path)
+
+
+def wait_verifier_handoff(root, run_id, cancelled):
+    """Host ACK and upload share one bounded, run-scoped handoff after sealing."""
+    started = time.monotonic()
+    accepted = False
+    path = Path(root) / 'verification.json'
+    while True:
+        if cancelled():return False
+        elapsed=time.monotonic()-started
+        if not accepted and elapsed >= 30:raise RuntimeError('Verifier handoff acknowledgement timed out')
+        if elapsed >= 180:raise RuntimeError('Verifier handoff upload timed out')
+        if path.is_symlink():raise ValueError('Invalid verifier handoff file')
+        if path.exists():
+            if not path.is_file() or path.stat().st_size > 4096:raise ValueError('Invalid verifier handoff size/type')
+            value = json.loads(path.read_text())
+            if (not isinstance(value, dict) or type(value.get('version')) is not int or value['version'] != 1
+                    or value.get('runId') != run_id or value.get('status') not in {'accepted', 'ready', 'failed'}):
+                raise ValueError('Invalid verifier handoff identity/state')
+            if value['status'] == 'failed':
+                message=value.get('message')
+                if not isinstance(message,str) or len(message)>1500:raise ValueError('Invalid verifier handoff failure')
+                raise RuntimeError('Verifier upload failed: '+message)
+            if value['status'] == 'ready':return True
+            accepted = True
+        time.sleep(.2)
 
 
 def digest(path):

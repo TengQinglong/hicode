@@ -1,3 +1,4 @@
+import {formatTaskHeader} from "./format.js";
 import {createHash} from "node:crypto";
 import type {ManagedTask, ManagedShellTask} from "./managed.js";
 import type {TaskNotification, TaskSnapshot,} from "./types.js";
@@ -85,7 +86,7 @@ export function notificationFor(task: TaskSnapshot): TaskNotification {
         status: task.status as TaskNotification["status"],
         summary,
         ...(resultId ? {resultId} : {}),
-        message: `Background ${task.kind === "shell" ? "task" : "Agent"} ${task.id}(${messageLabel}) is ${
+        message: `${formatTaskHeader(task)}\n${compactLine(messageLabel)} is ${
             task.status === "completed"
                 ? "completed"
                 : task.status === "interrupted"

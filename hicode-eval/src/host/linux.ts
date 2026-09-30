@@ -10,6 +10,7 @@ import { EVAL_ROOT } from '../paths.js';
 
 const packetSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('phase'), phase: z.string() }),
+  z.object({ type: z.literal('verification_request'), runId: z.string().regex(/^[0-9a-f]{16}$/) }),
   z.object({ type: z.literal('screen'), screen: z.string().max(8 * 1024 * 1024) }),
   z.object({ type: z.literal('events'), data: z.string().max(1024 * 1024) }),
   z.object({ type: z.literal('verification'), text: z.string() }),
@@ -56,6 +57,24 @@ export class LinuxMachine {
     if (await exists(join(path, 'evidence'))) await rename(join(path, 'evidence'), previous);
     await rename(stage, join(path, 'evidence')); await rm(previous, { recursive: true, force: true });
     await save(join(path, 'collection.json'), { complete: true, files });
+  }
+  private async handoffVerification(id: string, tests: string, credential: string): Promise<void> {
+    const remote = '/eval/runs/' + id;
+    const acknowledge = async (status: 'accepted' | 'ready' | 'failed', message?: string) => {
+      const value = JSON.stringify({version: 1, runId: id, status, ...(message ? {message} : {})});
+      await run(this.docker('exec', this.config.machine, 'python3', '-c',
+        "import sys;sys.path.insert(0,'/opt/hicode-eval');from protocol import atomic_json;import json;atomic_json(sys.argv[1],json.loads(sys.argv[2]))",
+        remote + '/verification.json', value), {timeout: 10000});
+    };
+    await acknowledge('accepted');
+    try {
+      await run(this.docker('cp', tests, this.config.machine + ':' + remote + '/tests'), {timeout: 90000});
+      await run(this.docker('exec', this.config.machine, 'chmod', '-R', 'a+rX', remote + '/tests'), {timeout: 30000});
+    } catch (error) {
+      await acknowledge('failed', String(error).replaceAll(credential, '[redacted]').slice(-1500));
+      return;
+    }
+    await acknowledge('ready');
   }
   async recover(state: Run, path: string): Promise<LinuxResult> {
     if (!this.release || state.state !== 'needs_recovery') throw Error('Task is not eligible for recovery');
@@ -107,7 +126,7 @@ export class LinuxMachine {
     const stderr = new Response(proc.stderr).text();
     const setupAllowance = swe ? 360 : profile!.verifierPackages.length ? 660 : profile!.packages.length ? 360 : 240;
     const timer = setTimeout(() => { void this.cancel(state.id).catch(() => {}); }, (state.budget.agentSeconds + spec.verifier.timeout_sec + setupAllowance) * 1000);
-    let buffer = '', lastCopy = Date.now();
+    let buffer = '';
     try {
       const reader = proc.stdout.getReader();
       const decoder = new TextDecoder();
@@ -121,11 +140,10 @@ export class LinuxMachine {
           const packet = packetSchema.parse(JSON.parse(line));
           if (packet.type === 'phase') {
             await onPhase(packet.phase);
-            if (packet.phase === 'Awaiting local verification' && !verificationSent) {
-              verificationSent = true;
-              await run(this.docker('cp', join(task, swe ? 'hidden' : 'tests'), this.config.machine + ':' + remote + '/tests'));
-              await run(this.docker('exec', this.config.machine, 'sh', '-c', `chmod -R a+rX /eval/runs/${state.id}/tests && touch /eval/runs/${state.id}/verify.ready`));
-            }
+          } else if (packet.type === 'verification_request') {
+            if (packet.runId !== state.id || verificationSent) throw Error('Invalid or duplicate verification handoff');
+            verificationSent = true;
+            await this.handoffVerification(state.id, join(task, swe ? 'hidden' : 'tests'), credential);
           } else if (packet.type === 'screen') {
             await Bun.write(join(path, 'live/screen.tmp'), packet.screen);
             await rename(join(path, 'live/screen.tmp'), join(path, 'live/screen.txt'));
@@ -134,13 +152,6 @@ export class LinuxMachine {
           else if (packet.type === 'verification') await Bun.write(join(path, 'verification.txt'), packet.text);
           else if (packet.type === 'error') note = packet.message.replaceAll(credential, '[redacted]');
           else result = packet;
-        }
-        if (Date.now() - lastCopy > 30000) {
-          try {await this.collect(state.id, path);}
-          catch (error) {
-            await Bun.write(join(path, 'collection-error.txt'), String(error).replaceAll(credential, '[redacted]').slice(-2000));
-          }
-          lastCopy = Date.now();
         }
       }
       const code = await proc.exited;

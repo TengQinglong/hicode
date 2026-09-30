@@ -1,4 +1,3 @@
-import {randomUUID} from "node:crypto";
 import {createTurnAbortController, normalizeTurnAbortReason} from "../runtime/abort.js";
 import type {ShellExecutionResult} from "../tools/bash/process.js";
 import type {ShellRunnerLike} from "../tools/bash/shellRunner.js";
@@ -17,12 +16,14 @@ function statusFromResult(result: ShellExecutionResult): TaskStatus {
 }
 
 export async function createShellTask(
+    id: string,
     binding: TaskSessionBinding,
     input: StartShellTaskInput
 ): Promise<ManagedShellTask> {
     const outputPath = await binding.toolResultStore.createCapture();
     return {
-        id: randomUUID(),
+        id,
+        phase: "queued",
         published: false,
         publication: Promise.resolve(),
         executionMode: input.sandboxPermissions === "require_escalated" ? "host" : "sandbox",
@@ -44,26 +45,30 @@ export async function runShellTask(
     task: ManagedShellTask,
     input: StartShellTaskInput,
     shellRunner: ShellRunnerLike,
-    execution: {kind: "background" | "continuation"; timeoutMs: number | null; fileCommits: FileCommitCoordinator; onStarted(): void},
+    execution: {kind: "background" | "continuation"; timeoutMs: number | null; fileCommits: FileCommitCoordinator; onPhaseChanged(): void},
     onFinished: (task: ManagedShellTask) => Promise<void>
 ): Promise<void> {
     let finalStatus: TaskStatus = "failed";
     try {
-        const run = () => shellRunner.run({
-            command: input.command,
-            cwd: input.cwd,
-            signal: task.controller.signal,
-            timeoutMs: execution.timeoutMs,
-            outputFilePath: task.outputPath,
-            maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
-            previewChars: 30_000,
-            onStarted: execution.onStarted,
-            sandboxPermissions: input.sandboxPermissions,
-            writableRoots: input.writableRoots,
-            networkAccess: input.networkAccess,
-        });
+        const run = () => {
+            task.phase = "starting";
+            execution.onPhaseChanged();
+            return shellRunner.run({
+                command: input.command,
+                cwd: input.cwd,
+                signal: task.controller.signal,
+                timeoutMs: execution.timeoutMs,
+                outputFilePath: task.outputPath,
+                maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
+                previewChars: 30_000,
+                onStarted: () => {task.phase = "running"; task.startedAt = new Date().toISOString(); execution.onPhaseChanged();},
+                sandboxPermissions: input.sandboxPermissions,
+                writableRoots: input.writableRoots,
+                networkAccess: input.networkAccess,
+            });
+        };
         const result = execution.kind === "continuation"
-            ? await execution.fileCommits.exclusive(task.controller.signal, run) : await run();
+            ? await execution.fileCommits.exclusive(task.controller.signal, run, task.id) : await run();
         if (!task.published) task.inlineResult = result;
         finalStatus = statusFromResult(result);
         task.termination = result.termination;
@@ -96,6 +101,7 @@ export async function runShellTask(
             : {kind: "spawn_error", error: error instanceof Error ? error : new Error(String(error))}};
     } finally {
         task.status = finalStatus;
+        task.phase = "finished";
         task.completedAt = new Date().toISOString();
         task.notificationPending = !task.suppressTerminalNotification && !isExpectedShellShutdown(task);
         await task.store.removeTemporaryFile(task.outputPath);
