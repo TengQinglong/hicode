@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+from unittest.mock import patch
 from pathlib import Path
 from protocol import namespace_argv, package_install_argv
 
@@ -26,6 +27,22 @@ class NamespaceTest(unittest.TestCase):
         a=namespace_argv(['git','status'],'/eval/a/project','/eval/a/home','/eval/a/logs','/run/a')
         i=a.index('/run/a')
         self.assertEqual(a[i-1], '--ro-bind')
+
+    def test_only_verifier_can_use_private_root_overlay_or_compile_tests(self):
+        for option in [{'root_overlay':True},{'writable_tests':True}]:
+            with self.assertRaises(ValueError):namespace_argv(['python'],'/p','/h','/l','/c',**option)
+        a=namespace_argv(['python'],'/p','/h','/l','/c','/t',root_overlay=True)
+        self.assertEqual(a[a.index('--tmpfs')+1],'/')
+        i=a.index('/etc');self.assertEqual(a[i-1],'--ro-bind')
+        i=a.index('/t');self.assertEqual(a[i-1],'--ro-bind')
+        b=namespace_argv(['python'],'/p','/h','/l','/c','/t',writable_tests=True)
+        i=b.index('/t');self.assertEqual(b[i-1],'--bind')
+
+    def test_headless_verifier_does_not_inherit_another_runs_server_directory(self):
+        with patch('protocol.os.listdir',return_value=['etc','usr','server']):
+            a=namespace_argv(['python'],'/p','/h','/l','/c','/t',root_overlay=True)
+        self.assertNotIn('/server',a)
+        self.assertIn('/etc',a);self.assertIn('/usr',a)
 
     def test_cached_pins_install_without_network_and_validate_requirements(self):
         with tempfile.TemporaryDirectory() as tmp:

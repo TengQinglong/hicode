@@ -4,7 +4,7 @@
 
 ## 路径与复用
 
-在当前工具调用中显式填写 `HE_ROOT`（checkout）、`HE_DATA`（仓库外数据根）、`HE_TASKS`（固定数据集）、`HE_PAYLOAD`（固定源码包）、`HE_PORT` 和 `HE_BATCH_FILE`。变量不会自动跨工具调用保存。通用配置在 `hicode-eval/config/`；临时提交文件放在外部数据目录的 `batch-configs/`，不要存回源码目录。固定回归题组可以复用 `config/regression15-*.json`，不要误将示例题目当作用户选题。
+在当前工具调用中显式填写 `HE_ROOT`（checkout）、`HE_DATA`（仓库外数据根）、`HE_TASKS`（固定数据集）、`HE_PAYLOAD`（固定源码包）、`HE_PORT` 和 `HE_BATCH_FILE`。变量不会自动跨工具调用保存。通用配置在 `hicode-eval/config/`；临时提交文件放在外部数据目录的 `batch-configs/`，不要存回源码目录。固定回归题组可以复用 `config/regression15.json`，不要误将示例题目当作用户选题。
 
 现有数据根的 `config.json` 记录真实 tasks/payload/model/concurrency；`.service.lock/owner.json` 记录 PID/启动身份。结合监听进程和 status 核对，不能只凭旧 owner 文件杀进程。模型凭据不打印、不复制到任务文件。
 
@@ -25,7 +25,7 @@ status/wait 输出含完整任务清单，接收后只打印批次 state/counts�
 
 先用 `bash hicode-eval/eval.sh --help` 确认入口；路径变更后的离线检查用 `bun test hicode-eval/tests`，Python 用 `PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker python3 -B -m unittest discover -s hicode-eval/tests`。正常启动已有环境不重复运行这些开发验证。
 
-批次 JSON 只有 `name`、`tasks`（明确选择的 ID 数组）、`concurrency`（1–3）、`budget.agentSeconds`（30–7200）。以已保存的用户约定为准，不直接运行示例文件中的题目。相同预算可合组，不同预算可同时排到同一服务，由全局并发限额控制。
+批次 JSON 只有 `name`、`tasks`（`{id, agentSeconds}` 对象数组）与 `concurrency`（1–3）。`agentSeconds` 是每题时限，范围 30–7200 秒，省略使用服务默认 1800 秒；没有批次级 budget 参数。同一轮的不同预算放进同一个批次，不再按时间分组。配置示例：`{"name":"本轮","tasks":[{"id":"polyglot-c-py","agentSeconds":900},{"id":"modernize-scientific-stack","agentSeconds":600}],"concurrency":3}`。以已保存的用户约定为准，不直接运行示例文件中的题目。
 
 只有服务不存在或已空闲且配置确需更新时启动/重启；任务运行中不能使用这条命令另开同机服务：
 
@@ -58,10 +58,12 @@ recover 用于 needs_recovery，证据不足会拒绝；resume 只恢复既有�
 | `runs/ID/preparation.log` | 初始化和依赖诊断 |
 | `runs/ID/live/screen.txt` | 最近 TUI，不能仅据画面静止判断停止 |
 | `runs/ID/live/events.jsonl` | 有序事件；外层 at 为毫秒，agent_event 的内层 event 含工具与模型事件 |
-| `runs/ID/verification.txt` | 原判题输出 |
+| `runs/ID/verification.txt` | 判题输出摘要；完整日志见 evidence/logs/verifier/output.txt |
 | `runs/ID/evidence/` | 收集的 project、home、job、logs、outcome/result |
 | `runs/ID/collection.json` | 收集结果与文件哈希 |
 
 工具按内层 toolCallId 配对，模型耗时看 model_stream_start/end；审批状态看 approval_review/state。请求日志遵循被测版本的 HiCode Storage Layout，仅在排查具体问题时定位；它可能含代码和凭据相关上下文，分享前脱敏。
 
 一次状态核对后根据任务结束、用户追问或明确异常再读取。若用户只要求启动，交付网页地址与实际运行情况后结束回复；不得承诺不存在的自动唤醒功能。
+
+周期收集失败见 `collection-error.txt`，不能仅据此判断 Agent 执行失败。快照中的符号链接只记录目标文本，不应解引用读取宿主文件。FEAL 编译只使用封存后的独立测试副本；Headless 临时根只用于判题。判题依赖准备失败是 unavailable，不能计作模型答错。

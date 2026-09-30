@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { REPOSITORY_ROOT } from '../src/paths.js';
 import { classify, Lab } from '../src/host/manager.js';
 import { save, tree } from '../src/host/store.js';
-import { runSchema, configSchema, batchSchema } from '../src/host/types.js';
+import { runSchema, configSchema, batchSchema, submissionSchema } from '../src/host/types.js';
+import * as taskAdapters from '../src/host/publicTasks.js';
 import { serve } from '../src/host/server.js';
-import { LinuxMachine } from '../src/host/linux.js';
+import { EvidenceCollectionError, LinuxMachine } from '../src/host/linux.js';
 
 async function fixture() {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'hicode-eval-')));
@@ -57,7 +58,7 @@ test('restart retains interrupted task and prevents new submissions', async () =
     await persist(f, s);
     const lab = new Lab(f.config, 'fake'); await lab.init();
     expect(lab.runs.get(s.id)?.state).toBe('needs_recovery');
-    await expect(lab.submit({ name: 'test', tasks: ['alpha'], concurrency: 1, budget: f.config.budget })).rejects.toThrow('Recover');
+    await expect(lab.submit({ name: 'test', tasks: [{id:'alpha'}], concurrency: 1 })).rejects.toThrow('Recover');
   } finally { await f.cleanup(); }
 });
 
@@ -71,6 +72,13 @@ test('viewer returns one current snapshot, not offset replay; rejects cross orig
   try {
     const home = await fetch(`http://127.0.0.1:${port}/`); const cookie = home.headers.get('set-cookie')!.split(';')[0];
     const response = await fetch(`http://127.0.0.1:${port}/api/terminal?run=${s.id}`, { headers: { cookie } }); expect(await response.json()).toMatchObject({ screen: 'final screen\n' });
+    await writeFile(join(lab.path(s.id),'collection-error.txt'),'temporary snapshot failure');
+    await writeFile(join(lab.path(s.id),'verification.txt'),'AssertionError: deliverable mismatch');
+    const logs=await (await fetch(`http://127.0.0.1:${port}/api/preparation?run=${s.id}`,{headers:{cookie}})).json();
+    expect(logs.text).toContain('不代表执行失败');expect(logs.text).toContain('AssertionError: deliverable mismatch');
+    await rm(join(lab.path(s.id),'verification.txt'));
+    await symlink(join(f.dir,'placeholder.json'),join(lab.path(s.id),'verification.txt'));
+    expect((await fetch(`http://127.0.0.1:${port}/api/preparation?run=${s.id}`,{headers:{cookie}})).status).toBe(400);
     const forbidden = await fetch(`http://127.0.0.1:${port}/api/status`, { headers: { cookie, origin: 'https://example.com' } }); expect(forbidden.status).toBe(403);
   } finally { server.stop(true); await f.cleanup(); }
 });
@@ -109,8 +117,11 @@ test('submission validates all tasks and concurrency before publishing a batch',
   const f = await fixture(); const lab = new Lab(f.config, 'fake');
   try {
     await lab.init();
-    await expect(lab.submit({ name: 'invalid', tasks: ['missing'], concurrency: 1, budget: f.config.budget })).rejects.toThrow('Unknown task');
-    await expect(lab.submit({ name: 'invalid', tasks: ['a'], concurrency: 3, budget: f.config.budget })).rejects.toThrow('concurrency');
+    await expect(lab.submit({ name: 'invalid', tasks: [{id:'missing'}], concurrency: 1 })).rejects.toThrow('Unknown task');
+    await expect(lab.submit({ name: 'invalid', tasks: [{id:'a'}], concurrency: 3 })).rejects.toThrow('concurrency');
+    await expect(lab.submit({ name: 'invalid', tasks: [{id:'a',agentSeconds:900},{id:'a',agentSeconds:1800}], concurrency: 1 })).rejects.toThrow('distinct');
+    expect(() => submissionSchema.parse({ name:'invalid',tasks:[{id:'a',agentSeconds:29}] })).toThrow();
+    expect(() => submissionSchema.parse({ name:'invalid',tasks:[{id:'a',agentSeconds:7201}] })).toThrow();
     expect(lab.batches.size).toBe(0); expect(lab.runs.size).toBe(0);
   } finally { await lab.close(); await f.cleanup(); }
 });
@@ -146,10 +157,33 @@ test('queued batch cancellation prevents execution and premature reporting is re
   } finally { await lab.close(); await f.cleanup(); }
 });
 
-test('new batches default to thirty minutes and preserve an explicit budget', async () => {
-  const { budgetSchema } = await import('../src/host/types.js');
-  expect(budgetSchema.parse({}).agentSeconds).toBe(1800);
-  expect(budgetSchema.parse({agentSeconds: 2400}).agentSeconds).toBe(2400);
+test('one batch executes and restores independently resolved task limits', async () => {
+  const f = await fixture(), lab = new Lab(f.config, 'fixture');
+  const validate = spyOn(taskAdapters, 'validatePublicTask').mockResolvedValue({hashes:{}, inputs:[], initializer:null, directories:[], packages:[], verifierPackages:[], verifierPrelude:'none',verifierRootOverlay:false});
+  const prepare = spyOn(LinuxMachine.prototype, 'prepare').mockResolvedValue(undefined);
+  const execute = spyOn(LinuxMachine.prototype, 'execute').mockResolvedValue({type:'result',execution:'completed',grading:'passed',uid:20001});
+  try {
+    for (const id of ['cancel-async-tasks','regex-log','sqlite-db-truncate']) {
+      await mkdir(join(f.config.tasks,id));
+      await writeFile(join(f.config.tasks,id,'task.toml'),'[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=900\n');
+    }
+    await save(join(f.config.payload,'manifest.json'),{});
+    await lab.init(); await lab.prepareMachine();
+    const batch = await lab.submit({name:'mixed limits',concurrency:2,tasks:[
+      {id:'cancel-async-tasks',agentSeconds:900},
+      {id:'regex-log',agentSeconds:1800},
+      {id:'sqlite-db-truncate'},
+    ]});
+    for (let i=0;i<100&&batch.runIds.some(id=>lab.runs.get(id)?.state!=='passed');i++) await Bun.sleep(5);
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(Object.fromEntries(execute.mock.calls.map(([run])=>[run.task,run.budget.agentSeconds]))).toEqual({
+      'cancel-async-tasks':900,'regex-log':1800,'sqlite-db-truncate':1800,
+    });
+    expect([...lab.batches.keys()]).toEqual([batch.id]);
+    const restored = new Lab(f.config,'fixture'); await restored.init();
+    expect(batch.runIds.map(id=>restored.runs.get(id)?.budget.agentSeconds)).toEqual([900,1800,1800]);
+    expect(restored.batchView(restored.batches.get(batch.id)!).counts.passed).toBe(3);
+  } finally {await lab.close(); validate.mockRestore();prepare.mockRestore();execute.mockRestore();await f.cleanup();}
 });
 
 
@@ -218,4 +252,29 @@ test('failed recovery retains its blocked state and does not fabricate a score',
     expect(lab.runs.get(previous.id)).toEqual(previous);
     expect(lab.batchView(lab.batches.get(previous.batchId)!).state).toBe('blocked');
   } finally {await lab?.close();prepare.mockRestore();recover.mockRestore();await f.cleanup();}
+});
+
+
+test('final export failure preserves sealed execution and grading without publishing a reward', async () => {
+  const f=await fixture(), lab=new Lab(f.config,'fixture');
+  const validate=spyOn(taskAdapters,'validatePublicTask').mockResolvedValue({hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPackages:[],verifierPrelude:'none',verifierRootOverlay:false});
+  const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined);
+  const execute=spyOn(LinuxMachine.prototype,'execute').mockImplementation(async (_state,path) => {
+    await save(join(path,'container.json'),{session:_state.id,id:'test-machine',attach:'fixture'});
+    throw new EvidenceCollectionError({type:'result',execution:'completed',grading:'passed',uid:20001},'disk unavailable');
+  });
+  try {
+    await mkdir(join(f.config.tasks,'cancel-async-tasks'));
+    await writeFile(join(f.config.tasks,'cancel-async-tasks','task.toml'),'[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=900\n');
+    await save(join(f.config.payload,'manifest.json'),{});
+    await lab.init();await lab.prepareMachine();
+    const batch=await lab.submit({name:'export failure',concurrency:1,tasks:[{id:'cancel-async-tasks'}]});
+    const id=batch.runIds[0]!;
+    for(let i=0;i<100&&lab.runs.get(id)?.state!=='needs_recovery';i++)await Bun.sleep(5);
+    expect(lab.runs.get(id)).toMatchObject({state:'needs_recovery',execution:'completed',grading:'passed',collection:'retained'});
+    expect(lab.runs.get(id)?.reward).toBeUndefined();
+    expect(lab.batchView(batch).counts).toMatchObject({passed:0,failed:0,errors:1});
+    const restored=new Lab(f.config,'fixture');await restored.init();
+    expect(restored.runs.get(id)).toMatchObject({execution:'completed',grading:'passed',collection:'retained'});
+  }finally{await lab.close();validate.mockRestore();prepare.mockRestore();execute.mockRestore();await f.cleanup();}
 });

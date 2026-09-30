@@ -5,6 +5,34 @@ import signal
 import stat
 import subprocess
 import time
+import re
+
+
+def verifier_environment(config, home):
+    paths=[]
+    if config.get('verifierPackages'):paths.append('/app/.eval-verifier-python')
+    if config.get('packages'):paths.append('/app/.eval-python')
+    paths.append(str(home / '.local/lib/python3.13/site-packages'))
+    return {'PATH':'/opt/hicode-verifier/bin:/opt/python313/bin:'+str(home / '.local/bin')+':'+str(home / 'bin')+':'+os.environ['PATH'],
+            'HOME':str(home),'LANG':'C.UTF-8','PYTHONPATH':os.pathsep.join(paths)}
+
+
+def display_output(path):
+    with path.open('rb') as stream:
+        data = stream.read(4 * 1024 * 1024 + 1)
+        if len(data) > 4 * 1024 * 1024:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - 64000))
+            return stream.read().decode('utf-8', errors='replace')
+    text = data.decode('utf-8', errors='replace')
+    warning = re.search(r'^=+ warnings summary =+\s*$', text, re.M)
+    end = text.find('-- Docs:', warning.end()) if warning else -1
+    if warning and end >= 0:
+        newline = text.find('\n', end)
+        summary = text[newline + 1:] if newline >= 0 else ''
+        count = re.search(r'\b(\d+) warnings?\b', summary)
+        text = text[:warning.start()] + f"Warnings: {count.group(1) if count else 'see raw log'}; full details in logs/verifier/output.txt\n" + summary
+    return text[-64000:]
 
 
 def validate_report(report_path, code):
@@ -72,8 +100,4 @@ def verify(args, *, timeout, output_path, report_path, cwd, env, preexec_fn, can
         if reason:
             output.write('\n' + reason + '\n')
     # Full output remains on disk, while the control protocol carries a bounded tail.
-    with output_path.open('rb') as output:
-        output.seek(0, 2)
-        output.seek(max(0, output.tell() - 64000))
-        text = output.read().decode('utf-8', errors='replace')
-    return grade, text
+    return grade, display_output(output_path)

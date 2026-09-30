@@ -95,3 +95,5 @@ For another round, ask Root to continue the **same** Agents. `agent_followup` qu
 ## Diagnose configuration or execution
 
 Start with `/agents` loading issues and `/tasks` actual status. Role descriptions are not proof that a tool ran, a Todo was updated or a test passed. For followup investigations compare stable task/agent IDs, runCount, request history and task lifecycle records. See [Storage](storage.md) for their locations.
+
+For a background Shell result that blocks work, use `task(action="wait", task_id="...")` to retrieve its terminal status and output. Omitting the ID waits for pending Agent delegates, not persistent services. Children may wait only for Shell tasks they started. Cancelling the wait does not stop the process; use task stop explicitly.

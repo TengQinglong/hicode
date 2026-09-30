@@ -110,7 +110,17 @@ class Events:
                 and not self.pending_tools and self.ending is not None and self.ending['persistence_status'] == 'saved')
 
 
-def namespace_argv(args, project, home, logs, control, tests=None):
-    result=['bwrap','--unshare-user','--unshare-pid','--die-with-parent','--ro-bind','/','/','--proc','/proc','--dev','/dev','--tmpfs','/tmp','--bind',str(project),'/app','--bind',str(home),str(home),'--bind',str(logs),str(logs),'--ro-bind',str(control),str(control),'--chdir','/app']
-    if tests is not None:result+=['--ro-bind',str(tests),'/tests','--bind',str(Path(logs)/'verifier'),'/logs/verifier']
+def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False):
+    if tests is None and (writable_tests or root_overlay):raise ValueError('Verifier-only filesystem options')
+    result=['bwrap','--unshare-user','--unshare-pid','--die-with-parent']
+    if root_overlay:
+        # A verifier may create new top-level directories in a private tmpfs;
+        # existing system entries remain read-only. /server is fresh for Headless's
+        # original mkdir check, even when the shared machine has that path already.
+        result+=['--tmpfs','/']
+        for name in sorted(os.listdir('/')):
+            if name not in {'proc','dev','tmp','app','tests','logs','server'}:result+=['--ro-bind','/'+name,'/'+name]
+    else:result+=['--ro-bind','/','/']
+    result+=['--proc','/proc','--dev','/dev','--tmpfs','/tmp','--bind',str(project),'/app','--bind',str(home),str(home),'--bind',str(logs),str(logs),'--ro-bind',str(control),str(control),'--chdir','/app']
+    if tests is not None:result+=['--bind' if writable_tests else '--ro-bind',str(tests),'/tests','--bind',str(Path(logs)/'verifier'),'/logs/verifier']
     return result+args

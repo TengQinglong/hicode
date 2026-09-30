@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { validatePublicTask, prepareTaskInputs, taskSchema } from './publicTasks.js';
-import { run, readJson, save, tree, exists } from './store.js';
+import { run, readJson, save, evidenceTree, exists } from './store.js';
 import type { Config, Run } from './types.js';
 import { EVAL_ROOT } from '../paths.js';
 
@@ -16,6 +16,10 @@ const packetSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('result'), execution: z.enum(['completed', 'failed', 'timeout', 'cancelled']), grading: z.enum(['passed', 'failed', 'unavailable']), uid: z.number().int().positive() }),
 ]);
 export type LinuxResult = Extract<z.infer<typeof packetSchema>, { type: 'result' }> & { note?: string };
+/** A sealed runner result remains true even when its host evidence export fails. */
+export class EvidenceCollectionError extends Error {
+  constructor(readonly result: LinuxResult, detail: string) {super('Final evidence export failed: ' + detail);}
+}
 export class LinuxMachine {
   private release = '';
   constructor(private readonly config: Config) {}
@@ -43,7 +47,7 @@ export class LinuxMachine {
   private async collect(id: string, path: string): Promise<void> {
     const stage = join(path, 'collecting'); await rm(stage, { recursive: true, force: true }); await mkdir(stage);
     await run(this.docker('cp', this.config.machine + ':/eval/runs/' + id + '/.', stage), { timeout: 60000 });
-    const files = await tree(stage);
+    const files = await evidenceTree(stage);
     const previous = join(path, 'evidence.previous');
     // A prior interrupted rotation may have left both generations. The new stage
     // has been fully validated before replacing either one.
@@ -72,7 +76,7 @@ export class LinuxMachine {
     if (profile.initializer) await run(this.docker('cp', join(task, 'environment', profile.initializer.file), this.config.machine + ':' + remote + '/project/' + profile.initializer.file));
     await run(this.docker('cp', join(task, 'instruction.md'), this.config.machine + ':' + remote + '/instruction.md'));
     const spec = taskSchema.parse(Bun.TOML.parse(await Bun.file(join(task, 'task.toml')).text()));
-    await save(join(path, 'job.json'), { model: this.config.model, release: this.release, agentSeconds: state.budget.agentSeconds, originalAgentSeconds: spec.agent.timeout_sec, verifierSeconds: spec.verifier.timeout_sec, initializer: profile.initializer, packages: profile.packages, verifierPackages: profile.verifierPackages, verifierPrelude: profile.verifierPrelude });
+    await save(join(path, 'job.json'), { model: this.config.model, release: this.release, agentSeconds: state.budget.agentSeconds, originalAgentSeconds: spec.agent.timeout_sec, verifierSeconds: spec.verifier.timeout_sec, initializer: profile.initializer, packages: profile.packages, verifierPackages: profile.verifierPackages, verifierPrelude: profile.verifierPrelude, verifierRootOverlay: profile.verifierRootOverlay });
     await run(this.docker('cp', join(path, 'job.json'), this.config.machine + ':' + remote + '/job.json'));
     if (await exists(join(path, 'cancel'))) await this.cancel(state.id);
     await mkdir(join(path, 'live'), { recursive: true });
@@ -113,16 +117,25 @@ export class LinuxMachine {
           else if (packet.type === 'error') note = packet.message.replaceAll(credential, '[redacted]');
           else result = packet;
         }
-        if (Date.now() - lastCopy > 30000) { await this.collect(state.id, path); lastCopy = Date.now(); }
+        if (Date.now() - lastCopy > 30000) {
+          try {await this.collect(state.id, path);}
+          catch (error) {
+            await Bun.write(join(path, 'collection-error.txt'), String(error).replaceAll(credential, '[redacted]').slice(-2000));
+          }
+          lastCopy = Date.now();
+        }
       }
       const code = await proc.exited;
       if (code || !result || buffer.trim()) throw Error(note || (await stderr).replaceAll(credential, '[redacted]').slice(-1000) || 'Runner ended without confirmed completion');
-      await this.collect(state.id, path);
+      try {await this.collect(state.id, path);}
+      catch (error) {throw new EvidenceCollectionError(result, String(error).replaceAll(credential, '[redacted]').slice(-2000));}
       if (note) await Bun.write(join(path, 'error.txt'), note);
       return { ...result, ...(note ? { note } : {}) };
     } catch (error) {
-      await this.cancel(state.id).catch(() => {});
-      await this.collect(state.id, path).catch(() => {});
+      if (!(error instanceof EvidenceCollectionError)) {
+        if (!result) await this.cancel(state.id).catch(() => {});
+        await this.collect(state.id, path).catch(() => {});
+      }
       throw error;
     } finally { clearTimeout(timer); }
   }

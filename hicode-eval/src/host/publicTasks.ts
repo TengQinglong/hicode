@@ -13,7 +13,8 @@ const profileSchema = z.object({
   directories: z.array(inputPath).max(64),
   packages: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.+-]*$/)).max(16),
   verifierPackages: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.+-]*$/)).max(16).default([]),
-  verifierPrelude: z.enum(['copy-test-helper','none'])
+  verifierPrelude: z.enum(['copy-test-helper','compile-feal-extension','none']),
+  verifierRootOverlay: z.boolean().default(false)
 }).strict().superRefine((profile, ctx) => {
   const targets = new Set<string>();
   for (const input of profile.inputs) {
@@ -41,7 +42,7 @@ export async function validatePublicTask(id: string, path: string) {
 }
 
 /** Only explicitly reviewed public inputs enter the Agent workspace, never the whole task. */
-export async function prepareTaskInputs(task: string, destination: string, input: z.infer<typeof profileSchema>): Promise<void> {
+export async function prepareTaskInputs(task: string, destination: string, input: z.input<typeof profileSchema>): Promise<void> {
   const profile = profileSchema.parse(input);
   if (await realpath(dirname(destination)) !== resolve(dirname(destination))) throw Error('Symlinked input parent');
   await mkdir(destination, { mode: 0o700 });

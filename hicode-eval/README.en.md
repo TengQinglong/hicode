@@ -78,7 +78,20 @@ bash hicode-eval/eval.sh status --batch BATCH_ID
 bash hicode-eval/eval.sh wait --batch BATCH_ID --wait-seconds 30
 ```
 
-Replace `BATCH_ID` with the ID returned on submission. The example runs three public tasks, with concurrency 3 and 30 minutes per task. Adjust `tasks`, `concurrency`, and `budget.agentSeconds` in the batch file as needed. Concurrency is capped at 3 and cannot exceed the service limit; task budgets range from 30 to 7200 seconds. Actual and original task budgets are recorded separately; extended budgets are development evaluation conditions.
+Replace `BATCH_ID` with the ID returned on submission. One batch can contain different execution limits. Each task declares an `id` and an optional `agentSeconds`:
+
+```json
+{
+  "name": "This test round",
+  "tasks": [
+    { "id": "cancel-async-tasks", "agentSeconds": 900 },
+    { "id": "log-summary-date-ranges", "agentSeconds": 1800 }
+  ],
+  "concurrency": 3
+}
+```
+
+Omitting `agentSeconds` uses the service default (1800 seconds); each task accepts 30–7200 seconds. Concurrency is capped at 3 and cannot exceed the service limit. The page displays each task's limit, and completed tasks automatically release their slots. Actual and original task budgets are recorded separately; extended budgets are development evaluation conditions. The fixed 15-task regression group is [regression15.json](config/regression15.json).
 
 Use `--source` and `--model` together to override a configured model, or `--model-config` for an explicit connection. If changing the port, pass the same `--port` to every CLI command. Run only one service per evaluation machine, and do not deploy another version while tasks are active.
 
@@ -89,6 +102,8 @@ A person or an agent such as Codex can operate the CLI. **Scheduling and grading
 Database, image, and calendar inputs are copied individually from the reviewed `inputs` manifest in `config/terminal-bench.json` and verified by hash, rather than copying the entire task directory. The image task requires a model with explicit image input support.
 
 Original tests are uploaded and run after execution finishes; the Agent does not receive tests or reference solutions during its attempt. The verifier preserves the original assertions and pytest arguments, moving installation steps from `test.sh` into environment preparation. `cancel-async-tasks` also retains the original test helper copy step.
+
+The verifier can read task-installed Python dependencies, with pinned verifier packages taking priority. FEAL builds in a private verifier copy of the tests; Headless uses a private temporary root for its required paths. pytest caches go to writable logs. Displayed warnings are summarized; full output remains in `evidence/logs/verifier/output.txt`.
 
 - `passed` / `failed`: the pytest exit code agrees with the current CTRF report, producing a valid score.
 - Verifier timeout, startup failure, missing tests, or inconsistent reports: an infrastructure error with no valid score, not a fabricated zero.
@@ -104,7 +119,7 @@ Host <data-dir>/
     live/events.jsonl          Execution events
     live/screen.txt            Latest TUI screen
     preparation.log           Environment and execution diagnostics
-    verification.txt          Original test output
+    verification.txt          Test output summary (full output: evidence/logs/verifier/output.txt)
     evidence/                 Code, home directory, and logs
     collection.json           Export checksums
     evidence/outcome.json     Execution/grading facts before cleanup
@@ -115,6 +130,8 @@ Linux source releases and dependencies: /opt/hicode/
 ```
 
 Events and screens stream back continuously; full evidence collection is attempted every 30 seconds and again at completion. Abrupt machine shutdown can lose evidence not yet exported; retain the volume for inspection. Logs may contain source code, prompts, and tool output. Redact them before sharing.
+
+Evidence records symlink targets without following them. Periodic collection errors are saved in `collection-error.txt` and do not interrupt solving; final export remains required before completion. Confirmed execution and grading facts survive an export failure, but no reward is published. The execution and grading panel shows failure summaries and collection diagnostics.
 
 Closing the browser does not stop tasks. Ctrl+C in the service terminal cancels active tasks. `bash .devcontainer/linux.sh eval-stop` stops the evaluation machine while preserving its volume. Restarting the service does not resume or rerun attempted tasks. Unstarted tasks without execution evidence remain queued; other unfinished evidence blocks scheduling until inspected. After recovery, use `bash hicode-eval/eval.sh resume --batch BATCH_ID` to explicitly continue queued scheduling. This command does not clear errors or rerun completed tasks.
 

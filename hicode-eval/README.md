@@ -78,7 +78,20 @@ bash hicode-eval/eval.sh status --batch BATCH_ID
 bash hicode-eval/eval.sh wait --batch BATCH_ID --wait-seconds 30
 ```
 
-将 `BATCH_ID` 替换为提交返回的 ID。示例批次配置 3 道公开题，并发 3、每题 30 分钟；新增题目通过单独批次提交。修改批次文件的 `tasks`、`concurrency`、`budget.agentSeconds` 即可调整；并发最多 3，不能超过服务上限；时限为 30–7200 秒。实际预算和原题预算均会记录，加长时限属于研发评测条件。
+将 `BATCH_ID` 替换为提交返回的 ID。同一批次可以混合不同执行时限，任务用 `id` 和可选的 `agentSeconds` 声明：
+
+```json
+{
+  "name": "本轮测试",
+  "tasks": [
+    { "id": "cancel-async-tasks", "agentSeconds": 900 },
+    { "id": "log-summary-date-ranges", "agentSeconds": 1800 }
+  ],
+  "concurrency": 3
+}
+```
+
+省略某题的 `agentSeconds` 时使用服务默认值（1800 秒）；每题可设置 30–7200 秒。并发最多 3，不能超过服务上限。页面逐题显示时限，运行结束后自动补位。实际预算和原题预算均会记录，加长时限属于研发评测条件。固定 15 道回归配置见 [regression15.json](config/regression15.json)。
 
 `--source` 和 `--model` 可成对覆盖已配置模型；自定义连接使用 `--model-config`。更换端口时，所有 CLI 命令都传同一个 `--port`。同一评测机只运行一个服务，不在任务期间部署另一个版本。
 
@@ -89,6 +102,8 @@ CLI 可由人或 Codex 等工具操作，**不依赖 Codex 做调度或判题**�
 新增题目的数据库、图片和日历按 `config/terminal-bench.json` 中的 `inputs` 清单精确复制并校验哈希，不复制整个题目目录。图片题需要模型显式支持图片输入。
 
 执行完成后自动上传原题测试并判题；执行期间不向 Agent 提供测试或参考解。使用原测试断言及 pytest 参数，把原 `test.sh` 的安装步骤移到环境准备阶段。`cancel-async-tasks` 还保留原测试辅助文件的复制步骤。
+
+判题能读取该题安装的 Python 依赖，固定判题版本优先。FEAL 的编译只写入判题专用测试副本；Headless 所需的根目录路径使用判题进程的临时根目录。pytest 缓存写入可写日志目录，警告在展示中汇总，完整输出保留在 `evidence/logs/verifier/output.txt`。
 
 - `passed` / `failed`：pytest 退出码与本次 CTRF 报告一致，生成有效判分。
 - 判题超时、启动失败、未收集到测试或报告不一致：记为异常，无有效判分，不伪造 0 分。
@@ -104,7 +119,7 @@ CLI 可由人或 Codex 等工具操作，**不依赖 Codex 做调度或判题**�
     live/events.jsonl          执行事件
     live/screen.txt            最新 TUI 画面
     preparation.log           环境及执行诊断
-    verification.txt          原题测试输出
+    verification.txt          原题测试输出摘要（完整输出见 evidence/logs/verifier/output.txt）
     evidence/                 代码、Home、日志等现场
     collection.json           导出校验记录
     evidence/outcome.json     清理前保存的执行/判题事实
@@ -115,6 +130,8 @@ Linux 运行版本与依赖：/opt/hicode/
 ```
 
 事件与画面持续传回，完整现场每 30 秒尝试复制到宿主，结束时再次收集。突然关闭机器可能丢失尚未导出的内容；保留数据卷检查。日志可能含源码、提示词和工具输出，分享前需脱敏。
+
+证据快照记录符号链接目标，不跟随链接。周期收集失败写入 `collection-error.txt`，不打断答题；最终导出仍须成功才能提交终态。 导出失败时保留已经确认的执行／判题事实，但不发布分数；页面的执行与判题记录面板可查看失败摘要和采集诊断。
 
 关闭网页不影响任务。Ctrl+C 关闭评测服务会取消当前任务；`bash .devcontainer/linux.sh eval-stop` 停止整台评测机，保留数据卷。服务重启不自动重跑或接续已执行的题；从未启动且无执行痕迹的题保留排队，发现其他未完成现场会停止新调度，需先核查现场。确认异常任务已收尾后，可用 `bash hicode-eval/eval.sh resume --batch BATCH_ID` 显式恢复现有排队调度；此命令不清除异常、不重跑已完成题。
 

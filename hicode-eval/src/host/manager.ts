@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { taskSchema, profiles, validatePublicTask } from './publicTasks.js';
-import { LinuxMachine } from './linux.js';
+import { EvidenceCollectionError, LinuxMachine } from './linux.js';
 import { readJson, save, exists, tree, contained } from './store.js';
 import { runSchema, done, liveSchema, containerSchema, batchSchema, submissionSchema } from './types.js';
 import type { Config, Run, Batch, Submission } from './types.js';
@@ -79,16 +79,16 @@ export class Lab {
   private async createBatch(input: Submission): Promise<Batch> {
     if (this.closed || this.halted) throw Error('Service closing or scheduling blocked');
     if ([...this.runs.values()].some(r => r.state === 'needs_recovery')) throw Error('Recover retained runs before submitting more');
-    if (new Set(input.tasks).size !== input.tasks.length) throw Error('Choose distinct tasks');
+    const tasks = input.tasks.map(task => task.id);
+    if (new Set(tasks).size !== tasks.length) throw Error('Choose distinct tasks');
     if (input.concurrency > this.config.concurrency) throw Error('Batch exceeds service concurrency');
     const catalog = await this.catalog();
-    if (input.tasks.some(id => !catalog.some(t => t.id === id))) throw Error('Unknown task');
+    if (tasks.some(id => !catalog.some(t => t.id === id))) throw Error('Unknown task');
     const payload = await readJson(join(this.config.payload, 'manifest.json'), z.record(z.unknown()));
     if (this.closed || this.halted) throw Error('Service closing or scheduling blocked');
     const id = randomBytes(8).toString('hex'), now = Date.now() / 1000;
-    const budget = input.budget ?? this.config.budget;
-    const batch = batchSchema.parse({ ...input, budget, version: 1, id, createdAt: now, runIds: input.tasks.map(() => randomBytes(8).toString('hex')), model: this.config.model, payload });
-    const states = input.tasks.map((task, i) => runSchema.parse({ version: 2, id: batch.runIds[i], batchId: id, task, state: 'queued', createdAt: now, updatedAt: now, model: this.config.model.model, budget }));
+    const batch = batchSchema.parse({ ...input, tasks, budget: this.config.budget, version: 1, id, createdAt: now, runIds: tasks.map(() => randomBytes(8).toString('hex')), model: this.config.model, payload });
+    const states = input.tasks.map((task, i) => runSchema.parse({ version: 2, id: batch.runIds[i], batchId: id, task: task.id, state: 'queued', createdAt: now, updatedAt: now, model: this.config.model.model, budget: { agentSeconds: task.agentSeconds ?? batch.budget.agentSeconds } }));
     // Publish the batch only after all children are durable; no worker sees a partial submission.
     try {
       for (const state of states) {
@@ -215,7 +215,8 @@ export class Lab {
       await this.update(id, { state: execution === 'cancelled' ? 'cancelled' : classified.state, execution, grading: result.grading, note: result.note, reward: result.grading === 'unavailable' ? undefined : result.grading === 'passed' ? 1 : 0, collection: 'complete', finishedAt: Date.now() / 1000 });
     } catch (error) {
       const retained = await exists(join(path, 'container.json'));
-      await this.update(id, { state: retained ? 'needs_recovery' : 'error', execution: 'failed', collection: retained ? 'retained' : 'pending', note: error instanceof Error ? error.message : 'Run failed', finishedAt: Date.now() / 1000 });
+      const facts = error instanceof EvidenceCollectionError ? {execution: error.result.execution, grading: error.result.grading} : {execution: 'failed' as const};
+      await this.update(id, { state: retained ? 'needs_recovery' : 'error', ...facts, reward: undefined, collection: retained ? 'retained' : 'pending', note: error instanceof Error ? error.message : 'Run failed', finishedAt: Date.now() / 1000 });
     }
   }
   async snapshot(): Promise<unknown> {

@@ -3,7 +3,7 @@ import type {ToolResultStore} from "../toolResults/index.js";
 import type {ShellTaskSnapshot, TaskSessionLike, TaskSnapshot} from "./types.js";
 
 /** A child can manage only Shell tasks it created. Root retains resource ownership. */
-export type ChildTaskAccess = Pick<TaskSessionLike, "sessionId" | "startShell" | "get" | "list" | "stop">;
+export type ChildTaskAccess = Pick<TaskSessionLike, "sessionId" | "startShell" | "get" | "list" | "stop" | "subscribe">;
 
 export function isParentTaskSession(tasks: TaskSessionLike | ChildTaskAccess): tasks is TaskSessionLike {
     return "startAgent" in tasks;
@@ -28,6 +28,9 @@ export function createChildTaskAccess(parent: ChildTaskAccess, files: Pick<ToolR
         async stop(id) {
             if (!owned.has(id)) return undefined;
             return parent.stop(id);
+        },
+        subscribe(listener) {
+            return parent.subscribe(event => {if (isOwned(event.task)) listener(event);});
         },
     };
     return {tasks, files: {async resolveFile(path) {

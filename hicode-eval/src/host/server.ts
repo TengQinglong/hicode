@@ -26,10 +26,19 @@ hostname: '127.0.0.1', port, maxRequestBodySize: 256 * 1024, async fetch(request
           if (assets[url.pathname]) return response(Bun.file(join(EVAL_ROOT, 'src/web', url.pathname)), 200, assets[url.pathname]);
           if (url.pathname === '/api/status') return json(await lab.snapshot());
           if (url.pathname === '/api/preparation') {
-            const path = join(lab.path(url.searchParams.get('run') ?? ''), 'preparation.log');
-            if (!await exists(path)) return json({ text: '' });
-            const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-            try { const stat = await fd.stat(); if (!stat.isFile()) throw Error('Invalid log'); const length = Math.min(stat.size, 64000), buffer = Buffer.alloc(length); await fd.read(buffer, 0, length, stat.size - length); return json({ text: buffer.toString('utf8'), truncated: stat.size > length }); } finally { await fd.close(); }
+            const root = lab.path(url.searchParams.get('run') ?? '');
+            const sections: string[] = []; let truncated = false;
+            for (const [name, title, budget] of [['preparation.log', '执行阶段', 8000], ['collection-error.txt', '周期采集诊断（不代表执行失败）', 2000], ['verification.txt', '判题输出', 54000]] as const) {
+              const path = join(root, name); if (!await exists(path)) continue;
+              const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+              try {
+                const stat = await fd.stat(); if (!stat.isFile()) throw Error('Invalid log');
+                const length = Math.min(stat.size, budget), buffer = Buffer.alloc(length);
+                const {bytesRead} = await fd.read(buffer, 0, length, stat.size - length);
+                sections.push(title + '\n' + buffer.subarray(0, bytesRead).toString('utf8')); truncated ||= stat.size > length;
+              } finally {await fd.close();}
+            }
+            return json({text: sections.join('\n\n'), truncated});
           }
           if (url.pathname === '/api/terminal') {
             const path = join(lab.path(url.searchParams.get('run') ?? ''), 'live/screen.txt');

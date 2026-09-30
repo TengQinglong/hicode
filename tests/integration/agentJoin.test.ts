@@ -1,6 +1,7 @@
+import {waitForTaskCompletion} from "../../src/tasks/wait.js";
 import {expect, test} from "bun:test";
 import type {Message} from "../../src/llm/types.js";
-import {AgentTaskJoin, waitForAgentTasks} from "../../src/tasks/agentJoin.js";
+import {AgentTaskJoin} from "../../src/tasks/agentJoin.js";
 import type {ApprovalEvent} from "../../src/permissions/approval.js";
 import {RuntimeMessageQueue} from "../../src/runtime/messageQueue.js";
 import {createTurnAbortController} from "../../src/runtime/abort.js";
@@ -133,13 +134,13 @@ test("wait sees an already completed failed task and deduplicates its run, but s
         try {
             const started = await tasks.startAgent({request: {agentType: "Worker", description: "work", prompt: "work", parentToolCallId: "spawn"}, parentContext: ctx});
             ctx.agentJoin!.register(started);
-            await waitForAgentTasks(tasks, [started.id], ctx.signal);
+            await waitForTaskCompletion(tasks, [started.id], ctx.signal, "agent");
             const result = await executeToolResult("task", JSON.stringify({action: "wait", task_id: started.id}), ctx, "join");
             expect(result.outcome).toBe("failed");
             expect(result.modelContent).toContain("could not finish");
             expect(ctx.agentJoin!.ids).toEqual([]);
             const shell = await tasks.startShell({command: "printf ready", cwd, toolCallId: "shell"});
-            await expect(waitForAgentTasks(tasks, [shell.id], ctx.signal)).rejects.toThrow("unavailable Agent");
+            await expect(waitForTaskCompletion(tasks, [shell.id], ctx.signal, "agent")).rejects.toThrow("unavailable agent");
             expect(new AgentTaskJoin(tasks).ids).toEqual([]);
         } finally {await runtime.close();}
     });
@@ -162,7 +163,7 @@ test("headless joins acknowledge notifications only after paired History is pers
                     getPermissionMode: () => "ask", getCollaborationMode: () => "build", getPermissionPromptPolicy: () => "never", setTodos() {}}});
             const started = await session.taskSession.startAgent({request: {agentType: "Worker", description: "work", prompt: "work", parentToolCallId: "spawn"}, parentContext: ctx});
             ctx.agentJoin!.register(started);
-            await waitForAgentTasks(session.taskSession, [started.id], ctx.signal);
+            await waitForTaskCompletion(session.taskSession, [started.id], ctx.signal, "agent");
             for (const input of await ctx.agentJoin!.collect()) {
                 session.history.push({role: "user", origin: "task_notification", content: input.content});
                 await ctx.agentJoin!.consume(input);

@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { open, mkdir, rename, lstat, readdir, realpath, rm } from 'node:fs/promises';
+import { open, mkdir, rename, lstat, readdir, realpath, rm, readlink } from 'node:fs/promises';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -36,11 +36,27 @@ export async function directory(path: string): Promise<string> {
   return canonical;
 }
 export async function tree(root: string): Promise<Record<string, { bytes: number; sha256: string }>> {
-  const result: Record<string, { bytes: number; sha256: string }> = {};
+  return scanTree(root);
+}
+
+/** Evidence links are recorded as data and never followed, unlike immutable source inputs. */
+export async function evidenceTree(root: string): Promise<Record<string, { bytes: number; sha256: string; symlink?: string }>> {
+  return scanTree(root, true);
+}
+
+async function scanTree(root: string, recordLinks = false): Promise<Record<string, { bytes: number; sha256: string; symlink?: string }>> {
+  const result: Record<string, { bytes: number; sha256: string; symlink?: string }> = {};
   let bytes = 0;
   async function walk(path: string): Promise<void> {
     const stat = await lstat(path);
-    if (stat.isSymbolicLink()) throw Error('Symlinks are not allowed in snapshots');
+    if (stat.isSymbolicLink()) {
+      if (!recordLinks) throw Error('Symlinks are not allowed in source snapshots');
+      const target = await readlink(path);
+      if (Buffer.byteLength(target) > 4096 || target.includes('\0')) throw Error('Invalid evidence link');
+      result[relative(root, path)] = {bytes: Buffer.byteLength(target), sha256: createHash('sha256').update(target).digest('hex'), symlink: target};
+      if (Object.keys(result).length >= 20000) throw Error('Snapshot budget exceeded');
+      return;
+    }
     if (stat.isDirectory()) { for (const name of (await readdir(path)).sort()) await walk(join(path, name)); }
     else if (stat.isFile()) {
       bytes += stat.size;

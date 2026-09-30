@@ -4,10 +4,15 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from verifier import verify
+from verifier import verify, display_output, verifier_environment
 
 
 class VerifierTest(unittest.TestCase):
+    def test_verifier_keeps_its_pins_first_and_sees_task_installed_dependencies(self):
+        env=verifier_environment({'packages':['x==1'],'verifierPackages':['x==2']},Path('/task/home'))
+        self.assertEqual(env['PYTHONPATH'].split(os.pathsep),['/app/.eval-verifier-python','/app/.eval-python','/task/home/.local/lib/python3.13/site-packages'])
+        self.assertEqual(env['PATH'].split(os.pathsep)[:4],['/opt/hicode-verifier/bin','/opt/python313/bin','/task/home/.local/bin','/task/home/bin'])
+        self.assertEqual(verifier_environment({},Path('/task/home'))['PYTHONPATH'],'/task/home/.local/lib/python3.13/site-packages')
     def run_check(self, code, timeout=5, cancel=False, failed=False, report=True):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'output.txt'
@@ -50,6 +55,18 @@ class VerifierTest(unittest.TestCase):
                                  env={}, preexec_fn=None, cancelled=lambda: False)
             self.assertEqual(grade, 'unavailable')
             self.assertIn('could not start', text)
+
+    def test_warning_display_preserves_failure_and_score_and_keeps_raw_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'output.txt'
+            raw='E AssertionError: actual != expected\n=== warnings summary ===\n' + 'third party warning\n'*582 + '-- Docs: pytest\n=== 1 failed, 582 warnings ===\n'
+            path.write_text(raw)
+            visible=display_output(path)
+            self.assertIn('AssertionError',visible)
+            self.assertIn('Warnings: 582',visible)
+            self.assertIn('1 failed',visible)
+            self.assertNotIn('third party warning',visible)
+            self.assertEqual(path.read_text(),raw)
 
     def test_wrapper_failure_without_pytest_report_is_not_a_wrong_answer(self):
         grade, text = self.run_check("import sys; print('sandbox failed'); sys.exit(1)", report=False)

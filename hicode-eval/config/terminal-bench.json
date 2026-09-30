@@ -727,8 +727,10 @@
     "packages": [
       "setuptools==80.9.0"
     ],
-    "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPackages": [
+      "setuptools==80.9.0"
+    ],
+    "verifierPrelude": "compile-feal-extension"
   },
   "circuit-fibsqrt": {
     "hashes": {
@@ -1042,7 +1044,8 @@
     "verifierPackages": [
       "requests==2.32.5"
     ],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "verifierRootOverlay": true
   },
   "modernize-scientific-stack": {
     "hashes": {

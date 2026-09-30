@@ -2,7 +2,7 @@
 import base64,fcntl,json,os,pwd,signal,subprocess,sys,time
 from pathlib import Path
 from protocol import Events,atomic_json,namespace_argv,package_install_argv
-from verifier import verify
+from verifier import verify,verifier_environment
 from terminal import capture,settle,submit_prompt
 from cleanup import stop_task_processes,finalize_task,open_task_cli,terminate_task_cli
 from recovery import process_start
@@ -43,11 +43,13 @@ atomic_json(root/'identity.json',{'version':2,'uid':uid,'user':name,'pid':os.get
 def demote():
     os.setgroups([]);os.setgid(account.pw_gid);os.setuid(uid)
 
-def namespace(args,verifier=False):
-    return namespace_argv(args,project,home,logs,control,root/'tests' if verifier else None)
+def namespace(args,verifier=False,setup=False):
+    return namespace_argv(args,project,home,logs,control,root/'tests' if verifier else None,
+                          writable_tests=verifier and config['verifierPrelude']=='compile-feal-extension',
+                          root_overlay=verifier and not setup and config.get('verifierRootOverlay',False))
 
 def command(args,timeout=15,extra=None,cwd=None,output_path=None):
-    env={'PATH':'/opt/python313/bin:'+os.environ['PATH'],'HOME':str(home),'TERM':'xterm-256color','COLORTERM':'truecolor','LANG':'C.UTF-8'}
+    env={'PATH':'/opt/python313/bin:'+str(home/'.local/bin')+':'+str(home/'bin')+':'+os.environ['PATH'],'HOME':str(home),'TERM':'xterm-256color','COLORTERM':'truecolor','LANG':'C.UTF-8'}
     if config.get('packages'):
         env['PYTHONPATH']='/app/.eval-python'
         env['PIP_CACHE_DIR']='/tmp/pip-cache'
@@ -184,11 +186,17 @@ try:
                 verifier_log=logs/'verifier';verifier_log.mkdir(exist_ok=True);os.chown(verifier_log,uid,account.pw_gid)
                 if config['verifierPrelude']=='copy-test-helper':
                     command(namespace(['cp','/tests/test.py','/app/test.py'],verifier=True))
-                grade,output=verify(namespace(['/opt/hicode-verifier/bin/python','-m','pytest','--ctrf','/logs/verifier/ctrf.json','/tests/test_outputs.py','-rA'],verifier=True),
+                if config['verifierPrelude']=='compile-feal-extension':
+                    # The original verifier rebuilds in-place. Only its private copy is writable,
+                    # after all Agent processes are stopped; the source dataset is never mounted.
+                    subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(root/'tests')],check=True)
+                    command(namespace(['--chdir','/tests','/opt/hicode-verifier/bin/python','-s','-P','setup.py','build_ext','--inplace'],verifier=True,setup=True),
+                            timeout=60,extra={'PYTHONPATH':'/app/.eval-verifier-python','PYTHONNOUSERSITE':'1'},output_path=verifier_log/'setup.txt')
+                grade,output=verify(namespace(['/opt/hicode-verifier/bin/python','-m','pytest','-o','cache_dir=/logs/verifier/.pytest_cache','--ctrf','/logs/verifier/ctrf.json','/tests/test_outputs.py','-rA'],verifier=True),
                     timeout=config['verifierSeconds'],output_path=verifier_log/'output.txt',report_path=verifier_log/'ctrf.json',cwd=project,
-                    env={'PATH':'/opt/hicode-verifier/bin:/opt/python313/bin:'+os.environ['PATH'],'HOME':str(home),'LANG':'C.UTF-8',**({'PYTHONPATH':'/app/.eval-verifier-python'} if config.get('verifierPackages') else {'PYTHONPATH':'/app/.eval-python'} if config.get('packages') else {})},
+                    env=verifier_environment(config,home),
                     preexec_fn=demote,cancelled=lambda:cancelled or (root/'cancel').exists())
-            except (OSError,RuntimeError,subprocess.TimeoutExpired) as e:
+            except (OSError,RuntimeError,subprocess.SubprocessError) as e:
                 output='Verifier setup failed: '+str(e);grade='unavailable'
                 (verifier_log/'output.txt').write_text(output)
             if cancelled or (root/'cancel').exists():status='cancelled';grade='unavailable'

@@ -1,4 +1,5 @@
 import {normalizeTurnAbortReason} from "../../runtime/abort.js";
+import {tmpdir} from "node:os";
 import {prepareReadCommand} from "./readCommand.js";
 import type {CommandReadAccess} from "./readAccess.js";
 import type {NetworkAccessExecution} from "../../permissions/networkAccess.js";
@@ -71,9 +72,12 @@ export function createShellRunner(
             if (
                 sandboxPermissions === "require_escalated"
             ) {
+                const commandEnvironment = mergeChildProcessEnvironment(childEnvironment, env);
+                // Host execution skips the sandbox wrapper that normally supplies TMPDIR.
+                if (!commandEnvironment.TMPDIR?.trim()) commandEnvironment.TMPDIR = tmpdir();
                 return runShellCommand({
                     command,
-                    env: mergeChildProcessEnvironment(childEnvironment, env),
+                    env: commandEnvironment,
                     ...processOptions,
                 });
             }

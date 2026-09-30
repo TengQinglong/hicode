@@ -1,12 +1,18 @@
 {
   "name": "Terminal-Bench 2.0 · example batch",
   "tasks": [
-    "cancel-async-tasks",
-    "log-summary-date-ranges",
-    "sqlite-db-truncate"
+    {
+      "id": "cancel-async-tasks",
+      "agentSeconds": 900
+    },
+    {
+      "id": "log-summary-date-ranges",
+      "agentSeconds": 1800
+    },
+    {
+      "id": "sqlite-db-truncate",
+      "agentSeconds": 1800
+    }
   ],
-  "concurrency": 3,
-  "budget": {
-    "agentSeconds": 1800
-  }
+  "concurrency": 3
 }
