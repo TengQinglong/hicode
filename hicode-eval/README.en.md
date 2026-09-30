@@ -91,7 +91,7 @@ Replace `BATCH_ID` with the ID returned on submission. One batch can contain dif
 }
 ```
 
-Omitting `agentSeconds` uses the service default (1800 seconds); each task accepts 30–7200 seconds. Concurrency is capped at 3 and cannot exceed the service limit. The page displays each task's limit, and completed tasks automatically release their slots. Actual and original task budgets are recorded separately; extended budgets are development evaluation conditions. The fixed 15-task regression group is [regression15.json](config/regression15.json).
+Omitting `agentSeconds` uses the service default (1800 seconds); each task accepts 30–7200 seconds. Concurrency is capped at 4 and cannot exceed the service limit. The page displays each task's limit, and completed tasks automatically release their slots. Actual and original task budgets are recorded separately; extended budgets are development evaluation conditions. The fixed 15-task regression group is [regression15.json](config/regression15.json).
 
 Use `--source` and `--model` together to override a configured model, or `--model-config` for an explicit connection. If changing the port, pass the same `--port` to every CLI command. Run only one service per evaluation machine, and do not deploy another version while tasks are active.
 
@@ -170,3 +170,33 @@ Pre-download pinned Python wheels and their dependencies into `/opt/hicode-eval/
 Prompt pasting and Enter are sent separately. Execution and the agent budget begin only after `model_stream_start`; a submission with no acknowledgment within 15 seconds fails as a startup error instead of idling through the task budget.
 
 At the evaluation deadline, the runner sends SIGTERM to the identified HiCode CLI and allows up to 10 seconds for cancellation and persistence while draining events, then force-cleans remaining processes for that task UID. This window is for teardown, not continued solving: execution remains timeout even if grading passes. `evidence/shutdown.json` records CLI exit, saved-turn status, and pending tool calls; missing events are never fabricated.
+
+## Additional public datasets
+
+Terminal-Bench and SWE-bench Verified share scheduling, task budgets, the TUI, cancellation and evidence collection. Dataset-specific adapters prepare inputs and grade outputs. `Run.dataset` identifies the adapter; legacy runs remain Terminal tasks. Both datasets can appear in one batch.
+
+Two new Terminal tasks are registered: `large-scale-text-editing` and `break-filter-js-from-html`. CSV generation/removal/reset follows the upstream task, while browser grading retains Chromium/driver and separate pinned actor/verifier packages. Prepare their shared tools and wheel caches once on an idle dedicated machine:
+
+```bash
+bash hicode-eval/eval.sh prepare-terminal --docker-context YOUR_CONTEXT --machine YOUR_EVAL_MACHINE
+```
+
+The SWE pilot supports four Django 4.2 instances with Python 3.9. It verifies the fixed Verified revision, public/evaluator JSONL hashes, corresponding public fields, the official harness 4.1.0 wheel and cached original requirements. Preparation inputs and generated bundles stay outside this repository:
+
+```bash
+bash hicode-eval/eval.sh prepare-swe \
+  --dataset /path/to/swe-bench-verified \
+  --prep /path/to/benchmark-prep/swe_verified \
+  --output /path/to/external/prepared-swe \
+  --docker-context YOUR_CONTEXT --machine YOUR_EVAL_MACHINE
+```
+
+Preparation requires an idle evaluation machine and network access. Python, the official harness and all original Django dependencies are cached once, including native build headers. Each task gets the source archive for its exact base commit and a local repository containing only that source tree and its installation baseline. No future Git history, remotes or hooks are retained. Resolved package versions are copied into `runs/ID/environment.json` when an attempt starts. Failed preparation retains caches; the output directory must be a new external directory.
+
+Add `--swe-tasks /path/to/external/prepared-swe` to the normal service command. Reuse the same dashboard and machine; do not start another service or prepare system dependencies during active attempts. Submit `config/swe-verified-pilot.json`, or mix the selected SWE and Terminal IDs in a batch.
+
+The Actor receives only the public problem, original base code and public repository tests, with an independent writable Python environment at `/testbed`. Gold patches, hints, hidden test patches and scoring test lists are withheld. After completion/timeout, stop every Actor process, then export the actual tree against a protected prepared baseline using host-owned Git. This includes additions, deletions, binaries and executable modes without trusting Actor-controlled Git state or self-reported patches.
+
+Save the official prediction fields in `prediction.json` and identity/hash receipts in `patch-manifest.json`. Replay that patch against clean code, dependencies and Home; only then expose hidden test material. Use upstream harness 4.1.0 Django commands, log parsing and both FAIL_TO_PASS/PASS_TO_PASS rules. Keep `logs/verifier/output.txt` and `report.json`; no synthetic CTRF reports are produced. Incomplete grading is `unavailable`; genuine test failures are `failed`. Recovery validates existing evidence without rerunning anything.
+
+This is **shared Linux development evaluation**, using venv instead of upstream Conda/instance images and recreating a Git baseline from the source archive. Environment activation and test-file reset commits are adapted accordingly; tests, assertions and grading rules stay upstream. These results are not official image/leaderboard reproductions. Only this Django environment group is currently supported; other repositories require additional reviewed environment recipes.

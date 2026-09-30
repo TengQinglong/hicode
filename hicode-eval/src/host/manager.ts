@@ -1,10 +1,12 @@
 import { mkdir, readdir, cp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { taskSchema, profiles, validatePublicTask } from './publicTasks.js';
+import { sweCatalog, validateSweTask, datasetTree } from './sweTasks.js';
 import { EvidenceCollectionError, LinuxMachine } from './linux.js';
-import { readJson, save, exists, tree, contained } from './store.js';
+import { readJson, save, exists, contained } from './store.js';
 import { runSchema, done, liveSchema, containerSchema, batchSchema, submissionSchema } from './types.js';
 import type { Config, Run, Batch, Submission } from './types.js';
 
@@ -50,16 +52,17 @@ export class Lab {
     for (const batch of this.batches.values()) if (batch.runIds.some(id => !this.runs.has(id))) throw Error('Batch has missing run evidence');
   }
   async prepareMachine(): Promise<void> { this.machine = new LinuxMachine(this.config); await this.machine.prepare(); }
-  async catalog(): Promise<{ id: string; category: string; seconds: number }[]> {
-    const result = [];
+  async catalog(): Promise<{ id: string; category: string; seconds: number; dataset?: 'terminal-bench' | 'swe-bench-verified' }[]> {
+    const result: {id:string;category:string;seconds:number;dataset?:'terminal-bench'|'swe-bench-verified'}[] = await sweCatalog(this.config.sweTasks);
     const supported = await profiles();
     for (const entry of await readdir(this.config.tasks, { withFileTypes: true })) {
       if (!supported[entry.name] || !entry.isDirectory() || entry.isSymbolicLink() || !await exists(join(this.config.tasks, entry.name, 'task.toml'))) continue;
       const text = await Bun.file(join(this.config.tasks, entry.name, 'task.toml')).text();
       if (text.length > 65536) throw Error('Task metadata too large');
       const task = taskSchema.parse(Bun.TOML.parse(text));
-      result.push({ id: entry.name, category: task.metadata?.category ?? 'task', seconds: task.agent.timeout_sec });
+      result.push({ id: entry.name, category: task.metadata?.category ?? 'task', seconds: task.agent.timeout_sec, dataset: 'terminal-bench' });
     }
+    if (new Set(result.map(t => t.id)).size !== result.length) throw Error('Dataset task IDs collide');
     return result.sort((a, b) => a.id.localeCompare(b.id));
   }
   private async update(id: string, changes: Partial<Run>): Promise<void> {
@@ -88,15 +91,20 @@ export class Lab {
     if (this.closed || this.halted) throw Error('Service closing or scheduling blocked');
     const id = randomBytes(8).toString('hex'), now = Date.now() / 1000;
     const batch = batchSchema.parse({ ...input, tasks, budget: this.config.budget, version: 1, id, createdAt: now, runIds: tasks.map(() => randomBytes(8).toString('hex')), model: this.config.model, payload });
-    const states = input.tasks.map((task, i) => runSchema.parse({ version: 2, id: batch.runIds[i], batchId: id, task: task.id, state: 'queued', createdAt: now, updatedAt: now, model: this.config.model.model, budget: { agentSeconds: task.agentSeconds ?? batch.budget.agentSeconds } }));
+    const states = input.tasks.map((task, i) => runSchema.parse({ version: 2, id: batch.runIds[i], batchId: id, task: task.id, dataset: catalog.find(t => t.id === task.id)?.dataset ?? 'terminal-bench', state: 'queued', createdAt: now, updatedAt: now, model: this.config.model.model, budget: { agentSeconds: task.agentSeconds ?? batch.budget.agentSeconds } }));
     // Publish the batch only after all children are durable; no worker sees a partial submission.
     try {
       for (const state of states) {
-        const root = join(this.config.data, 'runs', state.id), source = join(this.config.tasks, state.task), target = join(root, 'task', state.task);
-        await validatePublicTask(state.task, source);
-        const hashes = await tree(source);
-        await cp(source, target, { recursive: true, errorOnExist: true, force: false });
-        if (JSON.stringify(await tree(target)) !== JSON.stringify(hashes)) throw Error('Task changed during submission');
+        const root = join(this.config.data, 'runs', state.id), source = join(state.dataset === 'swe-bench-verified' ? this.config.sweTasks! : this.config.tasks, state.task), target = join(root, 'task', state.task);
+        if (state.dataset === 'swe-bench-verified') await validateSweTask(state.task, source);
+        else await validatePublicTask(state.task, source);
+        const hashes = await datasetTree(source,state.dataset);
+        await cp(source, target, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true });
+        const copied = await datasetTree(target,state.dataset);
+        if (!isDeepStrictEqual(copied, hashes)) {
+          const changed = [...new Set([...Object.keys(hashes), ...Object.keys(copied)])].find(name => !isDeepStrictEqual(hashes[name],copied[name]));
+          throw Error(`Task changed during submission: ${state.task} (${changed ?? 'snapshot metadata'})`);
+        }
         await save(join(root, 'task-files.json'), hashes);
         await save(join(root, 'state.json'), state);
       }
@@ -199,11 +207,11 @@ export class Lab {
       if (await exists(join(path, 'cancel'))) { await this.update(id, { state: 'cancelled', execution: 'cancelled', finishedAt: Date.now() / 1000 }); return; }
       await this.update(id, { state: 'preparing', startedAt: Date.now() / 1000 });
       const current = this.runs.get(id)!;
-      const frozen = await readJson(join(path, 'task-files.json'), z.record(z.object({ bytes: z.number(), sha256: z.string() })));
-      if (JSON.stringify(await tree(join(path, 'task', current.task))) !== JSON.stringify(frozen)) throw Error('Frozen task changed');
+      const frozen = await readJson(join(path, 'task-files.json'), z.record(z.object({ bytes: z.number(), sha256: z.string(), symlink: z.string().optional(), mode:z.number().optional() })));
+      if (!isDeepStrictEqual(await datasetTree(join(path, 'task', current.task),current.dataset),frozen)) throw Error('Frozen task changed');
       const payload = await readJson(join(this.config.payload, 'manifest.json'), z.record(z.unknown()));
       if (JSON.stringify(payload) !== JSON.stringify(this.batches.get(current.batchId)!.payload)) throw Error('Payload changed after submission');
-      await save(join(path, 'manifest.json'), { model: this.config.model, payload, task: current.task, task_files: frozen, machine: this.config.machine, entry: 'tui', budget: current.budget });
+      await save(join(path, 'manifest.json'), { model: this.config.model, payload, task: current.task, dataset: current.dataset, task_files: frozen, machine: this.config.machine, entry: 'tui', budget: current.budget });
       if (!this.machine) throw Error('Initialize the evaluation machine before running tasks');
       const result = await this.machine.execute(current, path, this.credential, async phase => {
         await appendPhase(path, phase);

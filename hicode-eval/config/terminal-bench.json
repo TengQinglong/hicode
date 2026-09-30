@@ -1600,5 +1600,78 @@
     "packages": [],
     "verifierPackages": [],
     "verifierPrelude": "none"
+  },
+  "large-scale-text-editing": {
+    "hashes": {
+      "environment/Dockerfile": "609759efe5a6bca4c0f4d0011dd1dda814896ca6873ead803af68d92b92d8aa2",
+      "environment/gen_large_csv.py": "167daab578dc75ba1385c40492037f11708b06ea4cda836cd05f12017ae54654",
+      "environment/tests/gen_large_csv.py": "167daab578dc75ba1385c40492037f11708b06ea4cda836cd05f12017ae54654",
+      "environment/tests/test_outputs.py": "f5e69f4fedeefa23197745888a5847161529f454e6b5c32a4057363d9ae4cd43",
+      "instruction.md": "2746a16369b28b2e368ca168bc85222811cbe570f3b315f1b1c432afad07ddc8",
+      "solution/solve.sh": "a4fb27c7fa4cd4da26f7fbccbaaca24c290dc41ab9dbbb6e1dc916e72743c55d",
+      "task.toml": "24ea9cfe0b365afb9d45b998f02102b53d9e021a4fbd8f64dad0c14596caacf1",
+      "tests/gen_large_csv.py": "167daab578dc75ba1385c40492037f11708b06ea4cda836cd05f12017ae54654",
+      "tests/test.sh": "e5edb6fcd43d7e638ffcf64522c11185a8355afb5daf6ad805cdfedd47e9ceb3",
+      "tests/test_outputs.py": "f5e69f4fedeefa23197745888a5847161529f454e6b5c32a4057363d9ae4cd43"
+    },
+    "inputs": [],
+    "initializer": {
+      "kind": "python",
+      "file": "gen_large_csv.py"
+    },
+    "directories": [],
+    "packages": [],
+    "verifierPackages": [],
+    "verifierPrelude": "reset-large-csv",
+    "commands": [
+      "vim"
+    ],
+    "environment": {},
+    "verifierEnvironment": {}
+  },
+  "break-filter-js-from-html": {
+    "hashes": {
+      "environment/Dockerfile": "456f7dbf9eb988d24598e46fd371f8f732061bcdc55031dff2f8fc79030be5c4",
+      "environment/filter.py": "9b04d17c5111dfaf8672b6cec09ae773327848c41b509f3ab4618766eba580f4",
+      "environment/tests/filter.py": "9b04d17c5111dfaf8672b6cec09ae773327848c41b509f3ab4618766eba580f4",
+      "environment/tests/test_outputs.py": "31ba6a0baac550de110680ff32a16bbc4fa858e1bfe41f2a63516f90073729bc",
+      "instruction.md": "ad42558111b2a8e8534bdf52b584b804348e1a8d68d756f812a31d5147e65be5",
+      "solution/solve.sh": "1d77103dc3f10e94d00f3714a773e659211770d9197649e2473227a0ac60f2a5",
+      "task.toml": "5c10a564179f73c001441dc9a56cb629efac72f5828be8655697c9d2fd2dbb96",
+      "tests/filter.py": "9b04d17c5111dfaf8672b6cec09ae773327848c41b509f3ab4618766eba580f4",
+      "tests/test.sh": "09386b7e4929216fe490deb7d32c99841c03be2471897181dda2bd11f8922c00",
+      "tests/test_outputs.py": "31ba6a0baac550de110680ff32a16bbc4fa858e1bfe41f2a63516f90073729bc"
+    },
+    "inputs": [
+      {
+        "source": "environment/filter.py",
+        "target": "filter.py"
+      },
+      {
+        "source": "environment/tests/test_outputs.py",
+        "target": "test_outputs.py"
+      }
+    ],
+    "initializer": null,
+    "directories": [],
+    "packages": [
+      "selenium==4.35.0",
+      "beautifulsoup4==4.13.4"
+    ],
+    "verifierPackages": [
+      "selenium==4.35.0",
+      "beautifulsoup4==4.13.5"
+    ],
+    "verifierPrelude": "none",
+    "commands": [
+      "chromium",
+      "chromedriver"
+    ],
+    "environment": {
+      "SE_CHROMEDRIVER": "/usr/bin/chromedriver"
+    },
+    "verifierEnvironment": {
+      "SE_CHROMEDRIVER": "/usr/bin/chromedriver"
+    }
   }
 }

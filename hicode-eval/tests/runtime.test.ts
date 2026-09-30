@@ -159,7 +159,7 @@ test('queued batch cancellation prevents execution and premature reporting is re
 
 test('one batch executes and restores independently resolved task limits', async () => {
   const f = await fixture(), lab = new Lab(f.config, 'fixture');
-  const validate = spyOn(taskAdapters, 'validatePublicTask').mockResolvedValue({hashes:{}, inputs:[], initializer:null, directories:[], packages:[], verifierPackages:[], verifierPrelude:'none',verifierRootOverlay:false});
+  const validate = spyOn(taskAdapters, 'validatePublicTask').mockResolvedValue({hashes:{}, inputs:[], initializer:null, directories:[], packages:[], verifierPackages:[], verifierPrelude:'none', verifierRootOverlay:false, commands:[], environment:{}, verifierEnvironment:{}});
   const prepare = spyOn(LinuxMachine.prototype, 'prepare').mockResolvedValue(undefined);
   const execute = spyOn(LinuxMachine.prototype, 'execute').mockResolvedValue({type:'result',execution:'completed',grading:'passed',uid:20001});
   try {
@@ -257,7 +257,7 @@ test('failed recovery retains its blocked state and does not fabricate a score',
 
 test('final export failure preserves sealed execution and grading without publishing a reward', async () => {
   const f=await fixture(), lab=new Lab(f.config,'fixture');
-  const validate=spyOn(taskAdapters,'validatePublicTask').mockResolvedValue({hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPackages:[],verifierPrelude:'none',verifierRootOverlay:false});
+  const validate=spyOn(taskAdapters,'validatePublicTask').mockResolvedValue({hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPackages:[],verifierPrelude:'none',verifierRootOverlay:false,commands:[],environment:{},verifierEnvironment:{}});
   const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined);
   const execute=spyOn(LinuxMachine.prototype,'execute').mockImplementation(async (_state,path) => {
     await save(join(path,'container.json'),{session:_state.id,id:'test-machine',attach:'fixture'});

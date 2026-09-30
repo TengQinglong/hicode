@@ -13,7 +13,10 @@ const profileSchema = z.object({
   directories: z.array(inputPath).max(64),
   packages: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.+-]*$/)).max(16),
   verifierPackages: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.+-]*$/)).max(16).default([]),
-  verifierPrelude: z.enum(['copy-test-helper','compile-feal-extension','none']),
+  verifierPrelude: z.enum(['copy-test-helper','compile-feal-extension','reset-large-csv','none']),
+  commands: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*$/)).default([]),
+  environment: z.record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/),z.string().max(1024)).default({}),
+  verifierEnvironment: z.record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/),z.string().max(1024)).default({}),
   verifierRootOverlay: z.boolean().default(false)
 }).strict().superRefine((profile, ctx) => {
   const targets = new Set<string>();

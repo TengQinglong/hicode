@@ -60,7 +60,7 @@ test('manifest refuses path escapes, undeclared files, hidden test sources, and 
 
 test('catalog includes reviewed tasks with the exact newly required inputs', async () => {
   const available = await profiles();
-  expect(Object.keys(available)).toHaveLength(47);
+  expect(Object.keys(available)).toHaveLength(49);
   expect(available['sqlite-db-truncate']!.inputs.map(file => file.target)).toEqual(['trunc.db']);
   expect(available['code-from-image']!.inputs.map(file => file.target)).toEqual(['code.png']);
   expect(available['constraints-scheduling']!.inputs.map(file => file.target)).toEqual(['alice_calendar.ics', 'bob_calendar.ics', 'carol_calendar.ics']);

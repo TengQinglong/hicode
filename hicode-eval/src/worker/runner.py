@@ -1,5 +1,5 @@
 """One assignment, one Linux user, one tmux session. No installs or per-task containers."""
-import base64,fcntl,json,os,pwd,signal,subprocess,sys,time
+import base64,fcntl,json,os,pwd,signal,subprocess,sys,time,shutil
 from pathlib import Path
 from protocol import Events,atomic_json,namespace_argv,package_install_argv
 from verifier import verify,verifier_environment
@@ -11,6 +11,8 @@ run_id=sys.argv[1]
 if len(run_id)!=16 or any(c not in '0123456789abcdef' for c in run_id):raise ValueError('Invalid run ID')
 root=Path('/eval/runs')/run_id
 config=json.loads((root/'job.json').read_text())
+is_swe=config.get('dataset')=='swe-bench-verified'
+swe_environment=Path('/eval/swe-envs')/run_id if is_swe else None
 project=root/'project';home=root/'home';logs=root/'logs';control=Path('/run/hicode-eval')/run_id
 name='eval-'+run_id
 cancelled=False
@@ -45,14 +47,18 @@ def demote():
 
 def namespace(args,verifier=False,setup=False):
     return namespace_argv(args,project,home,logs,control,root/'tests' if verifier else None,
-                          writable_tests=verifier and config['verifierPrelude']=='compile-feal-extension',
-                          root_overlay=verifier and not setup and config.get('verifierRootOverlay',False))
+                          writable_tests=verifier and not is_swe and config['verifierPrelude']=='compile-feal-extension',
+                          root_overlay=verifier and not setup and config.get('verifierRootOverlay',False),
+                          workdir='/testbed' if is_swe else '/app',environment=swe_environment)
 
 def command(args,timeout=15,extra=None,cwd=None,output_path=None):
     env={'PATH':'/opt/python313/bin:'+str(home/'.local/bin')+':'+str(home/'bin')+':'+os.environ['PATH'],'HOME':str(home),'TERM':'xterm-256color','COLORTERM':'truecolor','LANG':'C.UTF-8'}
+    if is_swe:
+        env.update(PATH='/opt/hicode-swe/env/bin:'+str(home/'.local/bin')+':'+str(home/'bin')+':'+os.environ['PATH'],VIRTUAL_ENV='/opt/hicode-swe/env',PYTHONDONTWRITEBYTECODE='1')
     if config.get('packages'):
         env['PYTHONPATH']='/app/.eval-python'
         env['PIP_CACHE_DIR']='/tmp/pip-cache'
+    env.update(config.get('environment',{}))
     if extra:env.update(extra)
     r=subprocess.run(args,cwd=cwd or project,env=env,preexec_fn=demote,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=timeout)
     if output_path is not None:output_path.write_text(r.stdout+'\n'+r.stderr)
@@ -104,6 +110,15 @@ try:
     conf=home/'.hicode';conf.mkdir(exist_ok=True);atomic_json(conf/'settings.json',settings)
     subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(home)],check=True)
     extra={'HICODE_EVAL_SOURCE':release,'HICODE_EVAL_HOME':str(conf)}
+    if is_swe:
+        if swe_environment.exists():raise ValueError('SWE attempt environment already exists')
+        shutil.copytree(config['swe']['environment'],swe_environment,symlinks=True)
+        from swe import relocate_environment
+        relocate_environment(swe_environment,config['swe']['environment'])
+        subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(swe_environment)],check=True)
+        command(namespace(['/opt/hicode-swe/env/bin/python','-m','pip','install','--no-deps','-e','/testbed']),timeout=60,output_path=logs/'repo-install.txt')
+    for required in config.get('commands',[]):
+        if not shutil.which(required):raise RuntimeError('Task environment missing command: '+required)
     packages=config.get('packages',[])
     if packages:
         argv,offline=package_install_argv(packages,'/app/.eval-python')
@@ -183,20 +198,28 @@ try:
         if status in ['completed','timeout']:
             emit('phase',phase='Verifying result')
             try:
-                verifier_log=logs/'verifier';verifier_log.mkdir(exist_ok=True);os.chown(verifier_log,uid,account.pw_gid)
+                verifier_log=logs/'verifier'
+                if verifier_log.is_symlink():raise ValueError('Verifier log directory replaced with symlink')
+                verifier_log.mkdir(exist_ok=True);os.chown(verifier_log,uid,account.pw_gid)
+                if config['verifierPrelude']=='reset-large-csv':
+                    command(namespace(['bash','-c','rm -f -- /app/*.csv && /opt/python313/bin/python3.13 /tests/gen_large_csv.py input'],verifier=True),timeout=30)
+                if is_swe:
+                    from swe import verify_swe
+                    grade,output=verify_swe(root,config,uid,account.pw_gid,lambda:cancelled or (root/'cancel').exists())
                 if config['verifierPrelude']=='copy-test-helper':
                     command(namespace(['cp','/tests/test.py','/app/test.py'],verifier=True))
-                if config['verifierPrelude']=='compile-feal-extension':
-                    # The original verifier rebuilds in-place. Only its private copy is writable,
-                    # after all Agent processes are stopped; the source dataset is never mounted.
-                    subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(root/'tests')],check=True)
-                    command(namespace(['--chdir','/tests','/opt/hicode-verifier/bin/python','-s','-P','setup.py','build_ext','--inplace'],verifier=True,setup=True),
-                            timeout=60,extra={'PYTHONPATH':'/app/.eval-verifier-python','PYTHONNOUSERSITE':'1'},output_path=verifier_log/'setup.txt')
-                grade,output=verify(namespace(['/opt/hicode-verifier/bin/python','-m','pytest','-o','cache_dir=/logs/verifier/.pytest_cache','--ctrf','/logs/verifier/ctrf.json','/tests/test_outputs.py','-rA'],verifier=True),
-                    timeout=config['verifierSeconds'],output_path=verifier_log/'output.txt',report_path=verifier_log/'ctrf.json',cwd=project,
-                    env=verifier_environment(config,home),
-                    preexec_fn=demote,cancelled=lambda:cancelled or (root/'cancel').exists())
-            except (OSError,RuntimeError,subprocess.SubprocessError) as e:
+                if not is_swe:
+                    if config['verifierPrelude']=='compile-feal-extension':
+                        # The original verifier rebuilds in-place. Only its private copy is writable,
+                        # after all Agent processes are stopped; the source dataset is never mounted.
+                        subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(root/'tests')],check=True)
+                        command(namespace(['--chdir','/tests','/opt/hicode-verifier/bin/python','-s','-P','setup.py','build_ext','--inplace'],verifier=True,setup=True),
+                                timeout=60,extra={'PYTHONPATH':'/app/.eval-verifier-python','PYTHONNOUSERSITE':'1'},output_path=verifier_log/'setup.txt')
+                    grade,output=verify(namespace(['/opt/hicode-verifier/bin/python','-m','pytest','-o','cache_dir=/logs/verifier/.pytest_cache','--ctrf','/logs/verifier/ctrf.json','/tests/test_outputs.py','-rA'],verifier=True),
+                        timeout=config['verifierSeconds'],output_path=verifier_log/'output.txt',report_path=verifier_log/'ctrf.json',cwd=project,
+                        env={**verifier_environment(config,home),**config.get('verifierEnvironment',{})},
+                        preexec_fn=demote,cancelled=lambda:cancelled or (root/'cancel').exists())
+            except (OSError,RuntimeError,ValueError,subprocess.SubprocessError) as e:
                 output='Verifier setup failed: '+str(e);grade='unavailable'
                 (verifier_log/'output.txt').write_text(output)
             if cancelled or (root/'cancel').exists():status='cancelled';grade='unavailable'
@@ -223,5 +246,8 @@ finally:
         result={'execution':status,'grading':grade,'uid':uid}
         try:finalize_task(root,result)
         finally:
+            if is_swe:
+                for env_root in ['/eval/swe-envs','/eval/swe-grader-envs']:
+                    shutil.rmtree(Path(env_root)/run_id,ignore_errors=True)
             if cli_fd is not None:os.close(cli_fd)
     emit('result',**result)

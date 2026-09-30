@@ -110,17 +110,18 @@ class Events:
                 and not self.pending_tools and self.ending is not None and self.ending['persistence_status'] == 'saved')
 
 
-def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False):
+def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False, workdir="/app", environment=None, readonly_logs=False):
     if tests is None and (writable_tests or root_overlay):raise ValueError('Verifier-only filesystem options')
     result=['bwrap','--unshare-user','--unshare-pid','--die-with-parent']
     if root_overlay:
         # A verifier may create new top-level directories in a private tmpfs;
-        # existing system entries remain read-only. /server is fresh for Headless's
-        # original mkdir check, even when the shared machine has that path already.
+        # every existing system entry remains read-only. The host root is never writable.
         result+=['--tmpfs','/']
         for name in sorted(os.listdir('/')):
-            if name not in {'proc','dev','tmp','app','tests','logs','server'}:result+=['--ro-bind','/'+name,'/'+name]
+            if name not in {'proc','dev','tmp','app','tests','logs','testbed','server'}:result+=['--ro-bind','/'+name,'/'+name]
     else:result+=['--ro-bind','/','/']
-    result+=['--proc','/proc','--dev','/dev','--tmpfs','/tmp','--bind',str(project),'/app','--bind',str(home),str(home),'--bind',str(logs),str(logs),'--ro-bind',str(control),str(control),'--chdir','/app']
-    if tests is not None:result+=['--bind' if writable_tests else '--ro-bind',str(tests),'/tests','--bind',str(Path(logs)/'verifier'),'/logs/verifier']
+    if workdir not in {'/app','/testbed'}:raise ValueError('Unsupported dataset workspace')
+    result+=['--proc','/proc','--dev','/dev','--tmpfs','/tmp','--bind',str(project),workdir,'--bind',str(home),str(home),'--ro-bind' if readonly_logs else '--bind',str(logs),str(logs),'--ro-bind',str(control),str(control),'--chdir',workdir]
+    if environment is not None:result+=['--bind',str(environment),'/opt/hicode-swe/env']
+    if tests is not None:result+=['--bind' if writable_tests else '--ro-bind',str(tests),'/tests','--ro-bind' if readonly_logs else '--bind',str(Path(logs)/'verifier'),'/logs/verifier']
     return result+args

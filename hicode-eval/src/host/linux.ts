@@ -2,6 +2,7 @@ import { mkdir, appendFile, rename, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { validateSweTask } from './sweTasks.js';
 import { validatePublicTask, prepareTaskInputs, taskSchema } from './publicTasks.js';
 import { run, readJson, save, evidenceTree, exists } from './store.js';
 import type { Config, Run } from './types.js';
@@ -35,7 +36,7 @@ export class LinuxMachine {
     const hash = createHash('sha256').update(archive).digest('hex');
     if (manifest.files['source.tar.gz'] !== hash) throw Error('Source payload changed');
     await run(this.docker('exec', this.config.machine, 'mkdir', '-p', '/opt/hicode-eval', '/opt/hicode/releases', '/eval/runs'));
-    for (const name of ['runner.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'record.py', 'preflight.ts', 'bootstrap.py']) await run(this.docker('cp', join(EVAL_ROOT, 'src/worker', name), this.config.machine + ':/opt/hicode-eval/' + name));
+    for (const name of ['runner.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'record.py', 'preflight.ts', 'bootstrap.py', 'swe.py']) await run(this.docker('cp', join(EVAL_ROOT, 'src/worker', name), this.config.machine + ':/opt/hicode-eval/' + name));
     const target = '/opt/hicode-eval/source-' + hash + '.tar.gz';
     await run(this.docker('cp', join(this.config.payload, 'source.tar.gz'), this.config.machine + ':' + target));
     this.release = await run(this.docker('exec', this.config.machine, 'python3', '/opt/hicode-eval/bootstrap.py', target, hash), { timeout: 660000 });
@@ -69,14 +70,26 @@ export class LinuxMachine {
     const remote = '/eval/runs/' + state.id;
     const task = join(path, 'task', state.task);
     const inputs = join(path, 'inputs');
-    const profile = await validatePublicTask(state.task, task);
-    await prepareTaskInputs(task, inputs, profile);
+    const swe = state.dataset === 'swe-bench-verified' ? await validateSweTask(state.task, task) : undefined;
+    const profile = swe ? undefined : await validatePublicTask(state.task, task);
+    const spec = swe ? { agent:{timeout_sec:1800}, verifier:{timeout_sec:swe.verifierSeconds} } : taskSchema.parse(Bun.TOML.parse(await Bun.file(join(task, 'task.toml')).text()));
     await run(this.docker('exec', this.config.machine, 'mkdir', '-p', remote + '/project'));
-    await run(this.docker('cp', inputs + '/.', this.config.machine + ':' + remote + '/project/'));
-    if (profile.initializer) await run(this.docker('cp', join(task, 'environment', profile.initializer.file), this.config.machine + ':' + remote + '/project/' + profile.initializer.file));
+    if (swe) {
+      await run(this.docker('exec', this.config.machine, '/opt/hicode-swe/grader/bin/python', '-c', "import swebench; assert swebench.__version__ == '4.1.0'"));
+      const environmentProof = JSON.parse(await run(this.docker('exec',this.config.machine,'cat',swe.environment+'/.ready.json')));
+      await save(join(path,'environment.json'),{...environmentProof,cache:swe.environment,harnessVersion:swe.harnessVersion,evaluationMode:swe.evaluationMode});
+      await run(this.docker('cp', join(task, 'repository') + '/.', this.config.machine + ':' + remote + '/project/'));
+      await run(this.docker('cp', join(task, 'repository'), this.config.machine + ':' + remote + '/baseline'));
+      await run(this.docker('exec', this.config.machine, 'chmod', '700', remote + '/baseline'));
+    } else {
+      await prepareTaskInputs(task, inputs, profile!);
+      await run(this.docker('cp', inputs + '/.', this.config.machine + ':' + remote + '/project/'));
+      if (profile!.initializer) await run(this.docker('cp', join(task, 'environment', profile!.initializer.file), this.config.machine + ':' + remote + '/project/' + profile!.initializer.file));
+    }
     await run(this.docker('cp', join(task, 'instruction.md'), this.config.machine + ':' + remote + '/instruction.md'));
-    const spec = taskSchema.parse(Bun.TOML.parse(await Bun.file(join(task, 'task.toml')).text()));
-    await save(join(path, 'job.json'), { model: this.config.model, release: this.release, agentSeconds: state.budget.agentSeconds, originalAgentSeconds: spec.agent.timeout_sec, verifierSeconds: spec.verifier.timeout_sec, initializer: profile.initializer, packages: profile.packages, verifierPackages: profile.verifierPackages, verifierPrelude: profile.verifierPrelude, verifierRootOverlay: profile.verifierRootOverlay });
+    await save(join(path, 'job.json'), { model: this.config.model, release: this.release, agentSeconds: state.budget.agentSeconds, originalAgentSeconds: spec.agent.timeout_sec, verifierSeconds: spec.verifier.timeout_sec,
+      ...(swe ? {dataset:'swe-bench-verified',swe,initializer:null,packages:[],verifierPackages:[],verifierPrelude:'none'} :
+        {dataset:'terminal-bench',commands:profile!.commands,environment:profile!.environment,verifierEnvironment:profile!.verifierEnvironment,initializer:profile!.initializer,packages:profile!.packages,verifierPackages:profile!.verifierPackages,verifierPrelude:profile!.verifierPrelude,verifierRootOverlay:profile!.verifierRootOverlay}) });
     await run(this.docker('cp', join(path, 'job.json'), this.config.machine + ':' + remote + '/job.json'));
     if (await exists(join(path, 'cancel'))) await this.cancel(state.id);
     await mkdir(join(path, 'live'), { recursive: true });
@@ -84,10 +97,10 @@ export class LinuxMachine {
     const env: Record<string, string> = {};
     for (const name of ['PATH', 'HOME', 'DOCKER_CONFIG', 'TMPDIR']) if (process.env[name]) env[name] = process.env[name];
     env[this.config.model.apiKeyEnv] = credential;
-    const proc = Bun.spawn(this.docker('exec', '--env', this.config.model.apiKeyEnv, this.config.machine, 'python3', '/opt/hicode-eval/runner.py', state.id), { env, stdout: 'pipe', stderr: 'pipe' });
+    const proc = Bun.spawn(this.docker('exec', '--env', this.config.model.apiKeyEnv, this.config.machine, swe ? '/opt/hicode-swe/grader/bin/python' : 'python3', '/opt/hicode-eval/runner.py', state.id), { env, stdout: 'pipe', stderr: 'pipe' });
     let result: LinuxResult | undefined, note = '', verificationSent = false;
     const stderr = new Response(proc.stderr).text();
-    const setupAllowance = profile.verifierPackages.length ? 660 : profile.packages.length ? 360 : 240;
+    const setupAllowance = swe ? 360 : profile!.verifierPackages.length ? 660 : profile!.packages.length ? 360 : 240;
     const timer = setTimeout(() => { void this.cancel(state.id).catch(() => {}); }, (state.budget.agentSeconds + spec.verifier.timeout_sec + setupAllowance) * 1000);
     let buffer = '', lastCopy = Date.now();
     try {
@@ -105,7 +118,7 @@ export class LinuxMachine {
             await onPhase(packet.phase);
             if (packet.phase === 'Awaiting local verification' && !verificationSent) {
               verificationSent = true;
-              await run(this.docker('cp', join(task, 'tests'), this.config.machine + ':' + remote + '/tests'));
+              await run(this.docker('cp', join(task, swe ? 'hidden' : 'tests'), this.config.machine + ':' + remote + '/tests'));
               await run(this.docker('exec', this.config.machine, 'sh', '-c', `chmod -R a+rX /eval/runs/${state.id}/tests && touch /eval/runs/${state.id}/verify.ready`));
             }
           } else if (packet.type === 'screen') {

@@ -91,7 +91,7 @@ bash hicode-eval/eval.sh wait --batch BATCH_ID --wait-seconds 30
 }
 ```
 
-省略某题的 `agentSeconds` 时使用服务默认值（1800 秒）；每题可设置 30–7200 秒。并发最多 3，不能超过服务上限。页面逐题显示时限，运行结束后自动补位。实际预算和原题预算均会记录，加长时限属于研发评测条件。固定 15 道回归配置见 [regression15.json](config/regression15.json)。
+省略某题的 `agentSeconds` 时使用服务默认值（1800 秒）；每题可设置 30–7200 秒。并发最多 4，不能超过服务上限。页面逐题显示时限，运行结束后自动补位。实际预算和原题预算均会记录，加长时限属于研发评测条件。固定 15 道回归配置见 [regression15.json](config/regression15.json)。
 
 `--source` 和 `--model` 可成对覆盖已配置模型；自定义连接使用 `--model-config`。更换端口时，所有 CLI 命令都传同一个 `--port`。同一评测机只运行一个服务，不在任务期间部署另一个版本。
 
@@ -170,3 +170,37 @@ Python 调度辅助代码只用标准库；验收依赖安装在评测镜像中�
 题面粘贴与提交分开发送，收到 Agent 的 `model_stream_start` 才确认执行并开始计时。提交后 15 秒无确认会标记启动异常，不消耗整题时限空等。
 
 评测到时先向已确认身份的 HiCode 主进程发送 SIGTERM，最多等待 10 秒收尾，持续收集工具结果和日志，然后清理该题 UID 的残留进程。收尾窗口不用于继续答题，执行状态仍为 timeout；判题通过也不改为 completed。`evidence/shutdown.json` 记录进程是否退出、Turn 是否保存和未闭合的工具调用；强制清理时不伪造缺失事件。
+
+## 接入新的公开数据集
+
+Terminal-Bench 和 SWE-bench Verified 共用批次、并发、每题时限、TUI、取消和证据收集；输入准备及判题按数据集分别执行。`Run.dataset` 区分两种题目，旧运行记录仍按 Terminal 读取。一个批次可以包含两种题目。
+
+新增 Terminal 题 `large-scale-text-editing` 和 `break-filter-js-from-html` 使用已审核的原题文件哈希。前者做题前生成原始 input/expected CSV 并删除生成器，判题前删除 CSV、用隐藏的原生成器只重建 input；后者仅提供原 Dockerfile 明确公开的文件，使用匹配的 Chromium/driver 和分别固定的做题、判题包版本。共享工具和 wheel 缓存只准备一次，模型尝试前缺少工具会报告环境错误：
+
+```bash
+bash hicode-eval/eval.sh prepare-terminal --docker-context YOUR_CONTEXT --machine YOUR_EVAL_MACHINE
+```
+
+SWE 首批支持 Django 4.2/Python 3.9 的四道 Verified 题。准备入口核对固定数据 revision、公开/判题 JSONL 的哈希及对应字段，使用准备包里的官方 harness 4.1.0 wheel 和原 requirements。准备包作为外部输入，不复制或提交到此仓库：
+
+```bash
+bash hicode-eval/eval.sh prepare-swe \
+  --dataset /path/to/swe-bench-verified \
+  --prep /path/to/benchmark-prep/swe_verified \
+  --output /path/to/external/prepared-swe \
+  --docker-context YOUR_CONTEXT --machine YOUR_EVAL_MACHINE
+```
+
+准备需要空闲的专用评测机和网络。首次下载 Python 3.9、官方 harness 及 Django 原声明的全部依赖，包括原生扩展所需的系统头文件；后续缓存复用。输出目录必须是新的仓库外目录，失败缓存保留供检查。每题下载指定 base commit 的 GitHub 源码归档，建立仅含原始树和安装基线的本地 Git 仓库，不保留远端、未来历史或 hook。环境实际解析版本记录在机器缓存的 `.ready.json`，运行时复制到宿主 `runs/ID/environment.json`。
+
+服务启动时在原有参数上增加 `--swe-tasks /path/to/external/prepared-swe`。复用同一个看板和专用机器；活动任务运行时不要另起服务或重新准备系统依赖。四题可用 `config/swe-verified-pilot.json` 提交，也可在同一批次加入 Terminal 题。
+
+SWE 的隔离与评分契约：
+
+- Agent 仅收到原始题面、指定 base code、仓库自带公开测试和各题独立的 Python 环境，工作目录 `/testbed`。不提供 gold patch、hints、隐藏 test patch 或评分测试名单。
+- Agent 结束或超时后先停止该题所有进程，再由宿主读取实际文件，以受保护的安装基线导出新增、修改、删除、二进制及可执行位变化。忽略 Agent 控制的 Git/index/hooks，不采信模型自报补丁。
+- `prediction.json` 使用官方 `instance_id`、`model_name_or_path`、`model_patch` 字段；`patch-manifest.json` 记录原 base commit、安装基线 commit、数据 revision 和补丁哈希。
+- 在干净代码、独立依赖和新 Home 中重放补丁，原 hidden test patch 仅此时进入判题视图。使用官方 4.1.0 的 Django 测试命令、日志解析和 FAIL_TO_PASS/PASS_TO_PASS 评分；保存原始 `logs/verifier/output.txt` 和 `report.json`，不转换成虚构的 CTRF。
+- 无完整测试输出、初始化失败或判题超时记为 `unavailable`，不误判模型错误；官方回归测试未通过记为 `failed`。恢复只核验已有报告和补丁哈希，不重跑 Agent 或判题。
+
+这是 **共享 Linux 研发评测**：使用 venv 替代官方 Conda/实例镜像、从源码归档重建 Git 基线，官方脚本的环境激活及测试文件 reset commit 随之适配，测试、断言和评分规则不变。不能把这些结果表述为官方镜像下的榜单复现。目前仅接入上述 Django 环境组；其他仓库需新增对应环境配方后再登记。

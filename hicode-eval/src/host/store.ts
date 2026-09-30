@@ -41,12 +41,12 @@ export async function tree(root: string): Promise<Record<string, { bytes: number
 
 /** Evidence links are recorded as data and never followed, unlike immutable source inputs. */
 export async function evidenceTree(root: string): Promise<Record<string, { bytes: number; sha256: string; symlink?: string }>> {
-  return scanTree(root, true);
+  return scanTree(root, true, 100000);
 }
 
-async function scanTree(root: string, recordLinks = false): Promise<Record<string, { bytes: number; sha256: string; symlink?: string }>> {
+async function scanTree(root: string, recordLinks = false, maxFiles = 20000): Promise<Record<string, { bytes: number; sha256: string; symlink?: string }>> {
   const result: Record<string, { bytes: number; sha256: string; symlink?: string }> = {};
-  let bytes = 0;
+  let bytes = 0, fileCount = 0;
   async function walk(path: string): Promise<void> {
     const stat = await lstat(path);
     if (stat.isSymbolicLink()) {
@@ -54,13 +54,13 @@ async function scanTree(root: string, recordLinks = false): Promise<Record<strin
       const target = await readlink(path);
       if (Buffer.byteLength(target) > 4096 || target.includes('\0')) throw Error('Invalid evidence link');
       result[relative(root, path)] = {bytes: Buffer.byteLength(target), sha256: createHash('sha256').update(target).digest('hex'), symlink: target};
-      if (Object.keys(result).length >= 20000) throw Error('Snapshot budget exceeded');
+      if (++fileCount > maxFiles) throw Error('Snapshot budget exceeded');
       return;
     }
     if (stat.isDirectory()) { for (const name of (await readdir(path)).sort()) await walk(join(path, name)); }
     else if (stat.isFile()) {
       bytes += stat.size;
-      if (bytes > 1024 ** 3 || Object.keys(result).length >= 20000) throw Error('Snapshot budget exceeded');
+      if (bytes > 1024 ** 3 || ++fileCount > maxFiles) throw Error('Snapshot budget exceeded');
       const hash = createHash('sha256');
       const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
       try { const buffer = Buffer.alloc(65536); for (;;) { const { bytesRead } = await fd.read(buffer); if (!bytesRead) break; hash.update(buffer.subarray(0, bytesRead)); } } finally { await fd.close(); }
