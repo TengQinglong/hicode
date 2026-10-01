@@ -31,6 +31,8 @@ Runs locally on **macOS and Linux**. Connect your own model API key to get start
 
 ### Recent improvements
 
+- 🛠️ **10-01 · Agent execution**: public benchmark findings drove unified background task queuing, status, and notifications, with continuation for long-running tasks and complete cleanup on cancellation or failure.
+
 - 🐧 **09-26 · Linux support**: added Linux support with a unified installer for both platforms, improved sandbox isolation, and terminal display fixes.
 
 - 🔌 **09-25 · MCP improvements**: simplified configuration and approvals, and improved tool loading, updates, and connection management for smoother integration into HiCode execution.
@@ -41,9 +43,9 @@ Runs locally on **macOS and Linux**. Connect your own model API key to get start
 
 - 🤝 **09-19 · Subagent collaboration**: improved task delegation and subagent spawning, along with parallel execution, two-way messaging, and context-preserving follow-ups.
 
-### TODO
+### Public benchmarks
 
-- [ ] Build a test dataset and improve HiCode's capabilities through automated evaluations.
+- 🔥 **Evaluation in progress**: as of October 1, 2026, HiCode has passed **41 Terminal-Bench 2.0 tasks** and **65 SWE-bench Verified tasks**.
 
 ## Quick start
 
@@ -66,12 +68,14 @@ hicode
 
 Run `hicode` from any project directory afterward. First launch opens model setup:
 
-1. **Choose a provider**: Alibaba Bailian (Qwen), Zhipu GLM, DeepSeek, or OpenRouter.
+1. **Choose a provider**: Qwen Token Plan, DeepSeek, Zhipu GLM, OpenRouter, or Alibaba Bailian (Qwen).
 2. **API key**: paste your key and press Enter to save.
 3. **API endpoint**: if the default does not match your account, enter your provider’s API base URL.
 4. **Choose model and start**: pick a model your account can access.
 
 Model missing? Use **Add model** to enter its Model ID and an optional display name. Use `/providers` to change settings later.
+
+**Qwen Token Plan** is a separate model source for Qwen 3.8 Flash and DeepSeek V4.1 Flash, with its own connection and API key distinct from regular Bailian. See [model settings](docs/reference/SETTINGS.md).
 
 Configuration is saved automatically and reusable across projects. Model usage is billed by your provider.
 
