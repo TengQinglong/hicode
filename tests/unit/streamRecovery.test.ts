@@ -67,12 +67,41 @@ test("persistent truncation exhausts its single recovery without executing parti
     expect(count).toBe(2);
 }));
 
-test.each(["rate_limit_exceeded", "data_inspection_failed"])("provider code %s controls recovery without matching error text", async code => withTempProject(async (cwd, storage) => {
+test.each(["rate_limit_exceeded", "data_inspection_failed", "vendor_unknown"])("provider stream error %s retries the unchanged request once", async code => withTempProject(async (cwd, storage) => {
+    const bodies: string[] = [];
+    const providerError = `data: ${JSON.stringify({error: {code, message: "fixture rejection"}})}\n\n`;
+    mockFetch(async (_url, init) => {
+        bodies.push(String(init?.body));
+        return response(bodies.length === 1
+            ? event({content: "discard this draft", tool_calls: [{index: 0, id: "discarded-call", function: {name: "bash", arguments: "{}"}}]}) + providerError
+            : good);
+    });
+    const updates: LLMTextUpdate[] = [];
+    const result = await caller({...options(cwd, storage), onText(update) {updates.push(update);}}, endpoint);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toBe(bodies[0]);
+    expect(result.message.content).toBe("recovered");
+    expect(result.toolCalls).toEqual([]);
+    expect(updates).toEqual([{type: "reset"}, {type: "delta", text: "discard this draft"}, {type: "reset"}, {type: "delta", text: "recovered"}]);
+    const logs = await Promise.all((await listPromptLogs(getPromptLogDirectory(storage, cwd))).map(async file => JSON.parse(await readFile(join(getPromptLogDirectory(storage, cwd), file), "utf8"))));
+    const failed = logs.find(log => log.response.error);
+    expect(failed.response.rawResponse).toMatchObject({providerErrorCode: code, recovery: {reason: "provider", attempt: 1, maxAttempts: 3, willRetry: true}});
+    expect(JSON.stringify(failed.response)).not.toContain("discard this draft");
+}));
+
+test("repeated provider stream errors stop after one retry", async () => withTempProject(async (cwd, storage) => {
     let count = 0;
-    mockFetch(async () => ++count === 1 ? response(`data: ${JSON.stringify({error: {code, message: "fixture rejection"}})}\n\n`) : response(good));
-    if (code === "rate_limit_exceeded") expect((await caller(options(cwd, storage), endpoint)).message.content).toBe("recovered");
-    else await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("data_inspection_failed");
-    expect(count).toBe(code === "rate_limit_exceeded" ? 2 : 1);
+    mockFetch(async () => {count++; return response(`data: ${JSON.stringify({error: {code: "vendor_unknown", message: "fixture rejection"}})}\n\n`);});
+    await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("retry budget exhausted");
+    expect(count).toBe(2);
+}));
+
+test("provider stream recovery shares the total request limit with HTTP recovery", async () => withTempProject(async (cwd, storage) => {
+    let count = 0;
+    mockFetch(async () => ++count === 1 ? new Response("busy", {status: 503})
+        : response(`data: ${JSON.stringify({error: {code: "vendor_unknown", message: "fixture rejection"}})}\n\n`));
+    await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("retry budget exhausted");
+    expect(count).toBe(3);
 }));
 
 test("残缺工具响应只重试模型请求，重置草稿并累加已报告 usage", async () => withTempProject(async (cwd, storage) => {

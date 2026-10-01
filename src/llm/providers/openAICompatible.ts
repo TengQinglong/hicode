@@ -296,6 +296,7 @@ async function callOpenAICompatibleCore(
     let outputStallRetries = 0;
     let responseRetries = 0;
     let truncationRetries = 0;
+    let providerStreamErrorRetries = 0;
     let completedRetryUsage = emptyUsage();
 
     if (options.signal) throwIfTurnAborted(options.signal);
@@ -571,13 +572,10 @@ async function callOpenAICompatibleCore(
                 throw new Error(`LLM stream has received no data for ${requestTimeoutMs} ms`);
             }
             if (error instanceof ProviderStreamError) {
-                const retryable = [429, 500, 502, 503, 504, "rate_limit_exceeded", "server_error", "service_unavailable"].includes(error.code);
-                if (!retryable) {
-                    const message = redactSecret(error.message, endpoint.apiKey).slice(0, 1000) + "; provider rejected the response; no tools from this response were executed";
-                    finishPromptLog({error: message});
-                    throw new Error(message);
-                }
-                await recover({reason: "provider", allowed: retryable, message: redactSecret(error.message, endpoint.apiKey).slice(0, 1000),
+                // A provider error inside an otherwise accepted stream may be intermittent
+                // regardless of its vendor-specific code. Retry the untouched request once.
+                await recover({reason: "provider", allowed: providerStreamErrorRetries++ < 1,
+                    message: redactSecret(error.message, endpoint.apiKey).slice(0, 1000),
                     details: {rawResponse: {providerErrorCode: redactSecret(String(error.code), endpoint.apiKey)}}});
                 continue;
             }
