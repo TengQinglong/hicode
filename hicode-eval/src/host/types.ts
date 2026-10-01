@@ -6,7 +6,7 @@ export const budgetSchema = z.object({ agentSeconds: z.number().int().min(30).ma
 export type Budget = z.infer<typeof budgetSchema>;
 export const networkSchema = z.enum(['open', 'isolated']);
 const batchName = z.string().trim().min(1).max(120);
-const concurrency = z.number().int().min(1).max(4).default(2);
+const concurrency = z.number().int().min(1).max(5).default(2);
 export const submissionSchema = z.object({ name: batchName, network: networkSchema.optional(), tasks: z.array(z.object({ id: z.string().min(1), agentSeconds: z.number().int().min(30).max(7200).optional() }).strict()).min(1).max(200), concurrency }).strict();
 export type Submission = z.infer<typeof submissionSchema>;
 // The batch records its default; resolved execution limits belong to each Run.
@@ -17,5 +17,5 @@ export type Run = z.infer<typeof runSchema>;
 export const done = (s: Run['state']): boolean => ['passed', 'failed', 'error', 'cancelled', 'needs_recovery'].includes(s);
 export const liveSchema = z.object({ phase: z.string(), event: z.string().nullable().optional(), updatedAt: z.number().optional(), lastEventAt: z.number().optional(), ready: z.boolean().optional(), bytes: z.record(z.number()).optional() });
 export const containerSchema = z.object({ session: z.string(), id: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,100}$/), attach: z.string() });
-export const configSchema = z.object({ version: z.literal(3), network: networkSchema.default('open'), data: z.string(), tasks: z.string(), sweTasks: z.string().optional(), payload: z.string(), context: z.string().min(1), machine: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,100}$/), concurrency: z.number().int().min(1).max(4), budget: budgetSchema, model: modelSchema }).strict();
+export const configSchema = z.object({ version: z.literal(3), network: networkSchema.default('open'), data: z.string(), tasks: z.string(), sweTasks: z.string().optional(), payload: z.string(), context: z.string().min(1), machine: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,100}$/), concurrency: z.number().int().min(1).max(5), budget: budgetSchema, model: modelSchema }).strict();
 export type Config = z.infer<typeof configSchema>;

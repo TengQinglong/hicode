@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPOSITORY_ROOT } from '../src/paths.js';
 import { classify, Lab } from '../src/host/manager.js';
-import { save, tree } from '../src/host/store.js';
+import { run, save, tree } from '../src/host/store.js';
 import { runSchema, configSchema, batchSchema, submissionSchema } from '../src/host/types.js';
 import * as taskAdapters from '../src/host/publicTasks.js';
 import { serve } from '../src/host/server.js';
@@ -30,6 +30,9 @@ test('timeout and grade remain independent', () => {
   expect(classify('timeout', { reward: 1 })).toEqual({ execution: 'timeout', grading: 'passed', state: 'error' });
   expect(classify(undefined, null)).toEqual({ execution: 'completed', grading: 'unavailable', state: 'error' });
   expect(classify(undefined, {reward: 0}).state).toBe('failed');
+});
+test('host command timeout reports its deadline instead of an ambiguous SIGKILL exit', async () => {
+  await expect(run(['bun','-e','await Bun.sleep(1000)'],{timeout:80})).rejects.toThrow('bun timed out after 80ms');
 });
 test('Token Plan model survives evaluation config and batch persistence', async () => {
   const f=await fixture();
@@ -267,6 +270,35 @@ test('failed recovery retains its blocked state and does not fabricate a score',
     expect(lab.runs.get(previous.id)).toEqual(previous);
     expect(lab.batchView(lab.batches.get(previous.batchId)!).state).toBe('blocked');
   } finally {await lab?.close();prepare.mockRestore();recover.mockRestore();await f.cleanup();}
+});
+
+test('verified cancellation after Docker handoff failure releases queued work without replaying the attempt', async () => {
+  const f=await fixture(), lab=new Lab(f.config,'fixture');
+  const validate=spyOn(taskAdapters,'validatePublicTask').mockResolvedValue({hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPackages:[],verifierPrelude:'none',publicTestInputs:[],verifierChroot:false,verifierRootOverlay:false,commands:[],environment:{},verifierEnvironment:{}});
+  const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined);
+  const execute=spyOn(LinuxMachine.prototype,'execute').mockImplementation(async (state,path) => {
+    if (state.task==='cancel-async-tasks') {
+      await save(join(path,'container.json'),{session:state.id,id:'test-machine',attach:'fixture'});
+      throw Error('docker failed (exit 137)');
+    }
+    return {type:'result',execution:'completed',grading:'passed',uid:20002};
+  });
+  const recover=spyOn(LinuxMachine.prototype,'recover').mockResolvedValue({type:'result',execution:'cancelled',grading:'unavailable',uid:20001,note:'verified durable receipt'});
+  try {
+    for(const name of ['cancel-async-tasks','regex-log']) {
+      await mkdir(join(f.config.tasks,name));
+      await writeFile(join(f.config.tasks,name,'task.toml'),'[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=900\n');
+    }
+    await mkdir(f.config.payload);await save(join(f.config.payload,'manifest.json'),{});
+    await lab.init();await lab.prepareMachine();
+    const batch=await lab.submit({name:'handoff failure',concurrency:1,tasks:[{id:'cancel-async-tasks'},{id:'regex-log'}]});
+    for(let i=0;i<100&&lab.runs.get(batch.runIds[1]!)?.state!=='passed';i++)await Bun.sleep(5);
+    expect(lab.runs.get(batch.runIds[0]!)).toMatchObject({state:'cancelled',execution:'cancelled',grading:'unavailable',collection:'complete'});
+    expect(lab.runs.get(batch.runIds[0]!)?.note).toContain('docker failed (exit 137)');
+    expect(lab.runs.get(batch.runIds[1]!)?.state).toBe('passed');
+    expect(execute).toHaveBeenCalledTimes(2);expect(recover).toHaveBeenCalledTimes(1);
+    expect((await lab.snapshot() as {schedulingBlocked:boolean}).schedulingBlocked).toBe(false);
+  } finally {await lab.close();validate.mockRestore();prepare.mockRestore();execute.mockRestore();recover.mockRestore();await f.cleanup();}
 });
 
 

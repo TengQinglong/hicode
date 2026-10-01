@@ -5,14 +5,25 @@ import { readJson, tree, evidenceTree, contained } from './store.js';
 const sha = z.string().regex(/^[a-f0-9]{64}$/);
 export const sweTaskSchema = z.object({
   kind: z.literal('swe-bench-verified'), instanceId: z.string().regex(/^[a-zA-Z0-9_-]+__[a-zA-Z0-9_.-]+-\d+$/),
-  revision: z.string().regex(/^[a-f0-9]{40}$/), repo: z.literal('django/django'), version: z.literal('4.2'),
+  revision: z.string().regex(/^[a-f0-9]{40}$/), repo: z.enum(['django/django', 'sympy/sympy']),
+  version: z.enum(['4.0', '4.1', '4.2', '5.0', '1.8', '1.9', '1.10', '1.11', '1.12']),
   baseCommit: z.string().regex(/^[a-f0-9]{40}$/), harnessVersion: z.literal('4.1.0'),
   environment: z.string().regex(/^\/opt\/hicode-swe\/cache\/[a-f0-9]{64}$/),
-  python: z.literal('3.9'), verifierSeconds: z.number().int().min(60).max(7200),
+  python: z.enum(['3.8', '3.9', '3.11']), verifierSeconds: z.number().int().min(60).max(7200),
   baselineCommit: z.string().regex(/^[a-f0-9]{40}$/),
   files: z.record(sha), evaluationMode: z.literal('shared-linux-development'),
 }).strict();
 export type SweTask = z.infer<typeof sweTaskSchema>;
+function checkPythonVersion(task: SweTask): void {
+  const expected = task.repo === 'django/django'
+    ? task.version === '4.0' ? '3.8'
+      : task.version === '4.1' || task.version === '4.2' ? '3.9'
+      : task.version === '5.0' ? '3.11' : undefined
+    : ['1.8', '1.9', '1.10', '1.11', '1.12'].includes(task.version) ? '3.9' : undefined;
+  if (!expected || task.python !== expected ||
+      !task.instanceId.startsWith(task.repo.replace('/', '__') + '-'))
+    throw Error('SWE task identity differs from the supported repository environment');
+}
 export async function datasetTree(path: string, dataset: string) {
   if(dataset !== 'swe-bench-verified') return tree(path);
   const files = await evidenceTree(path);
@@ -28,6 +39,7 @@ export async function datasetTree(path: string, dataset: string) {
 export async function validateSweTask(id: string, path: string): Promise<SweTask> {
   const task = await readJson(join(path, 'swe-task.json'), sweTaskSchema);
   if (task.instanceId !== id) throw Error('SWE task identity mismatch');
+  checkPythonVersion(task);
   const actual = await datasetTree(path,'swe-bench-verified');
   delete actual['swe-task.json'];
   if (JSON.stringify(Object.keys(actual).sort()) !== JSON.stringify(Object.keys(task.files).sort()) ||
@@ -43,6 +55,7 @@ export async function sweCatalog(root?: string) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     const task = await readJson(join(root, entry.name, 'swe-task.json'), sweTaskSchema);
     if (task.instanceId !== entry.name) throw Error('SWE directory identity mismatch');
+    checkPythonVersion(task);
     result.push({id:task.instanceId,category:'SWE-bench Verified',seconds:1800,dataset:'swe-bench-verified' as const});
   }
   return result;

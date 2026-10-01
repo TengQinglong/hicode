@@ -19,7 +19,7 @@ export class Client {
       await home.body?.cancel();
     };
     if (!this.cookie) await connect();
-    const send = () => fetch(url + '/api/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { cookie: this.cookie, 'X-Eval-Request': '1', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(30000), redirect: 'error' });
+    const send = () => fetch(url + '/api/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { cookie: this.cookie, 'X-Eval-Request': '1', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(path === 'submit' ? 300000 : 30000), redirect: 'error' });
     let response = await send();
     if (response.status === 403) { await response.body?.cancel(); await connect(); response = await send(); }
     const result: unknown = await response.json();

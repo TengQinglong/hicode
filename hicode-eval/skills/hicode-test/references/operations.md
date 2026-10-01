@@ -25,7 +25,7 @@ status/wait 输出含完整任务清单，接收后只打印批次 state/counts�
 
 先用 `bash hicode-eval/eval.sh --help` 确认入口；路径变更后的离线检查用 `bun test hicode-eval/tests`，Python 用 `PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker python3 -B -m unittest discover -s hicode-eval/tests`。正常启动已有环境不重复运行这些开发验证。
 
-批次 JSON 只有 `name`、`tasks`（`{id, agentSeconds}` 对象数组）与 `concurrency`（1–4）。`agentSeconds` 是每题时限，范围 30–7200 秒，省略使用服务默认 1800 秒；没有批次级 budget 参数。同一轮的不同预算放进同一个批次，不再按时间分组。配置示例：`{"name":"本轮","tasks":[{"id":"polyglot-c-py","agentSeconds":900},{"id":"modernize-scientific-stack","agentSeconds":600}],"concurrency":3}`。以已保存的用户约定为准，不直接运行示例文件中的题目。
+批次 JSON 只有 `name`、`tasks`（`{id, agentSeconds}` 对象数组）与 `concurrency`（1–5）。`agentSeconds` 是每题时限，范围 30–7200 秒，省略使用服务默认 1800 秒；没有批次级 budget 参数。同一轮的不同预算放进同一个批次，不再按时间分组。配置示例：`{"name":"本轮","tasks":[{"id":"polyglot-c-py","agentSeconds":900},{"id":"modernize-scientific-stack","agentSeconds":600}],"concurrency":3}`。以已保存的用户约定为准，不直接运行示例文件中的题目。
 
 只有服务不存在或已空闲且配置确需更新时启动/重启；任务运行中不能使用这条命令另开同机服务：
 
@@ -68,4 +68,4 @@ recover 用于 needs_recovery，证据不足会拒绝；resume 只恢复既有�
 
 周期收集失败见 `collection-error.txt`，不能仅据此判断 Agent 执行失败。快照中的符号链接只记录目标文本，不应解引用读取宿主文件。FEAL 编译只使用封存后的独立测试副本；Headless 临时根只用于判题。判题依赖准备失败是 unavailable，不能计作模型答错。
 
-准备新题可用 prepare-terminal/prepare-swe 的 `--ids ID1,ID2`，批量核对必需命令、输入与固定依赖。新 SWE 开发检查器随原仓库 pre-commit 版本缓存，不升级旧尝试环境。公开自测 helper 与隐藏 verifier 使用不同视图；判题的私有 chroot 根不向 Agent 开放。源码正在调整时先保存批次配置和准备证据，待最新源码验证并冻结后再提交；不能复用旧 payload 声称测试了新框架。
+准备新题可用 prepare-terminal/prepare-swe 的 `--ids ID1,ID2`，批量核对必需命令、输入与固定依赖。Django 的开发检查器随原仓库 pre-commit 版本缓存，SymPy 使用原环境声明的开发依赖；不升级旧尝试环境。公开自测 helper 与隐藏 verifier 使用不同视图；判题的私有 chroot 根不向 Agent 开放。源码正在调整时先保存批次配置和准备证据，待最新源码验证并冻结后再提交；不能复用旧 payload 声称测试了新框架。

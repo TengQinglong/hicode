@@ -162,7 +162,7 @@ Linux 运行版本与依赖：/opt/hicode/
 bash hicode-eval/eval.sh recover --run RUN_ID
 ```
 
-恢复会核验任务身份、原进程已退出、完成事件和判题证据，只清理该题残留进程，重新导出现场并更新原记录；不调用模型、不重新判题、不停止其他题。证据不足或不一致时拒绝恢复并保留现场。重复执行不会重复做题；恢复成功后继续调度已有队列。恢复前状态保存为 `state.before-recovery.json`，核验回执保存为 `evidence/recovery.json`。
+恢复会核验任务身份、原进程已退出、完成事件和判题证据，只清理该题残留进程，重新导出现场并更新原记录；不调用模型、不重新判题、不停止其他题。证据不足或不一致时拒绝恢复并保留现场。重复执行不会重复做题；恢复成功后继续调度已有队列。恢复前状态保存为 `state.before-recovery.json`，核验回执保存为 `evidence/recovery.json`。 Docker 交接等待首个确认最多 25 秒；宿主命令超时会标出实际期限。Docker 交接等执行异常后，服务会短暂等待原 runner 写入结局；若恢复校验通过，会自动对账并继续排队任务。没有可信结局时仍停在 `needs_recovery`，需要人工检查。
 
 网页固定在当前窗口内，任务列表与终端历史分别滚动；调整窗口高度会改变终端可见行数，不会重播输出。
 
@@ -200,7 +200,7 @@ Terminal-Bench 和 SWE-bench Verified 共用批次、并发、每题时限、TUI
 bash hicode-eval/eval.sh prepare-terminal --docker-context YOUR_CONTEXT --machine YOUR_EVAL_MACHINE
 ```
 
-SWE 首批支持 Django 4.2/Python 3.9 的四道 Verified 题。准备入口核对固定数据 revision、公开/判题 JSONL 的哈希及对应字段，使用准备包里的官方 harness 4.1.0 wheel 和原 requirements。准备包作为外部输入，不复制或提交到此仓库：
+SWE 准备入口支持 Django 4.0 / Python 3.8、Django 4.1/4.2 / Python 3.9、Django 5.0 / Python 3.11，以及 SymPy 1.8–1.12 / Python 3.9 的 Verified 题，通过 `--ids` 选择。准备入口核对固定数据 revision、公开/判题 JSONL 的哈希及对应字段，使用准备包里的官方 harness 4.1.0 wheel；Django 核对原 requirements，SymPy 核对原声明的包列表与配方。准备包作为外部输入，不复制或提交到此仓库：
 
 ```bash
 bash hicode-eval/eval.sh prepare-swe \
@@ -210,11 +210,11 @@ bash hicode-eval/eval.sh prepare-swe \
   --docker-context YOUR_CONTEXT --machine YOUR_EVAL_MACHINE
 ```
 
-准备需要空闲的专用评测机和网络。首次下载 Python 3.9、官方 harness 及 Django 原声明的全部依赖，包括原生扩展所需的系统头文件；后续缓存复用。输出目录必须是新的仓库外目录，失败缓存保留供检查。每题下载指定 base commit 的 GitHub 源码归档，建立仅含原始树和安装基线的本地 Git 仓库，不保留远端、未来历史或 hook。环境实际解析版本记录在机器缓存的 `.ready.json`，运行时复制到宿主 `runs/ID/environment.json`。
+准备需要空闲的专用评测机和网络。首次按仓库、版本和环境组准备 Python、官方 harness 及原声明依赖；不同题目的运行环境分别复制，不因同批混用版本。后续缓存复用。输出目录必须是新的仓库外目录，失败缓存保留供检查。每题下载指定 base commit 的 GitHub 源码归档，建立仅含原始树和安装基线的本地 Git 仓库，不保留远端、未来历史或 hook。环境实际解析版本记录在机器缓存的 `.ready.json`，运行时复制到宿主 `runs/ID/environment.json`。
 
 服务启动时在原有参数上增加 `--swe-tasks /path/to/external/prepared-swe`。复用同一个看板和专用机器；活动任务运行时不要另起服务或重新准备系统依赖。四题可用 `config/swe-verified-pilot.json` 提交，也可在同一批次加入 Terminal 题。
 
-两种准备命令都支持 `--ids ID1,ID2`。新 SWE 输入的开发检查器从基线 `.pre-commit-config.yaml` 读取固定版本并使用独立缓存，不就地更新旧环境。准备不调用模型，不代表题目已通过。
+两种准备命令都支持 `--ids ID1,ID2`。Django 输入的开发检查器从基线 `.pre-commit-config.yaml` 读取固定版本并使用独立缓存；SymPy 使用原环境声明中的开发依赖。不就地更新旧环境。准备不调用模型，不代表题目已通过。
 
 SWE 的隔离与评分契约：
 
@@ -224,4 +224,6 @@ SWE 的隔离与评分契约：
 - 在干净代码、独立依赖和新 Home 中重放补丁，原 hidden test patch 仅此时进入判题视图。使用官方 4.1.0 的 Django 测试命令、日志解析和 FAIL_TO_PASS/PASS_TO_PASS 评分；保存原始 `logs/verifier/output.txt` 和 `report.json`，不转换成虚构的 CTRF。
 - 无完整测试输出、初始化失败或判题超时记为 `unavailable`，不误判模型错误；官方回归测试未通过记为 `failed`。恢复只核验已有报告和补丁哈希，不重跑 Agent 或判题。
 
-这是 **共享 Linux 研发评测**：使用 venv 替代官方 Conda/实例镜像、从源码归档重建 Git 基线，官方脚本的环境激活及测试文件 reset commit 随之适配，测试、断言和评分规则不变。不能把这些结果表述为官方镜像下的榜单复现。目前仅接入上述 Django 环境组；其他仓库需新增对应环境配方后再登记。
+这是 **共享 Linux 研发评测**：使用 venv 替代官方 Conda/实例镜像、从源码归档重建 Git 基线，官方脚本的环境激活及测试文件 reset commit 随之适配，测试、断言和评分规则不变。不能把这些结果表述为官方镜像下的榜单复现。目前仅接入上述三个 Django 版本的环境组；5.0 仍需在评测机空闲后完成 Linux 环境预检；其他仓库需新增对应环境配方后再登记。
+
+准备器从外部 `environment-groups.json` 按 repo、version、environmentSetupCommit 选取并校验原始 requirements；混合版本按组准备，缓存按版本、环境提交、依赖内容及架构隔离。工具版本只读取各题基线实际声明的 pre-commit 配置，不借用新版配置。准备期间必须无活动评测任务。

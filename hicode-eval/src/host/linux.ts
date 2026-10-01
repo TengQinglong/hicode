@@ -64,7 +64,7 @@ export class LinuxMachine {
       const value = JSON.stringify({version: 1, runId: id, status, ...(message ? {message} : {})});
       await run(this.docker('exec', this.config.machine, 'python3', '-c',
         "import sys;sys.path.insert(0,'/opt/hicode-eval');from protocol import atomic_json;import json;atomic_json(sys.argv[1],json.loads(sys.argv[2]))",
-        remote + '/verification.json', value), {timeout: 10000});
+        remote + '/verification.json', value), {timeout: status === 'accepted' ? 25000 : 30000});
     };
     await acknowledge('accepted');
     try {

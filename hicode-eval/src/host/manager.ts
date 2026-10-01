@@ -156,20 +156,25 @@ export class Lab {
       if (this.closed || this.halted || this.jobs.has(id)) throw Error('Recovery unavailable while task or service is active/closing');
       if (done(current.state) && current.state !== 'needs_recovery') return current;
       if (current.state !== 'needs_recovery' || !this.machine) throw Error('Task must require recovery and machine must be initialized');
-      const path = this.path(id), before = join(path, 'state.before-recovery.json');
-      if (!await exists(before)) await save(before, current);
-      const result = await this.machine.recover(current, path);
-      const classified = classify(result.execution === 'completed' ? undefined : result.execution,
-        result.grading === 'unavailable' ? null : {reward: result.grading === 'passed' ? 1 : 0});
-      await this.update(id, {state: result.execution === 'cancelled' ? 'cancelled' : classified.state,
-        execution: result.execution, grading: result.grading, collection: 'complete',
-        reward: result.grading === 'unavailable' ? undefined : result.grading === 'passed' ? 1 : 0,
-        note: result.note, finishedAt: current.finishedAt ?? Date.now()/1000});
+      await this.reconcileRetained(id);
       await this.pump();
       return this.runs.get(id)!;
     });
     this.submissions = operation.catch(() => {});
     return operation;
+  }
+  private async reconcileRetained(id: string): Promise<void> {
+    const current = this.runs.get(id)!;
+    const path = this.path(id), before = join(path, 'state.before-recovery.json');
+    if (!await exists(before)) await save(before, current);
+    const result = await this.machine!.recover(current, path);
+    const classified = classify(result.execution === 'completed' ? undefined : result.execution,
+      result.grading === 'unavailable' ? null : {reward: result.grading === 'passed' ? 1 : 0});
+    await this.update(id, {state: result.execution === 'cancelled' ? 'cancelled' : classified.state,
+      execution: result.execution, grading: result.grading, collection: 'complete',
+      reward: result.grading === 'unavailable' ? undefined : result.grading === 'passed' ? 1 : 0,
+      note: current.note ? `${current.note}; ${result.note ?? 'Recovered from verified durable evidence'}` : result.note,
+      finishedAt: current.finishedAt ?? Date.now()/1000});
   }
   batchView(batch: Batch) {
     const runs = batch.runIds.map(id => this.runs.get(id)!);
@@ -226,6 +231,15 @@ export class Lab {
       const retained = await exists(join(path, 'container.json'));
       const facts = error instanceof EvidenceCollectionError ? {execution: error.result.execution, grading: error.result.grading} : {execution: 'failed' as const};
       await this.update(id, { state: retained ? 'needs_recovery' : 'error', ...facts, reward: undefined, collection: retained ? 'retained' : 'pending', note: error instanceof Error ? error.message : 'Run failed', finishedAt: Date.now() / 1000 });
+      if (retained && !(error instanceof EvidenceCollectionError) && this.machine) {
+        // A failed Docker handoff can leave a sealed cancellation receipt moments later.
+        // Only the existing recovery validator may clear the scheduling barrier.
+        for (let attempt = 0; attempt < 8 && !this.closed; attempt++) {
+          if (attempt) await Bun.sleep(3000);
+          try { await this.reconcileRetained(id); break; }
+          catch { /* No durable, verified outcome yet: keep needs_recovery. */ }
+        }
+      }
     }
   }
   async snapshot(): Promise<unknown> {

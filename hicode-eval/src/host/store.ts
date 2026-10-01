@@ -71,9 +71,12 @@ async function scanTree(root: string, recordLinks = false, maxFiles = 20000): Pr
 }
 export async function run(command: string[], options: { cwd?: string; env?: Record<string, string>; timeout?: number } = {}): Promise<string> {
   const proc = Bun.spawn(command, { cwd: options.cwd, env: options.env, stdout: 'pipe', stderr: 'pipe' });
-  const timer = setTimeout(() => proc.kill('SIGKILL'), options.timeout ?? 30000);
+  const timeout = options.timeout ?? 30000;
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; proc.kill('SIGKILL'); }, timeout);
   try {
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    if (timedOut) throw Error(`${command[0]} timed out after ${timeout}ms`);
     if (code) throw Error(`${command[0]} failed (exit ${code}): ${stderr.slice(-1000)}`);
     if (stdout.length > 4 * 1024 * 1024) throw Error('Command output exceeds budget');
     return stdout.trim();
