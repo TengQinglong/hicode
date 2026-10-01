@@ -18,7 +18,9 @@ PYTHON_BY_REPO_VERSION={
     ('django/django','4.1'):'3.9',
     ('django/django','4.2'):'3.9',
     ('django/django','5.0'):'3.11',
-    **{('sympy/sympy',version):'3.9' for version in ('1.8','1.9','1.10','1.11','1.12')},
+    **{('sympy/sympy',version):'3.9' for version in ('1.0','1.1','1.4','1.5','1.6','1.7','1.8','1.9','1.10','1.11','1.12')},
+    **{('pytest-dev/pytest',version):'3.9' for version in ('5.0','5.1','5.2','5.4','6.0','6.2','7.2')},
+    **{('pydata/xarray',version):'3.10' for version in ('0.12','2022.03','2022.06','2022.09')},
 }
 
 def project_tool_pins(repo, python):
@@ -159,8 +161,13 @@ def main():
         baseline=git(['rev-parse','HEAD'],repo)
         git(['gc','--prune=now'],repo)
         # Remove path-specific editable registration from the reusable cache.
-        run([str(task_cache/'bin/python'),'-m','pip','uninstall','-y',
-             'Django' if repo_name=='django/django' else 'sympy'])
+        project_package={
+            'django/django':'Django',
+            'sympy/sympy':'sympy',
+            'pytest-dev/pytest':'pytest',
+            'pydata/xarray':'xarray',
+        }[repo_name]
+        run([str(task_cache/'bin/python'),'-m','pip','uninstall','-y',project_package])
         (target/'instruction.md').write_text(row['problem_statement'])
         hidden=target/'hidden';hidden.mkdir(mode=0o700)
         evaluator={k:v for k,v in row.items() if k!='problem_statement'}
@@ -188,9 +195,23 @@ def main():
         run(['chown','-R',str(account.pw_uid)+':'+str(account.pw_gid),str(probe)])
         def demote():os.setgroups([]);os.setgid(account.pw_gid);os.setuid(account.pw_uid)
         version_tuple=tuple(map(int,python.split('.')))
-        imports='django,asgiref,sqlparse' if repo_name=='django/django' else 'sympy,mpmath'
+        imports={
+            'django/django':'django,asgiref,sqlparse',
+            'sympy/sympy':'sympy,mpmath',
+            'pytest-dev/pytest':'pytest,pluggy',
+            'pydata/xarray':'xarray,numpy,pandas',
+        }[repo_name]
+        probe_env={'PATH':'/opt/hicode-swe/env/bin:'+os.environ['PATH'],
+                   'HOME':str(home),'LANG':'C.UTF-8'}
+        if repo_name=='pytest-dev/pytest':
+            # Pytest uses src/ layout, so a bare import from /testbed would miss
+            # the source tree. Match the real runner's editable install first.
+            install=namespace_argv(['/opt/hicode-swe/env/bin/python','-m','pip',
+                                    'install','--no-deps','-e','/testbed'],
+                                   project,home,logs,control,workdir='/testbed',environment=local_env)
+            run(install,timeout=60,preexec_fn=demote,env=probe_env)
         argv=namespace_argv(['/opt/hicode-swe/env/bin/python','-c',f"import sys,{imports};assert sys.version_info[:2]=={version_tuple!r};assert sys.prefix=='/opt/hicode-swe/env';print('SWE namespace/import preflight passed')"],project,home,logs,control,workdir='/testbed',environment=local_env)
-        run(argv,timeout=30,preexec_fn=demote,env={'PATH':'/opt/hicode-swe/env/bin:'+os.environ['PATH'],'HOME':str(home),'LANG':'C.UTF-8'})
+        run(argv,timeout=30,preexec_fn=demote,env=probe_env)
     print('Ready: '+str(len(rows))+' SWE bundles; no model or hidden assertions executed',flush=True)
 
 if __name__=='__main__':main()

@@ -81,6 +81,67 @@ class EnvironmentGroupsTest(unittest.TestCase):
             (root/'environment-groups.json').write_text(json.dumps({'groups':groups}))
             with self.assertRaises(ValueError):environment_groups(root,[sympy])
 
+    def test_early_sympy_versions_keep_the_official_python_and_dependency_recipe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            recipe={'python':'3.9','packages':'mpmath flake8',
+                    'pip_packages':['mpmath==1.3.0','flake8-comprehensions'],
+                    'install':'python -m pip install -e .',
+                    'test_cmd':"PYTHONWARNINGS='ignore::UserWarning,ignore::SyntaxWarning' bin/test -C --verbose"}
+            rows=[];groups=[]
+            for version,commit in [('1.0','f'*40),('1.1','a'*40),('1.4','b'*40),('1.5','c'*40),
+                                   ('1.6','d'*40),('1.7','e'*40)]:
+                rows.append({'instance_id':'sympy__sympy-'+version.replace('.',''),
+                             'repo':'sympy/sympy','version':version,'environment_setup_commit':commit})
+                groups.append({'repo':'sympy/sympy','version':version,
+                               'environmentSetupCommit':commit,'harnessRelease':'4.1.0',
+                               'pythonVersion':'3.9','recipe':recipe,'dependencySourceFiles':[]})
+            (root/'environment-groups.json').write_text(json.dumps({'groups':groups}))
+            prepared=environment_groups(root,rows)
+            self.assertEqual([group['requirements'] for group in prepared],
+                             [b'mpmath==1.3.0\nflake8-comprehensions\nflake8\n']*6)
+            self.assertNotEqual(dependency_cache_key([rows[0]],prepared[0]['requirements'],'aarch64'),
+                                dependency_cache_key([rows[1]],prepared[1]['requirements'],'aarch64'))
+            groups[1]['pythonVersion']='3.8'
+            (root/'environment-groups.json').write_text(json.dumps({'groups':groups}))
+            with self.assertRaises(ValueError):environment_groups(root,rows)
+
+    def test_reviewed_pip_recipes_and_xarray_source_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            source=root/'artifacts/dependency-inputs/xarray.yml'
+            source.parent.mkdir(parents=True)
+            source.write_text('original conda declaration')
+            rows=[{'instance_id':'pytest-dev__pytest-10081','repo':'pytest-dev/pytest',
+                   'version':'7.2','environment_setup_commit':'a'*40},
+                  {'instance_id':'pydata__xarray-3095','repo':'pydata/xarray',
+                   'version':'2022.09','environment_setup_commit':'b'*40}]
+            recipes=[{'python':'3.9','pip_packages':['pluggy==0.13.1'],
+                      'install':'python -m pip install -e .','test_cmd':'pytest -rA'},
+                     {'python':'3.10','pip_packages':['numpy==1.23.0','pandas==1.5.3'],
+                      'install':'python -m pip install -e .','no_use_env':True,'test_cmd':'pytest -rA'}]
+            groups=[{'repo':row['repo'],'version':row['version'],
+                     'environmentSetupCommit':row['environment_setup_commit'],
+                     'harnessRelease':'4.1.0','pythonVersion':recipe['python'],
+                     'recipe':recipe,'dependencySourceFiles':
+                     [{'repoPath':'ci/requirements/environment.yml','artifactPath':'xarray.yml',
+                       'sha256':hashlib.sha256(source.read_bytes()).hexdigest()}] if index else []}
+                    for index,(row,recipe) in enumerate(zip(rows,recipes))]
+            hashes={(row['repo'],row['version']):hashlib.sha256(json.dumps(recipe,sort_keys=True,
+                separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+                for row,recipe in zip(rows,recipes)}
+            with patch.dict('prepare_swe.RECIPE_SHA256',hashes):
+                (root/'environment-groups.json').write_text(json.dumps({'groups':groups}))
+                prepared=environment_groups(root,rows)
+                self.assertEqual([group['requirements'] for group in prepared],
+                                 [b'pluggy==0.13.1\n',b'numpy==1.23.0\npandas==1.5.3\n'])
+                source.write_text('tampered')
+                with self.assertRaises(ValueError):environment_groups(root,rows)
+                source.write_text('original conda declaration')
+                groups[0]['recipe']['pip_packages']=['pluggy==9.9.9']
+                (root/'environment-groups.json').write_text(json.dumps({'groups':groups}))
+                with self.assertRaises(ValueError):environment_groups(root,rows)
+
     def test_mismatch_hash_escape_and_unknown_recipe_fail_closed(self):
         for fault in ['setup','hash','escape','recipe','duplicate','wrong-python']:
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as tmp:

@@ -15,7 +15,22 @@ PYTHON_BY_REPO_VERSION = {
     ('django/django', '4.1'): '3.9',
     ('django/django', '4.2'): '3.9',
     ('django/django', '5.0'): '3.11',
-    **{('sympy/sympy', version): '3.9' for version in ('1.8', '1.9', '1.10', '1.11', '1.12')},
+    **{('sympy/sympy', version): '3.9' for version in ('1.0', '1.1', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12')},
+    **{('pytest-dev/pytest', version): '3.9' for version in ('5.0', '5.1', '5.2', '5.4', '6.0', '6.2', '7.2')},
+    **{('pydata/xarray', version): '3.10' for version in ('0.12', '2022.03', '2022.06', '2022.09')},
+}
+
+# Hashes of the reviewed official harness recipe dictionaries. The downloaded
+# preparation declaration is data, never an authority to run new setup commands.
+RECIPE_SHA256 = {
+    **{('pytest-dev/pytest', version): '343c239ba4e31dae7be6f5a328648b4b0785ce7369d84ae929e3e075b54d00d8'
+       for version in ('5.0', '5.1', '5.2')},
+    ('pytest-dev/pytest', '5.4'): '4ac5016914409fcda7bf9a1bdb8d6fc7c136898b6a1e5eadd2761df98872b926',
+    ('pytest-dev/pytest', '6.0'): '986f45a4ed4997a29d8b459005911016141f10b10668dea3b0497ce95145509c',
+    ('pytest-dev/pytest', '6.2'): '270c8f1a85e201c503edde159a224830f1c83a398192f42254b47d6494c6fae9',
+    ('pytest-dev/pytest', '7.2'): '630357129367829193422741c8de4b4c1c4153e9473037379615e9b08616e625',
+    **{('pydata/xarray', version): '57cd6f90cac8623e1c337e57b766848e6e527b44d41f311d587d0db62dc9f944'
+       for version in ('0.12', '2022.03', '2022.06', '2022.09')},
 }
 
 def selected_rows(dataset, ids):
@@ -51,11 +66,13 @@ def environment_groups(prep, rows):
             expected_recipe = {'python':python, 'packages':'requirements.txt',
                                'install':'python -m pip install -e .',
                                'test_cmd':'./tests/runtests.py --verbosity 2 --settings=test_sqlite --parallel 1'}
-        else:
+        elif row['repo'] == 'sympy/sympy':
             expected_recipe = {'python':python, 'packages':'mpmath flake8',
                                'pip_packages':['mpmath==1.3.0','flake8-comprehensions'],
                                'install':'python -m pip install -e .',
                                'test_cmd':"PYTHONWARNINGS='ignore::UserWarning,ignore::SyntaxWarning' bin/test -C --verbose"}
+        else:
+            expected_recipe = None
         if identity in result:
             result[identity]['rows'].append(row)
             continue
@@ -63,7 +80,11 @@ def environment_groups(prep, rows):
                    (g['repo'], g['version'], g['environmentSetupCommit']) == identity]
         if len(matches) != 1: raise ValueError('Missing or ambiguous environment group')
         group = matches[0]
-        if (python is None or group['harnessRelease'] != '4.1.0' or group['recipe'] != expected_recipe or
+        recipe_hash = hashlib.sha256(json.dumps(group['recipe'], sort_keys=True,
+                                                separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+        reviewed = (group['recipe'] == expected_recipe if expected_recipe is not None else
+                    recipe_hash == RECIPE_SHA256.get((row['repo'], row['version'])))
+        if (python is None or group['harnessRelease'] != '4.1.0' or not reviewed or
             group['pythonVersion'] != python):
             raise ValueError('Unsupported environment recipe')
         sources = group['dependencySourceFiles']
@@ -77,10 +98,21 @@ def environment_groups(prep, rows):
             requirement_bytes = requirements.read_bytes()
             if hashlib.sha256(requirement_bytes).hexdigest() != meta['sha256']:
                 raise ValueError('Original requirements changed')
-        else:
+        elif row['repo'] == 'sympy/sympy':
             if sources: raise ValueError('Unexpected SymPy dependency source')
             # Both the original package list and its explicit pip pins are preserved.
             requirement_bytes = b'mpmath==1.3.0\nflake8-comprehensions\nflake8\n'
+        else:
+            expected_paths = ['ci/requirements/environment.yml'] if row['repo'] == 'pydata/xarray' else []
+            if [source['repoPath'] for source in sources] != expected_paths:
+                raise ValueError('Unsupported dependency input layout')
+            root = (prep/'artifacts/dependency-inputs').resolve()
+            for source in sources:
+                dependency = (root/source['artifactPath']).resolve()
+                if root not in dependency.parents or hashlib.sha256(dependency.read_bytes()).hexdigest() != source['sha256']:
+                    raise ValueError('Original dependency input changed or escaped')
+            # The reviewed recipes explicitly use these pip pins (xarray has no_use_env).
+            requirement_bytes = ('\n'.join(group['recipe']['pip_packages']) + '\n').encode()
         result[identity] = {'rows':[row], 'requirements':requirement_bytes}
     return list(result.values())
 

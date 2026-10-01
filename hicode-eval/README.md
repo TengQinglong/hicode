@@ -200,7 +200,7 @@ Terminal-Bench 和 SWE-bench Verified 共用批次、并发、每题时限、TUI
 bash hicode-eval/eval.sh prepare-terminal --docker-context YOUR_CONTEXT --machine YOUR_EVAL_MACHINE
 ```
 
-SWE 准备入口支持 Django 4.0 / Python 3.8、Django 4.1/4.2 / Python 3.9、Django 5.0 / Python 3.11，以及 SymPy 1.8–1.12 / Python 3.9 的 Verified 题，通过 `--ids` 选择。准备入口核对固定数据 revision、公开/判题 JSONL 的哈希及对应字段，使用准备包里的官方 harness 4.1.0 wheel；Django 核对原 requirements，SymPy 核对原声明的包列表与配方。准备包作为外部输入，不复制或提交到此仓库：
+SWE 准备入口支持 Django 4.0 / Python 3.8、Django 4.1/4.2 / Python 3.9、Django 5.0 / Python 3.11，以及 SymPy 1.0、1.1、1.4–1.12 / Python 3.9、Pytest 5.0–5.2/5.4/6.0/6.2/7.2 / Python 3.9、Xarray 0.12/2022.03/2022.06/2022.09 / Python 3.10 的 Verified 题，通过 `--ids` 选择。准备入口核对固定数据 revision、公开/判题 JSONL 的哈希及对应字段，使用准备包里的官方 harness 4.1.0 wheel；Django 核对原 requirements，SymPy 核对原声明的包列表与配方；Pytest 和 Xarray 核对审定的官方配方哈希，Xarray 另核对原 environment.yml 哈希，并只安装其配方声明的 pip 包。准备包作为外部输入，不复制或提交到此仓库：
 
 ```bash
 bash hicode-eval/eval.sh prepare-swe \

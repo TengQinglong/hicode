@@ -200,7 +200,7 @@ Two new Terminal tasks are registered: `large-scale-text-editing` and `break-fil
 bash hicode-eval/eval.sh prepare-terminal --docker-context YOUR_CONTEXT --machine YOUR_EVAL_MACHINE
 ```
 
-SWE preparation supports Django 4.0/Python 3.8, Django 4.1/4.2/Python 3.9, Django 5.0/Python 3.11, and SymPy 1.8-1.12/Python 3.9, selected with `--ids`. It verifies the fixed Verified revision, public/evaluator JSONL hashes, corresponding public fields, the official harness 4.1.0 wheel, and each supported environment recipe. Django requirements are checked against the original file; SymPy uses its original declared package list. Preparation inputs and generated bundles stay outside this repository:
+SWE preparation supports Django 4.0/Python 3.8, Django 4.1/4.2/Python 3.9, Django 5.0/Python 3.11, and SymPy 1.0, 1.1, 1.4-1.12/Python 3.9, Pytest 5.0-5.2/5.4/6.0/6.2/7.2/Python 3.9, and Xarray 0.12/2022.03/2022.06/2022.09/Python 3.10, selected with `--ids`. It verifies the fixed Verified revision, public/evaluator JSONL hashes, corresponding public fields, the official harness 4.1.0 wheel, and each supported environment recipe. Django requirements are checked against the original file; SymPy uses its original declared package list. Pytest and Xarray use reviewed official recipe hashes; Xarray also checks the original environment.yml hash and installs only its declared pip packages. Preparation inputs and generated bundles stay outside this repository:
 
 ```bash
 bash hicode-eval/eval.sh prepare-swe \

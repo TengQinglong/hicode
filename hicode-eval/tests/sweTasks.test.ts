@@ -81,15 +81,17 @@ test('mixed submission under CLI umask preserves links and executable bits and r
  }finally{release();await lab?.close();process.umask(prior);prepare.mockRestore();validate.mockRestore();execute.mockRestore();await rm(root,{recursive:true,force:true});}
 });
 
-test('SWE version contract accepts only reviewed Django and SymPy versions',()=>{
+test('SWE version contract accepts only reviewed repository versions',()=>{
  expect(sweTaskSchema.shape.version.parse('4.0')).toBe('4.0');
  expect(sweTaskSchema.shape.version.parse('4.1')).toBe('4.1');
  expect(sweTaskSchema.shape.version.parse('4.2')).toBe('4.2');
  expect(sweTaskSchema.shape.version.parse('5.0')).toBe('5.0');
- for(const version of ['1.8','1.9','1.10','1.11','1.12'] as const)expect(sweTaskSchema.shape.version.parse(version)).toBe(version);
+ for(const version of ['1.0','1.1','1.4','1.5','1.6','1.7','1.8','1.9','1.10','1.11','1.12','0.12','5.1','5.2','5.4','6.0','6.2','7.2','2022.03','2022.06','2022.09'] as const)expect(sweTaskSchema.shape.version.parse(version)).toBe(version);
  expect(sweTaskSchema.shape.python.parse('3.8')).toBe('3.8');
  expect(sweTaskSchema.shape.python.parse('3.11')).toBe('3.11');
- expect(sweTaskSchema.shape.version.safeParse('5.1').success).toBe(false);
+ expect(sweTaskSchema.shape.python.parse('3.10')).toBe('3.10');
+ expect(sweTaskSchema.shape.version.safeParse('5.3').success).toBe(false);
+ expect(sweTaskSchema.shape.version.safeParse('1.2').success).toBe(false);
 });
 
 test('Django 5.0 requires Python 3.11 before catalog or submission',async()=>{
@@ -112,11 +114,16 @@ test('SWE catalog ties each repository identity to its original Python version',
   const base={kind:'swe-bench-verified',revision:'c'.repeat(40),baseCommit:'a'.repeat(40),harnessVersion:'4.1.0',
    environment:'/opt/hicode-swe/cache/'+'a'.repeat(64),verifierSeconds:1800,baselineCommit:'b'.repeat(40),
    files:{},evaluationMode:'shared-linux-development'};
-  const django='django__django-14007',sympy='sympy__sympy-12345';
-  await mkdir(join(root,django));await mkdir(join(root,sympy));
+  const django='django__django-14007',sympy='sympy__sympy-12345',pytest='pytest-dev__pytest-10081',xarray='pydata__xarray-3095';
+  for(const id of [django,sympy,pytest,xarray])await mkdir(join(root,id));
   await save(join(root,django,'swe-task.json'),{...base,instanceId:django,repo:'django/django',version:'4.0',python:'3.8'});
-  await save(join(root,sympy,'swe-task.json'),{...base,instanceId:sympy,repo:'sympy/sympy',version:'1.12',python:'3.9'});
-  expect((await sweCatalog(root)).map(entry=>entry.id).sort()).toEqual([django,sympy]);
+  await save(join(root,sympy,'swe-task.json'),{...base,instanceId:sympy,repo:'sympy/sympy',version:'1.4',python:'3.9'});
+  await save(join(root,pytest,'swe-task.json'),{...base,instanceId:pytest,repo:'pytest-dev/pytest',version:'7.2',python:'3.9'});
+  await save(join(root,xarray,'swe-task.json'),{...base,instanceId:xarray,repo:'pydata/xarray',version:'2022.09',python:'3.10'});
+  expect((await sweCatalog(root)).map(entry=>entry.id).sort()).toEqual([django,pytest,sympy,xarray].sort());
+  await save(join(root,xarray,'swe-task.json'),{...base,instanceId:xarray,repo:'pydata/xarray',version:'2022.09',python:'3.9'});
+  await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
+  await save(join(root,xarray,'swe-task.json'),{...base,instanceId:xarray,repo:'pydata/xarray',version:'2022.09',python:'3.10'});
   await save(join(root,sympy,'swe-task.json'),{...base,instanceId:sympy,repo:'sympy/sympy',version:'4.0',python:'3.8'});
   await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
   await save(join(root,sympy,'swe-task.json'),{...base,instanceId:sympy,repo:'django/django',version:'4.0',python:'3.8'});
