@@ -14,7 +14,7 @@ export type UIThread =
         role: "task_notification";
         taskId: string;
         ownerToolCallId?: string;
-        kind: "shell" | "agent" | "memory";
+        kind: "shell" | "agent" | "memory" | "review";
         label: string;
         status: "completed" | "failed" | "cancelled" | "interrupted";
         summary: string;

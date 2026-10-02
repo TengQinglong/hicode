@@ -56,6 +56,7 @@ export type LLMCallKind =
     | "main"
     | "compact"
     | "memory"
+    | "task_review"
     | "agent_authoring"
     | "hook";
 

@@ -493,3 +493,10 @@ test("image input requires a declared model capability at the effective source",
     expect(declared.openrouter.models[0]?.imageInput).toBe(true);
     expect(declared.openrouter.models[1]?.imageInput).toBeUndefined();
 });
+
+
+test("background task review is enabled by default and can be disabled with ordinary Settings precedence", () => {
+    expect(resolveHiCodeSettings([]).values.taskReview.enabled).toBe(true);
+    expect(resolveHiCodeSettings([document("user", {taskReview: {enabled: false}})]).values.taskReview.enabled).toBe(false);
+    expect(resolveHiCodeSettings([document("project", {taskReview: {enabled: false}}), document("local", {taskReview: {enabled: true}})]).values.taskReview.enabled).toBe(true);
+});

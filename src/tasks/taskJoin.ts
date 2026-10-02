@@ -32,7 +32,7 @@ export class TaskJoin {
     async consume(input: QueuedAgentInput): Promise<void> {
         if (input.source !== "task_notification" || !input.taskId) return;
         const task = await this.tasks.get(input.taskId);
-        if (task && task.kind !== "memory" && taskNotificationId(task.id, task.kind === "agent" ? task.progress.runCount : 1) === input.id) this.markReported(task);
+        if (task && (task.kind === "shell" || task.kind === "agent") && taskNotificationId(task.id, task.kind === "agent" ? task.progress.runCount : 1) === input.id) this.markReported(task);
     }
     async collect(): Promise<QueuedAgentInput[]> {
         const inputs: QueuedAgentInput[] = [];

@@ -39,6 +39,9 @@ function formatTermination(snapshot: ShellTaskSnapshot): string | undefined {
 }
 
 function formatTask(task: TaskSnapshot): string {
+    if (task.kind === "review") return `${formatTaskHeader(task)}
+Advisory review of rounds ${task.fromRound}-${task.toRound}; do not wait for this task.
+${task.resultPreview ?? task.outputIssue ?? "Reviewing frozen evidence"}`;
     if(task.kind==="memory")return `${formatTaskHeader(task)}\n${task.resultPreview??task.outputIssue??"Extracting and consolidating Memory"}`;
     const result = task.outputResult
         ? `\nSaved output: ${JSON.stringify(task.outputResult.path)}`
@@ -124,7 +127,11 @@ export const taskTool: Tool<typeof inputSchema> = {
                         outcome: completed.status === "failed" || completed.outputIssue ? "failed" : "ok"};
                 }
             }
-            if (task_id && (await ctx.tasks.get(task_id))?.kind === "memory") return {content: "Memory tasks do not support wait; use status.", outcome: "failed"};
+            if (task_id) {
+                const kind = (await ctx.tasks.get(task_id))?.kind;
+                if (kind === "memory") return {content: "Memory tasks do not support wait; use status.", outcome: "failed"};
+                if (kind === "review") return {content: "Task reviews are advisory; continue the main task without waiting. Use status for diagnostics.", outcome: "failed"};
+            }
             if (!isParentTaskSession(ctx.tasks)) return {content: "Child Shell wait requires task_id", outcome: "failed"};
             const ids = [...new Set([...(ctx.taskJoin?.agentIds ?? []), ...(task_id ? [task_id] : [])])];
             if (!ids.length) return "No delegated Agent results are pending.";

@@ -1,5 +1,5 @@
 import type {Todo} from "../todos.js";
-import type {MemoryTaskSnapshot} from "./types.js";
+import type {MemoryTaskSnapshot, TaskReviewSnapshot} from "./types.js";
 import {type FileHandle, open} from "node:fs/promises";
 import type {StopReason} from "../agent/types.js";
 import {selectUtf8Range} from "../toolResults/utf8.js";
@@ -72,7 +72,22 @@ export interface ManagedAgentTask extends ManagedTaskBase<AgentTaskStatus> {
 }
 
 export interface ManagedMemoryTask extends Omit<ManagedTaskBase,"owner"> {kind:"memory";owner:{sessionId:string;turnId:string};resultPreview?:string;}
-export type ManagedTask = ManagedShellTask | ManagedAgentTask | ManagedMemoryTask;
+export interface ManagedReviewTask extends Omit<ManagedTaskBase, "owner"> {
+    kind: "review";
+    owner: {sessionId: string; turnId: string};
+    fromRound: number;
+    toRound: number;
+    resultPreview?: string;
+}
+export type ManagedTask = ManagedShellTask | ManagedAgentTask | ManagedMemoryTask | ManagedReviewTask;
+export function isReviewTask(task: ManagedTask): task is ManagedReviewTask {return "kind" in task && task.kind === "review";}
+export function snapshotReview(task: ManagedReviewTask): TaskReviewSnapshot {
+    return {id: task.id, kind: "review", owner: task.owner, status: task.status, startedAt: task.startedAt,
+        fromRound: task.fromRound, toRound: task.toRound,
+        ...(task.completedAt ? {completedAt: task.completedAt} : {}),
+        ...(task.resultPreview ? {resultPreview: task.resultPreview} : {}),
+        ...(task.outputIssue ? {outputIssue: task.outputIssue} : {})};
+}
 export function isMemoryTask(task:ManagedTask):task is ManagedMemoryTask{return "kind" in task && task.kind==="memory";}
 export function isAgentTask(task:ManagedTask):task is ManagedAgentTask{return "thread" in task;}
 export function snapshotMemory(task:ManagedMemoryTask):MemoryTaskSnapshot {
@@ -167,7 +182,7 @@ export function snapshotAgent(task: ManagedAgentTask): AgentTaskSnapshot {
 }
 
 export function snapshotTask(task: ManagedTask): Promise<TaskSnapshot> {
-    return isMemoryTask(task) ? Promise.resolve(snapshotMemory(task)) : isShellTask(task)
+    return isReviewTask(task) ? Promise.resolve(snapshotReview(task)) : isMemoryTask(task) ? Promise.resolve(snapshotMemory(task)) : isShellTask(task)
         ? snapshotShell(task)
         : Promise.resolve(snapshotAgent(task));
 }

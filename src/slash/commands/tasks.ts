@@ -1,7 +1,10 @@
+import {formatTaskSummary} from "../../tasks/format.js";
 import type {TaskSnapshot} from "../../tasks/index.js";
 import type {SlashCommand} from "../types.js";
 
 function formatTask(task: TaskSnapshot): string {
+    if (task.kind === "review") return `${formatTaskSummary(task)}
+${task.resultPreview ?? task.outputIssue ?? "Reviewing frozen evidence"}`;
     if(task.kind==="memory")return `Task: ${task.id} · memory · ${task.status}\n${task.resultPreview??task.outputIssue??"Extracting and consolidating Memory"}`;
     const result = task.outputResult?.resultId
         ? ` · result ${task.outputResult.resultId}`

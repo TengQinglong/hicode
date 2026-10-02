@@ -205,6 +205,7 @@ export function resolveHiCodeSettings(
 ): Pick<LoadedHiCodeSettings, "values" | "origins"> {
     const sources = resolveModelSources(documents);
     let context = {...DEFAULT_CONTEXT_SETTINGS};
+    let taskReviewEnabled = true;
     let reviewerTarget: {model: string; source: LLMProviderName} | undefined;
     let primaryModel = DEFAULT_MODEL;
     let primarySource = DEFAULT_LLM_PROVIDER;
@@ -233,6 +234,7 @@ export function resolveHiCodeSettings(
     for (const document of documents) {
         const value = document.value;
         context = {...context, ...value.context};
+        taskReviewEnabled = value.taskReview?.enabled ?? taskReviewEnabled;
         if (value.models?.reviewer) {
             if (document.source === "project" || document.source === "local") throw new Error("Project Settings cannot replace the review model");
             const {model, source} = value.models.reviewer;
@@ -323,6 +325,7 @@ export function resolveHiCodeSettings(
     return {
         values: {
             context: validateContextSettings(context),
+            taskReview: {enabled: taskReviewEnabled},
             sources,
             models: {
                 ...(reviewerTarget ? {reviewer: resolveModelTarget(sources, reviewerTarget.source, reviewerTarget.model, "reviewer")} : {}),

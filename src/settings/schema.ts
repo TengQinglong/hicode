@@ -34,6 +34,7 @@ function settingsSchema(strict: boolean): z.ZodType<HiCodeSettingsFile> {
         models: z.array(model).max(100).optional(),
     });
     return object({
+        taskReview: z.object({enabled: z.boolean().optional()}).strict().optional(),
         context: contextSettingsFileSchema.optional(),
         sources: object(Object.fromEntries(LLM_PROVIDER_NAMES.map(name => [name, source.optional()]))).optional(),
         models: object({

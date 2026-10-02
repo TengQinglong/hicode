@@ -288,8 +288,17 @@ const memoryTaskSchema=z.object({id:z.string().min(1).max(512),kind:z.literal("m
  status:z.enum(["running","completed","failed","cancelled"]),startedAt:z.string().datetime(),completedAt:z.string().datetime().optional(),resultPreview:z.string().max(1000).optional(),outputIssue:z.string().max(128*1024).optional()}).strict()
  .refine(task=>task.status==="running"?task.completedAt===undefined:task.completedAt!==undefined);
 
+const reviewTaskSchema = z.object({id: z.string().regex(/^t_[a-f0-9]{12}$/), kind: z.literal("review"),
+    owner: z.object({sessionId: z.string().min(1).max(512), turnId: z.string().min(1).max(512)}).strict(),
+    status: z.enum(["running", "completed", "failed", "cancelled"]), startedAt: z.string().datetime(),
+    completedAt: z.string().datetime().optional(), fromRound: z.number().int().positive().max(Number.MAX_SAFE_INTEGER - 9), toRound: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    resultPreview: z.string().max(4_000).optional(), outputIssue: z.string().max(128 * 1024).optional(),
+}).strict().refine(task => task.toRound === task.fromRound + 9 &&
+    (task.status === "running" ? task.completedAt === undefined : task.completedAt !== undefined));
+
 function decodeTask(value: unknown): TaskSnapshot | undefined {
     if (!isRecord(value)) return undefined;
+    if (value.kind === "review") {const parsed = reviewTaskSchema.safeParse(value); return parsed.success ? parsed.data : undefined;}
     if(value.kind==="memory"){const parsed=memoryTaskSchema.safeParse(value);return parsed.success?parsed.data:undefined;}
     return value.kind === "shell"
         ? decodeShellTask(value)

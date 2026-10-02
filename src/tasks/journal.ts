@@ -130,7 +130,7 @@ function compactEntries(entries: readonly TaskJournalEntry[]): TaskJournalEntry[
             claims.set(entry.notificationId, entry);
         } else {
             latestTasks.set(entry.task.id, entry);
-            if (entry.task.status !== "running") terminals.set(taskNotificationId(entry.task.id, entry.task.kind === "agent" ? entry.task.progress.runCount : 1), entry);
+            if (entry.task.kind !== "review" && entry.task.status !== "running") terminals.set(taskNotificationId(entry.task.id, entry.task.kind === "agent" ? entry.task.progress.runCount : 1), entry);
         }
     }
     const retainedTasks = [...latestTasks.values()]
@@ -162,7 +162,7 @@ function loadedJournal(entries: readonly TaskJournalEntry[]): LoadedTaskJournal 
             claimedNotificationIds.add(entry.notificationId);
         } else {
             tasks.set(entry.task.id, entry.task);
-            if (entry.task.status !== "running") terminalRuns.set(taskNotificationId(entry.task.id, entry.task.kind === "agent" ? entry.task.progress.runCount : 1), entry.task);
+            if (entry.task.kind !== "review" && entry.task.status !== "running") terminalRuns.set(taskNotificationId(entry.task.id, entry.task.kind === "agent" ? entry.task.progress.runCount : 1), entry.task);
         }
     }
     return {sequence, tasks: [...tasks.values()], claimedNotificationIds,

@@ -1,3 +1,5 @@
+import {TASK_REVIEW_AGENT} from "./taskReview.js";
+import {EMPTY_PROJECT_INSTRUCTIONS} from "../prompt/instructions.js";
 import {WebSources} from "../tools/webFetch/state.js";
 import {createSessionPersistence} from "../session/storage.js";
 import {createSessionArchiveAccess, prepareSessionArchive} from "../session/archive.js";
@@ -31,6 +33,7 @@ import type {
     CreateSubagentRunner,
     CreateSubagentRunnerOptions,
     CreateSubagentThread,
+    CreateTaskReviewThread, TaskReviewRequest,
     SubagentRequest,
     SubagentResult,
     SubagentThread,
@@ -61,10 +64,12 @@ export function createSubagentFactories(
 ): {
     createSubagentRunner: CreateSubagentRunner;
     createSubagentThread: CreateSubagentThread;
+    createTaskReviewThread: CreateTaskReviewThread;
 } {
-    const createSubagentThread: CreateSubagentThread = (options, request) => {
+    const createThread = (options: Parameters<CreateSubagentThread>[0], request: SubagentRequest | TaskReviewRequest): SubagentThread => {
+        const reviewing = "parentTurnId" in request;
         const {parentContext, onEvent, onChildEvent, agentId} = options;
-        const registration = dependencies.registry.get(request.agentType);
+        const registration = reviewing ? TASK_REVIEW_AGENT : dependencies.registry.get(request.agentType);
         if (!registration) {
             const available = dependencies.registry
                 .listDefinitions()
@@ -79,7 +84,7 @@ export function createSubagentFactories(
             !parentContext.readOnlyTools && parentContext.collaborationMode !== "plan";
         const permissionRules = subagentPermissionRules(parentContext);
         const collaborationMode = parentContext.collaborationMode;
-        const canMessageParent = options.agentMessaging !== undefined && parentContext.toolNames.includes("agent_message");
+        const canMessageParent = !reviewing && options.agentMessaging !== undefined && parentContext.toolNames.includes("agent_message");
         const tools = parentContext.availableTools.filter(tool =>
             parentContext.toolNames.includes(tool.name) && !CUSTOM_AGENT_FORBIDDEN_TOOLS.has(tool.name) &&
             (definition.allowedTools === undefined || definition.allowedTools.includes(tool.name) || (tool.name === "agent_message" && canMessageParent)) &&
@@ -108,11 +113,11 @@ export function createSubagentFactories(
             getAdditionalTools: () => [...fixedAdditional,
                 ...parentContext.mcpManager?.getTools().filter(tool => allowedNames.has(tool.name)) ?? []],
         });
-        const childSkills = definition.source === "builtin" && definition.agentType === "Explore" ? [] : structuredClone(parentContext.skills);
-        const childTasks = parentContext.tasks ? createChildTaskAccess(parentContext.tasks, parentContext.toolResultFiles) : undefined;
+        const childSkills = reviewing ? [] : definition.source === "builtin" && definition.agentType === "Explore" ? [] : structuredClone(parentContext.skills);
+        const childTasks = !reviewing && parentContext.tasks ? createChildTaskAccess(parentContext.tasks, parentContext.toolResultFiles) : undefined;
         const initialToolNames = runtime.getToolSchemas()
             .map((tool) => tool.function.name);
-        const useFastModel = usesFastSubagentModel(definition);
+        const useFastModel = reviewing || usesFastSubagentModel(definition);
         const childModel = useFastModel ? parentContext.fastModel : parentContext.model;
         const runChildAgent = useFastModel ? dependencies.fastRunAgent : dependencies.primaryRunAgent;
         const childProvider = useFastModel ? parentContext.fastProvider : parentContext.provider;
@@ -154,7 +159,7 @@ export function createSubagentFactories(
         let running = false;
         let runCount = 0;
         let childCwd: string | undefined;
-        let instructions = parentContext.instructions;
+        let instructions = reviewing ? EMPTY_PROJECT_INSTRUCTIONS : parentContext.instructions;
 
         const thread: SubagentThread = {
             agentId,
@@ -170,13 +175,13 @@ export function createSubagentFactories(
                 let hookReason = "error";
                 try {
                     throwIfTurnAborted(input.signal);
-                    releaseHookConfiguration = parentContext.holdHookConfiguration?.();
+                    if (!reviewing) releaseHookConfiguration = parentContext.holdHookConfiguration?.();
                     const cwd = await resolveSubagentDirectory(parentContext, request.cwd);
                     throwIfTurnAborted(input.signal);
                     if (childCwd !== undefined && cwd !== childCwd) throw new Error("Child Agent working directory changed before continuation");
                     if (childCwd === undefined) {
                         childCwd = cwd;
-                        instructions = await subagentInstructions(parentContext, cwd);
+                        instructions = reviewing ? EMPTY_PROJECT_INSTRUCTIONS : await subagentInstructions(parentContext, cwd);
                         const workerSystem: Message = {role: "system",
                             content: createAgentSystemPrompt(definition, cwd, childModel, initialToolNames)};
                         if (request.contextSnapshot !== undefined) {
@@ -282,7 +287,7 @@ export function createSubagentFactories(
                                 version: 1,
                                 timestamp: new Date().toISOString(),
                                 parentSessionId: parentContext.sessionId,
-                                parentToolCallId: request.parentToolCallId,
+                                ...(reviewing ? {parentTurnId: request.parentTurnId} : {parentToolCallId: request.parentToolCallId}),
                                 agentId,
                                 agentType: definition.agentType,
                                 ...(request.name ? {agentName: request.name} : {}),
@@ -299,12 +304,12 @@ export function createSubagentFactories(
                         }
                     }
 
-                    hookStart = {hook_event_name: "SubagentStart", session_id: parentContext.sessionId,
+                    if (!reviewing) hookStart = {hook_event_name: "SubagentStart", session_id: parentContext.sessionId,
                         turn_id: parentContext.turnId, parent_turn_id: parentContext.turnId, agent_id: agentId,
                         agent_type: definition.agentType, run_count: runCount, child_cwd: childContext.cwd,
                         ...(input.taskId ? {task_id: input.taskId} : {})};
-                    await parentContext.runHook?.(hookStart, input.signal);
-                    await emit(onEvent, {
+                    if (hookStart) await parentContext.runHook?.(hookStart, input.signal);
+                    if (!reviewing) await emit(onEvent, {
                         type: "subagent_start",
                         agentId,
                         agentType: definition.agentType,
@@ -380,12 +385,13 @@ export function createSubagentFactories(
                         input.inputChannel,
                         {
                             getTodos: () => childTodos,
-                            getAdditionalUserContextBlocks: async () => [
+                            getAdditionalUserContextBlocks: async () => reviewing ? [] : [
                                 `Worker run ${runCount}${firstRun ? "" : ": continuation with existing History, FileState and cwd"}. ` +
                                 `Todo updated this run: ${todosUpdatedThisRun ? "yes" : "no"}. ` +
                                 (childTodos.length && !todosUpdatedThisRun ? "The unfinished plan is carried forward; continue or revise it honestly. " : "") +
                                 "For multi-step work, use todo_write for this assignment and update it at phase changes. A prior completed plan does not track new work. Do not claim progress updates without calling the tool. Trivial follow-ups need no plan.",
                             ],
+                            ...(reviewing ? {maxIterations: 1, callKind: "task_review" as const} : {}),
                             inputOrigin: "assignment",
                             getToolSchemas: runtime.getToolSchemas,
                             isToolConcurrencySafe: runtime.isConcurrencySafe,
@@ -486,6 +492,8 @@ export function createSubagentFactories(
         return thread;
     };
 
+    const createSubagentThread: CreateSubagentThread = (options, request) => createThread(options, request);
+    const createTaskReviewThread: CreateTaskReviewThread = (options, request) => createThread(options, request);
     const createSubagentRunner: CreateSubagentRunner = (
         options: CreateSubagentRunnerOptions
     ) => async (request: SubagentRequest): Promise<SubagentResult> => {
@@ -502,5 +510,5 @@ export function createSubagentFactories(
         });
     };
 
-    return {createSubagentRunner, createSubagentThread};
+    return {createSubagentRunner, createSubagentThread, createTaskReviewThread};
 }

@@ -85,7 +85,33 @@ export interface MemoryTaskSnapshot {
     resultPreview?:string;outputIssue?:string;
 }
 export interface StartMemoryTaskInput {signal:AbortSignal;turnId:string;background:boolean;baseline?:readonly string[];}
-export type TaskSnapshot = ShellTaskSnapshot | AgentTaskSnapshot | MemoryTaskSnapshot;
+export interface TaskReviewEvidence {
+    fromRound: number;
+    toRound: number;
+    requirements: string;
+    activity: string;
+}
+
+export interface TaskReviewSnapshot {
+    id: string;
+    kind: "review";
+    owner: {sessionId: string; turnId: string};
+    status: TaskStatus;
+    startedAt: string;
+    completedAt?: string;
+    fromRound: number;
+    toRound: number;
+    resultPreview?: string;
+    outputIssue?: string;
+}
+
+export interface StartTaskReviewInput {
+    parentContext: ToolContext;
+    evidence: TaskReviewEvidence;
+    signal: AbortSignal;
+}
+
+export type TaskSnapshot = ShellTaskSnapshot | AgentTaskSnapshot | MemoryTaskSnapshot | TaskReviewSnapshot;
 
 export interface RunningTaskSummary {
     total: number;
@@ -125,7 +151,7 @@ export interface TaskNotification {
     taskId: string;
     sessionId: string;
     ownerToolCallId?: string;
-    kind: "shell" | "agent" | "memory";
+    kind: "shell" | "agent" | "memory" | "review";
     label: string;
     status: Exclude<AgentTaskStatus, "running">;
     summary: string;
@@ -155,6 +181,9 @@ export interface TaskSessionLike {
     startAgent(input: StartAgentTaskInput): Promise<AgentTaskSnapshot>;
 
     startMemory(input:StartMemoryTaskInput):Promise<MemoryTaskSnapshot|undefined>;
+
+    /** Advisory Turn task; callers must not await completion on the main loop. */
+    startReview(input: StartTaskReviewInput): Promise<TaskReviewSnapshot>;
 
     get(id: string): Promise<TaskSnapshot | undefined>;
 

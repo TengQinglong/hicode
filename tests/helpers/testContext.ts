@@ -36,6 +36,7 @@ export function createTestContext(
   cwd: string,
   options: {
     contextSettings?: ContextSettings;
+    taskReviewEnabled?: boolean;
     toolNames?: readonly string[];
     permissionMode?: PermissionMode;
     allowFullAccess?: boolean;
@@ -76,6 +77,7 @@ export function createTestContext(
       availableTools: [...createToolRuntime().getTools().filter(tool => !options.mcpManager?.getTools().some(extra => extra.name === tool.name)), ...(options.mcpManager?.getTools() ?? [])],
       toolNames: options.toolNames ?? [...new Set([...createToolRuntime().toolNames, ...(options.mcpManager?.getTools().map(tool => tool.name) ?? [])])],
       contextSettings: options.contextSettings ?? DEFAULT_CONTEXT_SETTINGS,
+      taskReviewEnabled: options.taskReviewEnabled,
       allowFullAccess: options.allowFullAccess ?? true,
       readOnlyTools: options.readOnlyTools ?? false,
       fileCommits: options.fileCommits ?? new FileCommitCoordinator(),

@@ -1,9 +1,10 @@
+import {TaskReviewProgress} from "./taskReview.js";
 import {contentText, type MessageContent} from "../images/content.js";
 import {createImageAccess} from "../images/access.js";
 import {HookControlError, formatHookContext} from "../hooks/index.js";
 import {ResponseDraft} from "./draft.js";
 import type {ToolContext} from "../tools/types.js";
-import type {LLMCaller, Message, ToolCall} from "../llm/types.js";
+import type {LLMCaller, LLMCallKind, Message, ToolCall} from "../llm/types.js";
 import {hasCompleteToolPairs} from "../session/codec.js";
 import {formatInterruptedToolResult} from "../tools/registry.js";
 import {getTokenWarningState} from "../context/index.js";
@@ -28,6 +29,7 @@ export interface AgentToolBindings {
 
 export interface AgentRunOptions extends AgentToolBindings {
     inputOrigin?: "user" | "assignment";
+    callKind?: LLMCallKind;
     maxIterations?: number;
     /** Read Host-owned Todo truth for progress reminders and completion checks. */
     getTodos?: () => readonly Todo[];
@@ -122,7 +124,10 @@ async function runAgentCore(
     const compactHistoryImpl = dependencies.compactHistory;
     const turnId = ctx.turnId;
     const draft = new ResponseDraft(emitEvent);
+    let iterations = 0;
+    const taskReview = new TaskReviewProgress(ctx, contentText(userInput), options.inputOrigin ?? "user", history);
     const onEvent = async (event: AgentEvent): Promise<void> => {
+        taskReview.record(event, iterations);
         if (event.type === "assistant_text") {
             const responseId = await draft.finish("committed");
             await emitEvent({...event, ...(responseId ? {responseId} : {})});
@@ -147,7 +152,6 @@ async function runAgentCore(
     let forceCompact = false;
     let providerContextWindow = ctx.contextUsage.contextWindow({model: ctx.model, provider: ctx.provider, compactCount: ctx.compactState.compactCount});
 
-    let iterations = 0;
     let pendingToolCalls: readonly ToolCall[] = [];
     const resultUsage = () => usageCalls === 0
         ? {}
@@ -178,6 +182,7 @@ async function runAgentCore(
     const appendQueuedInputs = async (inputs: readonly QueuedAgentInput[]) => {
         const accepted = inputs.filter(input => !ctx.taskJoin || ctx.taskJoin.accepts(input));
         for (const input of accepted) {
+            taskReview.recordInput(input, iterations);
             history.push({role: "user", origin: input.source === "user_input" ? "user" : input.source === "agent_message" ? (options.inputOrigin === "assignment" ? "assignment" : "agent") : "task_notification", content: input.content});
         }
         for (const input of accepted) {
@@ -200,6 +205,7 @@ async function runAgentCore(
             i++
         ) {
             iterations = i + 1;
+            if (i > 0) taskReview.completedRound(i);
             // Capture terminal delegates even for headless Hosts without a UI notification pump.
             const completedDelegates = await ctx.taskJoin?.collect() ?? [];
             await appendQueuedInputs(completedDelegates);
@@ -226,6 +232,7 @@ async function runAgentCore(
                 contextWindow: providerContextWindow,
                 forceCompact,
                 elapsedTaskStartedAt: iterations % 4 === 0 ? taskStartedAt : undefined,
+                taskReviewReminder: taskReview.takeReminder(),
                 getTodos: options.getTodos,
                 getAdditionalUserContextBlocks:options.getAdditionalUserContextBlocks,
                 additionalUserContextBlocks: [
@@ -250,7 +257,7 @@ async function runAgentCore(
                     ctx.storage,
                     ctx.cwd,
                     ctx.model,
-                    "main",
+                    options.callKind ?? "main",
                     ctx.signal,
                     progress => {
                         void onEvent({
@@ -539,6 +546,7 @@ async function runAgentCore(
         }
         throw error;
     } finally {
+        taskReview.close();
         await draft.finish("discarded");
     }
 }

@@ -55,6 +55,7 @@ export function createTestSettings(
   const defaultSources = resolveHiCodeSettings([]).values.sources;
   return {
     context: DEFAULT_CONTEXT_SETTINGS,
+    taskReview: {enabled: false},
     sources: {
       ...defaultSources,
       glm: {

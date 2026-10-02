@@ -17,7 +17,7 @@ export function waitForTaskCompletion(tasks: Pick<TaskSessionLike, "get" | "subs
         const inspect = async () => {
             try {
                 const snapshots = await Promise.all(ids.map(id => tasks.get(id)));
-                if (snapshots.some(task => !task || (kind === "result" ? task.kind === "memory" : task.kind !== kind))) throw new Error(`Cannot wait for an unavailable ${kind} task`);
+                if (snapshots.some(task => !task || (kind === "result" ? (task.kind === "memory" || task.kind === "review") : task.kind !== kind))) throw new Error(`Cannot wait for an unavailable ${kind} task`);
                 if (!snapshots.length || snapshots.some(task => task?.status !== "running")) finish();
             } catch (error) {finish(error);}
         };

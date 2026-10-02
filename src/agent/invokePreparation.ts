@@ -25,6 +25,7 @@ interface PrepareAgentInvokeInput {
     forceCompact?: boolean;
     /** Monotonic Turn start, supplied only on elapsed-time reminder iterations. */
     elapsedTaskStartedAt?: number;
+    taskReviewReminder?: string;
     additionalUserContextBlocks?: readonly string[];
     getAdditionalUserContextBlocks?: () => Promise<readonly string[]>;
     getTodos?: () => readonly Todo[];
@@ -45,6 +46,7 @@ export async function prepareAgentInvoke({
                                              contextWindow,
                                              forceCompact = false,
                                              elapsedTaskStartedAt,
+                                             taskReviewReminder,
                                              additionalUserContextBlocks = [],
                                              getTodos,
                                              getAdditionalUserContextBlocks,
@@ -59,6 +61,7 @@ export async function prepareAgentInvoke({
             // Keep changing time out of the cached prefix and persistent History.
             messages.push({role: "user", origin: "runtime", content: `<system-reminder>\nYou have been working on this task for ${elapsed}.\n</system-reminder>`});
         }
+        if (taskReviewReminder) messages.push({role: "user", origin: "agent", content: taskReviewReminder});
         return messages;
     };
     const getRuntimeBlocks = async () => [

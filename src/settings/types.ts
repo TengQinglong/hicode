@@ -69,6 +69,7 @@ interface ModelSourceSettingsFile {
 }
 
 export interface HiCodeSettingsFile {
+    taskReview?: {enabled?: boolean};
     context?: Partial<ContextSettings>;
     sources?: Partial<Record<LLMProviderName, ModelSourceSettingsFile>>;
     models?: {
@@ -106,6 +107,7 @@ export type SettingsIssue = SettingsIssueDetails & (
 );
 
 export interface ResolvedHiCodeSettings {
+    taskReview: {enabled: boolean};
     context: ContextSettings;
     sources: Record<LLMProviderName, ModelSourceSettings>;
     models: {

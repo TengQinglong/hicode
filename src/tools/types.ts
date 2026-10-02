@@ -132,6 +132,7 @@ export interface ToolContext {
     // Session Auto-Compact state: failure breaker and counters.
     compactState: CompactState;
     readonly contextSettings: ContextSettings;
+    readonly taskReviewEnabled: boolean;
     contextUsage: ContextUsageTracker;
 
     // Session large-result storage, injected by UI, Headless or tests.

@@ -64,13 +64,13 @@ function notificationSummary(task: TaskSnapshot): string {
 }
 
 export function notificationFor(task: TaskSnapshot): TaskNotification {
-    const label = task.kind === "memory"?"Memory maintenance":task.kind === "shell"
+    const label = task.kind === "review" ? `Task review: rounds ${task.fromRound}-${task.toRound}` : task.kind === "memory"?"Memory maintenance":task.kind === "shell"
         ? task.command
         : task.agentName ?? task.description;
     const messageLabel = task.kind === "agent"
         ? `${task.agentName ? `${task.agentName} (${task.agentType})` : task.agentType} · ${task.description}`
         : label;
-    const result = task.kind==="memory"?undefined:task.outputResult;
+    const result = task.kind==="memory" || task.kind === "review" ?undefined:task.outputResult;
     const resultId = result?.resultId;
     const output = resultId
         ? `; full output saved at ${JSON.stringify(result?.path)}; read with read_file`
@@ -80,7 +80,7 @@ export function notificationFor(task: TaskSnapshot): TaskNotification {
         notificationId: taskNotificationId(task.id, task.kind === "agent" ? task.progress.runCount : 1),
         taskId: task.id,
         sessionId: task.owner.sessionId,
-        ...(task.kind!=="memory"?{ownerToolCallId:task.owner.toolCallId}:{}),
+        ...(task.kind === "shell" || task.kind === "agent" ?{ownerToolCallId:task.owner.toolCallId}:{}),
         kind: task.kind,
         label,
         status: task.status as TaskNotification["status"],

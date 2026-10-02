@@ -75,6 +75,8 @@ export function runHeadlessForTest(
         agentOptions: test.agent,
         toolResultStoreOptions: test.toolResultStoreOptions,
       }),
+    createTaskReviewThread: options => ({agentId: options.agentId,
+        async run() {throw new Error("This fixture does not configure task reviews");}}),
     createSubagentThread: (subagentOptions, request) =>
       createSubagentThreadForTest({
         ...subagentOptions,

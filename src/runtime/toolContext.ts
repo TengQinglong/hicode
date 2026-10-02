@@ -31,6 +31,7 @@ interface ToolContextResources {
     toolNames: readonly string[];
     availableTools: readonly Tool[];
     contextSettings: ToolContext["contextSettings"];
+    taskReviewEnabled?: boolean;
     allowFullAccess?: boolean;
     readOnlyTools?: boolean;
     approvalReviewer?: ApprovalReviewer;
@@ -140,6 +141,7 @@ export function createToolContext({
         compactState: session.compactState,
         contextUsage: session.contextUsage,
         contextSettings: resources.contextSettings,
+        taskReviewEnabled: resources.taskReviewEnabled ?? false,
         sessionId: session.sessionId,
         toolResultStore: session.toolResultStore,
         webSources: session.webSources,

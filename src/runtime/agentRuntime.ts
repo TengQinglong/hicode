@@ -11,6 +11,7 @@ import {createSubagentFactories} from "../subagents/runSubagent.js";
 import type {
     CreateSubagentRunner,
     CreateSubagentThread,
+    CreateTaskReviewThread,
 } from "../subagents/types.js";
 import type {SubagentRegistry} from "../subagents/registry.js";
 import {createToolResultStore} from "../toolResults/index.js";
@@ -23,6 +24,7 @@ export interface AgentRuntime {
     compactHistory: CompactHistoryRunner;
     createSubagentRunner: CreateSubagentRunner;
     createSubagentThread: CreateSubagentThread;
+    createTaskReviewThread: CreateTaskReviewThread;
 }
 
 function createProviderRunner(
@@ -94,5 +96,6 @@ export function createAgentRuntime({storage, getSources, subagents, memory}: {
         compactHistory: primary.compactHistory,
         createSubagentRunner: options => childFactories().createSubagentRunner(options),
         createSubagentThread: (options, request) => childFactories().createSubagentThread(options, request),
+        createTaskReviewThread: (options, request) => childFactories().createTaskReviewThread(options, request),
     };
 }

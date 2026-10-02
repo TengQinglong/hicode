@@ -11,7 +11,7 @@ import stringWidth from "string-width";
 const labels = {running: "Running", completed: "Completed", failed: "Failed", cancelled: "Stopped", interrupted: "Interrupted"};
 const markers = {running: "●", completed: "✓", failed: "!", cancelled: "○", interrupted: "◷"};
 const statusColors = {running: COLORS.accent, completed: COLORS.diffAdded, failed: COLORS.error, cancelled: COLORS.dim, interrupted: COLORS.dim};
-const title = (task: TaskSnapshot) => (task.kind === "shell" ? task.command : task.kind === "memory" ? "Memory consolidation" : task.description).replace(/\s+/g, " ").trim();
+const title = (task: TaskSnapshot) => (task.kind === "shell" ? task.command : task.kind === "memory" ? "Memory consolidation" : task.kind === "review" ? `Task review: rounds ${task.fromRound}-${task.toRound}` : task.description).replace(/\s+/g, " ").trim();
 const clean = (value: string) => stripVTControlCharacters(value).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
 const graphemes = new Intl.Segmenter(undefined, {granularity: "grapheme"});
 
@@ -34,7 +34,7 @@ function duration(ms: number): string {
 function metadata(task: TaskSnapshot): string {
     if (task.kind === "agent") return `${clean(task.agentName ?? task.agentType)} · Run ${task.progress.runCount} · ${duration(agentRunTiming(task).runMs)}`;
     const elapsed = (task.completedAt ? Date.parse(task.completedAt) : Date.now()) - Date.parse(task.startedAt);
-    return `${task.kind === "shell" ? `Command · ${task.phase}${task.phase === "queued" ? " (file commit lock)" : ""} · queued ${duration(task.timing.queuedMs)} / run ${duration(task.timing.runningMs)}` : "Memory"} · ${duration(elapsed)}`;
+    return `${task.kind === "shell" ? `Command · ${task.phase}${task.phase === "queued" ? " (file commit lock)" : ""} · queued ${duration(task.timing.queuedMs)} / run ${duration(task.timing.runningMs)}` : task.kind === "review" ? "Advisory review" : "Memory"} · ${duration(elapsed)}`;
 }
 
 export function TasksDialog({tasks, stopTask, onClose}: {

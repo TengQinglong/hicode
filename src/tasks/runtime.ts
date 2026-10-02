@@ -1,3 +1,8 @@
+import {EMPTY_AGENT_INPUT_CHANNEL} from "../agent/inputChannel.js";
+import {z} from "zod";
+import type {CreateTaskReviewThread} from "../subagents/types.js";
+import type {StartTaskReviewInput, TaskReviewSnapshot} from "./types.js";
+import {isReviewTask, snapshotReview, type ManagedReviewTask} from "./managed.js";
 import type {AgentMessaging} from "../runtime/agentMessaging.js";
 import type {MemoryRuntimeLike} from "../memory/runtime.js";
 import {isMemoryTask,isAgentTask,snapshotMemory,type ManagedMemoryTask} from "./managed.js";
@@ -113,6 +118,11 @@ class TaskSession implements TaskSessionLike {
         await this.ready;return this.runtime.startMemory(this.binding,input);
     }
 
+    async startReview(input: StartTaskReviewInput): Promise<TaskReviewSnapshot> {
+        await this.ready;
+        return this.runtime.startReview(this.binding, input);
+    }
+
     async get(id: string): Promise<TaskSnapshot | undefined> {
         await this.ready;
         return this.runtime.get(this.binding, id);
@@ -191,7 +201,8 @@ class TaskRuntime implements TaskRuntimeLike {
         private readonly journal: TaskJournalLike,
         private readonly subagents: SubagentRegistry,
         private readonly memory:MemoryRuntimeLike,
-        private readonly fileCommits: FileCommitCoordinator
+        private readonly fileCommits: FileCommitCoordinator,
+        private readonly createTaskReviewThread: CreateTaskReviewThread
     ) {
     }
 
@@ -229,6 +240,77 @@ class TaskRuntime implements TaskRuntimeLike {
     }
     startAgent(binding: TaskSessionBinding, input: StartAgentTaskInput): Promise<AgentTaskSnapshot> {
         return this.trackStart(() => this.startAgentOwned(binding, input));
+    }
+
+    startReview(binding: TaskSessionBinding, input: StartTaskReviewInput): Promise<TaskReviewSnapshot> {
+        const evidence = Object.freeze({...input.evidence});
+        return this.trackStart(async () => {
+            this.assertOpen();
+            const {parentContext} = input;
+            if (parentContext.sessionId !== binding.sessionId || input.signal.aborted || parentContext.signal.aborted) {
+                throw new Error("Task review owner is unavailable");
+            }
+            if (!Number.isSafeInteger(evidence.fromRound) || !Number.isSafeInteger(evidence.toRound) || evidence.fromRound < 1 ||
+                evidence.toRound !== evidence.fromRound + 9 || evidence.requirements.length > 17_000 || evidence.activity.length > 24_000) {
+                throw new Error("Invalid frozen task review evidence");
+            }
+            if ([...this.tasks.values()].some(task => isReviewTask(task) && task.owner.sessionId === binding.sessionId && task.status === "running")) {
+                throw new Error("A background task review is already running in this Session");
+            }
+            const release = this.reserveTaskSlot();
+            let releaseAgent: () => void;
+            try {releaseAgent = this.reserveAgentSlot(binding.sessionId);}
+            catch (error) {release(); throw error;}
+            const task: ManagedReviewTask = {
+                id: this.allocateId(), kind: "review", owner: {sessionId: binding.sessionId, turnId: parentContext.turnId},
+                status: "running", startedAt: new Date().toISOString(), fromRound: evidence.fromRound, toRound: evidence.toRound,
+                store: binding.toolResultStore, controller: createTurnAbortController(), completion: Promise.resolve(),
+                notificationPending: false, suppressTerminalNotification: true,
+            };
+            this.tasks.set(task.id, task);
+            releaseAgent();
+            try {
+                await this.publish("task_started", task, true);
+            } catch (error) {
+                this.tasks.delete(task.id);
+                release();
+                throw error;
+            }
+            release();
+            if (this.closed) task.controller.abort("shutdown");
+            const signal = AbortSignal.any([input.signal, parentContext.signal, task.controller.signal, AbortSignal.timeout(60_000)]);
+            task.completion = (async () => {
+                try {
+                    if (signal.aborted) throw new Error("Task review cancelled");
+                    const prompt = JSON.stringify({coverage: {fromRound: task.fromRound, toRound: task.toRound},
+                        requirements: evidence.requirements, activity: evidence.activity});
+                    const thread = this.createTaskReviewThread({parentContext, agentId: task.id, onEvent: () => {},
+                        storageCwd: parentContext.cwd}, {
+                        agentType: "TaskReview", parentTurnId: parentContext.turnId, readOnly: true,
+                        description: `Task review: rounds ${task.fromRound}-${task.toRound}`, prompt,
+                    });
+                    const result = await thread.run({taskId: task.id, prompt, signal,
+                        inputChannel: EMPTY_AGENT_INPUT_CHANNEL});
+                    if (signal.aborted) throw new Error("Task review cancelled");
+                    if (result.reason !== "completed" && result.reason !== "no_tool_calls") throw new Error("Task review did not complete");
+                    if (result.reply.length > 4_000) throw new Error("Task review exceeds the response limit");
+                    const report = z.object({summary: z.string().trim().min(1).max(800),
+                        suggestions: z.array(z.object({round: z.number().int().min(task.fromRound).max(task.toRound),
+                            evidence: z.string().trim().min(1).max(500), nextStep: z.string().trim().min(1).max(500)}).strict()).max(2)}).strict().parse(JSON.parse(result.reply));
+                    task.resultPreview = [`Summary: ${report.summary}`, ...report.suggestions.map((item, index) =>
+                        `Suggestion ${index + 1} (round ${item.round}):\nEvidence: ${item.evidence}\nNext step: ${item.nextStep}`)].join("\n\n");
+                    task.status = "completed";
+                } catch {
+                    task.status = signal.aborted ? "cancelled" : "failed";
+                    task.outputIssue = "Background task review was cancelled, timed out or returned invalid feedback; the main task continues.";
+                } finally {
+                    task.completedAt = new Date().toISOString();
+                    await this.publish("task_finished", task);
+                }
+            })();
+            await task.completion;
+            return snapshotReview(task);
+        });
     }
 
     private async startMemoryOwned(binding:TaskSessionBinding,input:StartMemoryTaskInput):Promise<MemoryTaskSnapshot|undefined> {
@@ -522,7 +604,7 @@ class TaskRuntime implements TaskRuntimeLike {
     }
 
     hasRunning(sessionId?: string): boolean {
-        return this.getRunningSummary(sessionId).total > 0;
+        return this.getRunningSummary(sessionId).total > 0 || [...this.tasks.values()].some(task => isReviewTask(task) && task.status === "running" && (sessionId === undefined || task.owner.sessionId === sessionId));
     }
 
     getRunningSummary(sessionId?: string): RunningTaskSummary {
@@ -536,6 +618,7 @@ class TaskRuntime implements TaskRuntimeLike {
             ) {
                 continue;
             }
+            if (isReviewTask(task)) continue;
             if (isMemoryTask(task)) memory += 1;
             else if (isShellTask(task)) shell += 1;
             else agent += 1;
@@ -626,7 +709,7 @@ class TaskRuntime implements TaskRuntimeLike {
     private runningAgentCount(sessionId: string): number {
         return [...this.tasks.values()].filter(
             (task) =>
-                isAgentTask(task) &&
+                (isAgentTask(task) || isReviewTask(task)) &&
                 task.owner.sessionId === sessionId &&
                 task.status === "running"
         ).length;
@@ -780,7 +863,7 @@ class TaskRuntime implements TaskRuntimeLike {
             this.notifications.rememberArchived(
                 restored.id,
                 loaded.claimedNotificationIds.has(taskNotificationId(restored.id, restored.kind === "agent" ? restored.progress.runCount : 1)) ||
-                (restored.kind === "shell" && isExpectedShellShutdown(restored))
+                (restored.kind === "review") || (restored.kind === "shell" && isExpectedShellShutdown(restored))
             );
         }
     }
@@ -793,7 +876,8 @@ export function createTaskRuntime(
     createSubagentThread: CreateSubagentThread,
     subagents: SubagentRegistry,
     memory:MemoryRuntimeLike,
-    fileCommits: FileCommitCoordinator
+    fileCommits: FileCommitCoordinator,
+    createTaskReviewThread: CreateTaskReviewThread
 ): TaskRuntimeLike {
     return new TaskRuntime(
         shellRunner,
@@ -801,6 +885,7 @@ export function createTaskRuntime(
         createTaskJournal(storage, cwd),
         subagents,
         memory,
-        fileCommits
+        fileCommits,
+        createTaskReviewThread
     );
 }
