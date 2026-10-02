@@ -42,10 +42,13 @@ export const qwenProvider: LLMProvider = {
             ...(supportsReasoningReplay(options.model) ? {reasoningSource: source.id} : {}),
             baseUrl: source.baseUrl || PROVIDER_BASE_URLS[source.id],
             apiKey,
-            requestFields: createQwenRequestFields(
+            requestFields: {...createQwenRequestFields(
                 options.model,
                 options.tools.length > 0
-            ),
+            ), ...(options.kind === "task_review" ? {
+                ...(supportsThinking(options.model) ? {enable_thinking: false} : {}),
+                ...(supportsReasoningReplay(options.model) ? {preserve_thinking: false} : {}),
+            } : {})},
         });
     },
 };

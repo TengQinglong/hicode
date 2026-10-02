@@ -222,8 +222,7 @@ test("advisory task review displays its covered rounds rather than a Memory or o
   await withTempProject(async cwd => {
     const ctx = createTestContext(cwd);
     const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined, undefined,
-      options => ({agentId: options.agentId, async run() {return {agentId: options.agentId, agentType: "TaskReview", description: "review",
-        reason: "completed", reply: JSON.stringify({summary: "Verified recent progress", suggestions: []}), iterations: 1, toolUseCount: 0, durationMs: 1};}}));
+      async () => "Verified recent progress");
     const tasks = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
     let view: ReturnType<typeof render> | undefined;
     try {

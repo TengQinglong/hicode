@@ -1,6 +1,4 @@
-import {EMPTY_AGENT_INPUT_CHANNEL} from "../agent/inputChannel.js";
-import {z} from "zod";
-import type {CreateTaskReviewThread} from "../subagents/types.js";
+import type {TaskReviewRunner} from "./review.js";
 import type {StartTaskReviewInput, TaskReviewSnapshot} from "./types.js";
 import {isReviewTask, snapshotReview, type ManagedReviewTask} from "./managed.js";
 import type {AgentMessaging} from "../runtime/agentMessaging.js";
@@ -202,7 +200,7 @@ class TaskRuntime implements TaskRuntimeLike {
         private readonly subagents: SubagentRegistry,
         private readonly memory:MemoryRuntimeLike,
         private readonly fileCommits: FileCommitCoordinator,
-        private readonly createTaskReviewThread: CreateTaskReviewThread
+        private readonly reviewTask: TaskReviewRunner
     ) {
     }
 
@@ -282,23 +280,13 @@ class TaskRuntime implements TaskRuntimeLike {
             task.completion = (async () => {
                 try {
                     if (signal.aborted) throw new Error("Task review cancelled");
-                    const prompt = JSON.stringify({coverage: {fromRound: task.fromRound, toRound: task.toRound},
-                        requirements: evidence.requirements, activity: evidence.activity});
-                    const thread = this.createTaskReviewThread({parentContext, agentId: task.id, onEvent: () => {},
-                        storageCwd: parentContext.cwd}, {
-                        agentType: "TaskReview", parentTurnId: parentContext.turnId, readOnly: true,
-                        description: `Task review: rounds ${task.fromRound}-${task.toRound}`, prompt,
-                    });
-                    const result = await thread.run({taskId: task.id, prompt, signal,
-                        inputChannel: EMPTY_AGENT_INPUT_CHANNEL});
+                    const text = await this.reviewTask({storage: parentContext.storage, cwd: parentContext.cwd,
+                        model: parentContext.fastModel, provider: parentContext.fastProvider, signal, evidence,
+                        trace: {scope: "session", ownerCwd: parentContext.llmTrace?.ownerCwd ?? parentContext.cwd,
+                            sessionId: parentContext.llmTrace?.scope === "session" ? parentContext.llmTrace.sessionId : parentContext.sessionId,
+                            runId: task.id}});
                     if (signal.aborted) throw new Error("Task review cancelled");
-                    if (result.reason !== "completed" && result.reason !== "no_tool_calls") throw new Error("Task review did not complete");
-                    if (result.reply.length > 4_000) throw new Error("Task review exceeds the response limit");
-                    const report = z.object({summary: z.string().trim().min(1).max(800),
-                        suggestions: z.array(z.object({round: z.number().int().min(task.fromRound).max(task.toRound),
-                            evidence: z.string().trim().min(1).max(500), nextStep: z.string().trim().min(1).max(500)}).strict()).max(2)}).strict().parse(JSON.parse(result.reply));
-                    task.resultPreview = [`Summary: ${report.summary}`, ...report.suggestions.map((item, index) =>
-                        `Suggestion ${index + 1} (round ${item.round}):\nEvidence: ${item.evidence}\nNext step: ${item.nextStep}`)].join("\n\n");
+                    task.resultPreview = text;
                     task.status = "completed";
                 } catch {
                     task.status = signal.aborted ? "cancelled" : "failed";
@@ -877,7 +865,7 @@ export function createTaskRuntime(
     subagents: SubagentRegistry,
     memory:MemoryRuntimeLike,
     fileCommits: FileCommitCoordinator,
-    createTaskReviewThread: CreateTaskReviewThread
+    reviewTask: TaskReviewRunner
 ): TaskRuntimeLike {
     return new TaskRuntime(
         shellRunner,
@@ -886,6 +874,6 @@ export function createTaskRuntime(
         subagents,
         memory,
         fileCommits,
-        createTaskReviewThread
+        reviewTask
     );
 }

@@ -33,7 +33,8 @@ export function createGlmProvider(
                 baseUrl: source.baseUrl || PROVIDER_BASE_URLS.glm,
                 apiKey,
             toolImages: supportsToolImages(source, options.model),
-                requestFields: createGlmRequestFields(),
+                requestFields: {...createGlmRequestFields(),
+                    ...(options.kind === "task_review" ? {thinking: {type: "disabled"}} : {})},
                 disableThinkingOnFinalStallRetry: true,
             });
         },

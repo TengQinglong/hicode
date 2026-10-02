@@ -80,8 +80,7 @@ function createFakeAgentRuntime(
             };
             return runner;
         },
-        createTaskReviewThread: options => ({agentId: options.agentId,
-            async run() {throw new Error("This fixture does not configure task reviews");}}),
+        reviewTask: async () => {throw new Error("This fixture does not configure task reviews");},
         createSubagentThread: (options) => ({
             agentId: options.agentId,
             async run() {

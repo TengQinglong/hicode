@@ -1,55 +1,42 @@
 import {createTaskJournal} from "../../src/tasks/journal.js";
 import {callOpenAICompatible} from "../../src/llm/providers/openAICompatible.js";
+import {createLLMCaller} from "../../src/llm/index.js";
 import {expect, test, spyOn} from "bun:test";
-import {join} from "node:path";
-import {readFile} from "node:fs/promises";
-import type {AgentRunner} from "../../src/agent/runner.js";
-import type {SubagentResult, CreateTaskReviewThread} from "../../src/subagents/types.js";
+import {createTaskReviewRunner, type TaskReviewRunner} from "../../src/tasks/review.js";
 import type {StartTaskReviewInput, TaskReviewSnapshot} from "../../src/tasks/types.js";
 import {TaskReviewProgress} from "../../src/agent/taskReview.js";
 import {prepareAgentInvoke} from "../../src/agent/invokePreparation.js";
-import {createSubagentFactories} from "../../src/subagents/runSubagent.js";
-import {BUILTIN_SUBAGENT_REGISTRY} from "../../src/subagents/registry.js";
 import {createInitialHistory} from "../../src/prompt/index.js";
-import {RuntimeMessageQueue} from "../../src/runtime/messageQueue.js";
 import {runAgentForTest} from "../helpers/agent.js";
 import {createTestContext} from "../helpers/testContext.js";
 import {createTaskRuntimeForTest} from "../helpers/taskRuntime.js";
-import {createTestToolResultStore} from "../helpers/toolResultStore.js";
 import {withTempProject} from "../helpers/tempProject.js";
 import {assistantText, assistantToolCall, createFakeLLM, fixtureToolSchemas} from "../helpers/fakeLLM.js";
-import {getSubagentStorageDirectory} from "../../src/persistence/layout.js";
 
 function deferred<T>() {
     let resolve!: (value: T) => void;
     const promise = new Promise<T>(done => {resolve = done;});
     return {promise, resolve};
 }
-const report = JSON.stringify({summary: "Read the relevant code and ran a reproduction.",
-    suggestions: [{round: 9, evidence: "The reproduction still fails.", nextStep: "Resolve that counterexample before broadening tests."}]});
+const report = "Read the relevant code and ran a reproduction. Round 9 still fails; resolve that counterexample before broadening tests.";
 const steps = () => Array.from({length: 10}, (_, i) => assistantToolCall("read_file", {path: "source.py"}, `read-${i}`));
 const bindings = {getToolSchemas: () => fixtureToolSchemas("read_file"), executeTool: async () => "observed result",
     isToolConcurrencySafe: () => false};
-
-function reviewResult(agentId: string, reply = report): SubagentResult {
-    return {agentId, agentType: "TaskReview", description: "review", reply, reason: "completed", iterations: 1,
-        toolUseCount: 0, durationMs: 1};
-}
 
 test("round 10 launches review without blocking round 11 or final completion; Turn teardown cancels it", async () => {
     await withTempProject(async cwd => {
         const base = createTestContext(cwd);
         const started = deferred<AbortSignal>();
         let reviews = 0;
-        const factory: CreateTaskReviewThread = options => ({agentId: options.agentId, async run(input) {
+        const factory: TaskReviewRunner = async input => {
             reviews++;
-            started.resolve(input.signal);
+            started.resolve(input.signal!);
             await new Promise<void>(resolve => {
-                if (input.signal.aborted) resolve();
-                else input.signal.addEventListener("abort", () => resolve(), {once: true});
+                if (input.signal!.aborted) resolve();
+                else input.signal!.addEventListener("abort", () => resolve(), {once: true});
             });
-            return {...reviewResult(options.agentId), reason: "interrupted"};
-        }});
+            return report;
+        };
         const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, undefined, factory);
         const session = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
         const ctx = createTestContext(cwd, {tasks: session, taskReviewEnabled: true});
@@ -85,13 +72,14 @@ test("a delayed review is injected once at the request tail with the frozen roun
         const finish = deferred<void>();
         const published = deferred<void>();
         let captured = "";
-        const factory: CreateTaskReviewThread = (options, request) => ({agentId: options.agentId, async run() {
-            captured = request.prompt;
-            expect(request.parentTurnId).toBeDefined();
-            expect(request.parentToolCallId).toBeUndefined();
+        const factory: TaskReviewRunner = async input => {
+            captured = input.evidence.requirements + input.evidence.activity;
+            expect(input.trace?.scope).toBe("session");
+            expect(input.trace?.runId).toMatch(/^t_/);
+            expect(input.trace).not.toHaveProperty("agentId");
             started.resolve(); await finish.promise;
-            return reviewResult(options.agentId);
-        }});
+            return report;
+        };
         const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, undefined, factory);
         const session = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
         session.subscribe(event => {if (event.type === "task_finished" && event.task.kind === "review") published.resolve();});
@@ -160,54 +148,65 @@ test("busy reviews do not stack; changed user requirements invalidate old result
     });
 });
 
-test("tool-free review reuses the child Agent pipeline and records a Turn owner", async () => {
+test("review calls the LLM directly with only a short dedicated prompt and frozen evidence", async () => {
     await withTempProject(async cwd => {
-        const ctx = createTestContext(cwd, {taskReviewEnabled: true});
-        let calls = 0;
-        let hooks = 0;
-        ctx.runHook = async () => {hooks++; return {blocked: false, additionalContexts: [], executions: []};};
-        const runner: AgentRunner = async (input, history, _event, child, _channel, options) => {
-            calls++;
-            expect(options.getToolSchemas()).toEqual([]);
-            expect(options.maxIterations).toBe(1);
-            expect(options.callKind).toBe("task_review");
-            expect(child.tasks).toBeUndefined();
-            expect(child.subagentLauncher).toBeUndefined();
-            expect(child.taskReviewEnabled).toBe(false);
-            expect(child.fileState).not.toBe(ctx.fileState);
-            expect(child.model).toBe(ctx.fastModel);
-            expect(child.sessionId).not.toBe(ctx.sessionId);
-            expect(history[0]?.content).toContain("frozen evidence");
-            expect(input).toBe("frozen assignment");
-            return {reply: report, reason: "completed", iterations: 1};
-        };
-        const factories = createSubagentFactories({primaryRunAgent: runner, fastRunAgent: runner,
-            registry: BUILTIN_SUBAGENT_REGISTRY, createToolResultStore: (path, id) => createTestToolResultStore(path, id)});
-        const thread = factories.createTaskReviewThread({parentContext: ctx, agentId: "review-child", onEvent: () => {}},
-            {agentType: "TaskReview", parentTurnId: ctx.turnId, description: "review", prompt: "frozen assignment", readOnly: true});
-        await thread.run({prompt: "frozen assignment", signal: ctx.signal, inputChannel: new RuntimeMessageQueue().createAgentInputChannel(() => {})});
-        expect(calls).toBe(1); expect(hooks).toBe(0);
-        const path = join(getSubagentStorageDirectory(ctx.storage, cwd, ctx.sessionId, "review-child"), "events.jsonl");
-        const start = JSON.parse((await readFile(path, "utf8")).split("\n")[0]!);
-        expect(start.parentTurnId).toBe(ctx.turnId);
-        expect(start.parentToolCallId).toBeUndefined();
+        const ctx = createTestContext(cwd);
+        const fake = createFakeLLM([options => {
+            expect(options.messages).toHaveLength(2);
+            expect(options.messages[0]?.role).toBe("system");
+            expect(String(options.messages[0]?.content).length).toBeLessThan(1_200);
+            expect(options.messages[0]?.content).not.toContain("coding agent");
+            expect(options.messages[0]?.content).toContain("plain-text paragraph");
+            expect(options.messages[1]?.content).toContain("Coverage: rounds 1-10");
+            expect(options.messages[1]?.content).toContain("Original goal");
+            expect(options.messages[1]?.content).toContain("round 9: reproduction failed");
+            expect(options.tools).toEqual([]);
+            expect(options.model).toBe(ctx.fastModel);
+            expect(options.kind).toBe("task_review");
+            return assistantText(report);
+        }]);
+        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined, undefined,
+            createTaskReviewRunner({callLLM: fake.callLLM}));
+        const session = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
+        try {
+            const result = await session.startReview({parentContext: ctx, signal: ctx.signal,
+                evidence: {fromRound: 1, toRound: 10, requirements: "Original goal", activity: "round 9: reproduction failed"}});
+            expect(result).toMatchObject({status: "completed", owner: {sessionId: ctx.sessionId, turnId: ctx.turnId}, resultPreview: report});
+            expect(fake.calls).toHaveLength(1);
+            expect(await session.pendingNotifications()).toEqual([]);
+        } finally {await runtime.close();}
     });
 });
 
-test("invalid or out-of-range reviewer advice fails the advisory task without publishing a main-thread notification", async () => {
+test.each(["empty", "tool_call"])("%s review output fails only the advisory task", async kind => {
     await withTempProject(async cwd => {
-        const base = createTestContext(cwd);
-        const factory: CreateTaskReviewThread = options => ({agentId: options.agentId, async run() {
-            return reviewResult(options.agentId, JSON.stringify({summary: "guess", suggestions: [{round: 99, evidence: "unseen", nextStep: "guess"}]}));
-        }});
-        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, undefined, factory);
-        const session = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
+        const ctx = createTestContext(cwd);
+        const fake = createFakeLLM([kind === "empty" ? assistantText("  ") : assistantToolCall("read_file", {path: "source.py"}, "unexpected")]);
+        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined, undefined,
+            createTaskReviewRunner({callLLM: fake.callLLM}));
+        const session = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
         try {
-            const result = await session.startReview({parentContext: base, signal: base.signal,
+            const result = await session.startReview({parentContext: ctx, signal: ctx.signal,
                 evidence: {fromRound: 1, toRound: 10, requirements: "task", activity: "observations"}});
             expect(result.status).toBe("failed");
             expect(result.resultPreview).toBeUndefined();
             expect(await session.pendingNotifications()).toEqual([]);
+        } finally {await runtime.close();}
+    });
+});
+
+test("long plain-text feedback is bounded without discarding the review or splitting Unicode", async () => {
+    await withTempProject(async cwd => {
+        const ctx = createTestContext(cwd);
+        const fake = createFakeLLM([assistantText("✨".repeat(1_200))]);
+        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined, undefined,
+            createTaskReviewRunner({callLLM: fake.callLLM}));
+        try {
+            const result = await runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore})
+                .startReview({parentContext: ctx, signal: ctx.signal,
+                    evidence: {fromRound: 1, toRound: 10, requirements: "task", activity: "observations"}});
+            expect(result.status).toBe("completed");
+            expect(result.resultPreview).toBe("✨".repeat(999) + "…");
         } finally {await runtime.close();}
     });
 });
@@ -228,7 +227,7 @@ test("a review reminder survives request rebuild after compaction without enteri
 test("advisory review remains available in one-shot Hosts and archived results do not leak into later Turns", async () => {
     await withTempProject(async cwd => {
         const base = createTestContext(cwd);
-        const factory: CreateTaskReviewThread = options => ({agentId: options.agentId, async run() {return reviewResult(options.agentId);}});
+        const factory: TaskReviewRunner = async () => report;
         const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, undefined, factory);
         const binding = {sessionId: base.sessionId, toolResultStore: base.toolResultStore, allowBackgroundTasks: false};
         try {
@@ -260,9 +259,47 @@ test("task-review Provider requests have a bounded output allowance; normal main
                 await callOpenAICompatible({messages: [{role: "user", origin: "user", content: "review"}], tools: [], storage, cwd,
                     model: "test-model", kind}, {apiKey: "fake-key", baseUrl: "https://offline.invalid/v1", displayName: "offline"});
             }
-            expect(requests[0]).toMatchObject({max_tokens: 2048});
+            expect(requests[0]).toMatchObject({max_tokens: 512});
             expect(requests[1]).not.toHaveProperty("max_tokens");
         } finally {fetch.mockRestore();}
+    });
+});
+
+test("Qwen, Token Plan, DeepSeek and GLM disable thinking only for task reviews", async () => {
+    await withTempProject(async (cwd, storage) => {
+        const requests: unknown[] = [];
+        const keyName = "HICODE_TASK_REVIEW_TEST_KEY";
+        const previous = process.env[keyName];
+        process.env[keyName] = "offline-fake-key";
+        const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (_url: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+            if (typeof init?.body !== "string") throw new Error("Expected request JSON");
+            requests.push(JSON.parse(init.body));
+            return new Response('data: {"choices":[{"delta":{"content":"Recent progress is on track."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}\n\ndata: [DONE]\n\n',
+                {headers: {"Content-Type": "text/event-stream"}});
+        }, {preconnect() {}}));
+        try {
+            for (const id of ["qwen", "qwen-token-plan", "deepseek", "glm"] as const) {
+                const call = createLLMCaller({id, label: "offline", apiKeyEnv: keyName, baseUrl: "https://offline.invalid/v1"});
+                const model = id.startsWith("qwen") ? "qwen3.8-flash" : id === "deepseek" ? "deepseek-v4.1-flash" : "glm-4.7";
+                const offset = requests.length;
+                for (const kind of ["task_review", "main"] as const) {
+                    await call([{role: "user", origin: "user", content: "review"}], [], storage, cwd, model, kind);
+                }
+                expect(requests[offset]).toMatchObject({max_tokens: 512});
+                expect(requests[offset + 1]).not.toHaveProperty("max_tokens");
+                if (id.startsWith("qwen")) {
+                    expect(requests[offset]).toMatchObject({enable_thinking: false, preserve_thinking: false});
+                    expect(requests[offset + 1]).toMatchObject({enable_thinking: true, preserve_thinking: true});
+                } else {
+                    expect(requests[offset]).toMatchObject({thinking: {type: "disabled"}});
+                    expect(requests[offset + 1]).toMatchObject({thinking: {type: "enabled"}});
+                }
+            }
+        } finally {
+            fetch.mockRestore();
+            if (previous === undefined) delete process.env[keyName];
+            else process.env[keyName] = previous;
+        }
     });
 });
 

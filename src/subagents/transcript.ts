@@ -71,11 +71,12 @@ export function readSubagentTranscriptReferences(storage: HiCodeStorageLayout, d
     return [...records, latest];
 }
 type SubagentTranscriptEntry =
-    | ({
+    | {
     type: "start";
     version: 1;
     timestamp: string;
     parentSessionId: string;
+    parentToolCallId: string;
     agentId: string;
     agentType: AgentType;
     agentName?: string;
@@ -83,7 +84,7 @@ type SubagentTranscriptEntry =
     model: string;
     cwd: string;
     allowedTools: readonly string[];
-} & ({parentToolCallId: string; parentTurnId?: never} | {parentTurnId: string; parentToolCallId?: never}))
+}
     | { type: "event"; timestamp: string; event: AgentEvent }
     | {
     type: "snapshot";

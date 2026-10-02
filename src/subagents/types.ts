@@ -111,16 +111,3 @@ export type CreateSubagentThread = (
     options: CreateSubagentThreadOptions,
     request: SubagentRequest
 ) => SubagentThread;
-
-/** Framework-owned advisory work has a Turn owner, never a fabricated tool call. */
-export type TaskReviewRequest = Omit<SubagentRequest, "parentToolCallId" | "contextSnapshot" | "workspaceWriteApproved"> & {
-    agentType: "TaskReview";
-    parentTurnId: string;
-    parentToolCallId?: never;
-    contextSnapshot?: never;
-    workspaceWriteApproved?: never;
-};
-export type CreateTaskReviewThread = (
-    options: CreateSubagentThreadOptions,
-    request: TaskReviewRequest
-) => SubagentThread;

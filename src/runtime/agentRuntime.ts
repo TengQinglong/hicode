@@ -11,12 +11,12 @@ import {createSubagentFactories} from "../subagents/runSubagent.js";
 import type {
     CreateSubagentRunner,
     CreateSubagentThread,
-    CreateTaskReviewThread,
 } from "../subagents/types.js";
 import type {SubagentRegistry} from "../subagents/registry.js";
 import {createToolResultStore} from "../toolResults/index.js";
 import {createMemoryAwareAgentRunner, type MemoryRuntimeLike,} from "../memory/index.js";
 import type {HiCodeStorageLayout} from "../persistence/index.js";
+import {createTaskReviewRunner, type TaskReviewRunner} from "../tasks/review.js";
 
 export interface AgentRuntime {
     reviewApproval: ApprovalReviewer;
@@ -24,7 +24,7 @@ export interface AgentRuntime {
     compactHistory: CompactHistoryRunner;
     createSubagentRunner: CreateSubagentRunner;
     createSubagentThread: CreateSubagentThread;
-    createTaskReviewThread: CreateTaskReviewThread;
+    reviewTask: TaskReviewRunner;
 }
 
 function createProviderRunner(
@@ -96,6 +96,8 @@ export function createAgentRuntime({storage, getSources, subagents, memory}: {
         compactHistory: primary.compactHistory,
         createSubagentRunner: options => childFactories().createSubagentRunner(options),
         createSubagentThread: (options, request) => childFactories().createSubagentThread(options, request),
-        createTaskReviewThread: (options, request) => childFactories().createTaskReviewThread(options, request),
+        reviewTask: input => createTaskReviewRunner({callLLM: createLLMCaller(
+            structuredClone(getSources()[input.provider])
+        )})(input),
     };
 }

@@ -189,7 +189,7 @@ function createRequestBody(
     }));
     return {
         ...effectiveRequestFields,
-        ...(options.kind === "task_review" ? {max_tokens: 2048} : {}),
+        ...(options.kind === "task_review" ? {max_tokens: 512} : {}),
         model: options.model,
         messages: toProviderMessages(
             options.messages,
