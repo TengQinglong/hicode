@@ -6,6 +6,7 @@ def reviewed_test_dependencies(repo, version, project=None):
     pins = {
         ('pytest-dev/pytest', '5.4'): ('wcwidth==0.2.13', 'iniconfig==2.0.0', 'toml==0.10.2'),
         ('pytest-dev/pytest', '6.0'): ('iniconfig==2.0.0',),
+        ('sphinx-doc/sphinx', '3.4'): ('docutils==0.16',),
         ('sphinx-doc/sphinx', '3.5'): ('docutils==0.16',),
     }.get((repo, version), ())
     if project is not None and pins:

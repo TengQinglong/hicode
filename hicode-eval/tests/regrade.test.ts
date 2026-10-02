@@ -47,3 +47,17 @@ test('corrupted or redirected archived patches fail before Linux grading',async(
   expect(execute).not.toHaveBeenCalled();
  }finally{lock.mockRestore();execute.mockRestore();await rm(f.data,{recursive:true,force:true});}
 });
+
+test('sealed prediction recovers a patch missing only because verifier setup never began',async()=>{
+ const f=await fixture();const lock=spyOn(leases,'lease').mockResolvedValue(async()=>{});
+ const execute=spyOn(LinuxMachine.prototype,'regrade').mockImplementation(async(run,_review,_task,patch,_inputTask,_input,output)=>{
+  expect(patch).toBe(join(output,'model.patch'));expect(await readFile(patch,'utf8')).toBe(f.patch);
+  await save(join(output,'result.json'),{version:1,runId:run,instanceId:f.id,patchSha256:f.sha256,grading:'passed',reason:'official tests executed',originalExecution:'completed',modelCalls:0});
+ });
+ try{
+  await rm(join(f.evidence,'tests/model.patch'));
+  const result=await regradeRun(f.data,f.run);
+  expect(result.grading).toBe('passed');expect(execute).toHaveBeenCalledTimes(1);
+  await expect(readFile(join(f.evidence,'tests/model.patch'))).rejects.toThrow();
+ }finally{lock.mockRestore();execute.mockRestore();await rm(f.data,{recursive:true,force:true});}
+});

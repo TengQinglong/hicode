@@ -6,7 +6,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from swe import git,restore_official_test_paths,controlled_eval_script,verification_validity,project_environment,namespace_eval_commands
+from swe import git,restore_official_test_paths,controlled_eval_script,verification_validity,project_environment,namespace_eval_commands,verifier_log_directory
 from source_version import prepare_source_version
 from reviewed_test_deps import reviewed_test_dependencies
 
@@ -17,6 +17,17 @@ class OfficialTestReplay(unittest.TestCase):
         git(['init','--template='],self.repo);git(['add','-A'],self.repo);git(['commit','-qm','baseline'],self.repo)
         self.base=git(['rev-parse','HEAD'],self.repo).decode().strip()
     def tearDown(self):self.tmp.cleanup()
+    def test_runner_precreated_verifier_directory_is_reused_without_overwriting_evidence(self):
+        logs=self.root/'logs/verifier';logs.mkdir(parents=True)
+        self.assertEqual(verifier_log_directory(self.root),logs)
+        (logs/'output.txt').write_text('prior evidence')
+        with self.assertRaisesRegex(ValueError,'already contains evidence'):
+            verifier_log_directory(self.root)
+        self.assertEqual((logs/'output.txt').read_text(),'prior evidence')
+        (logs/'output.txt').unlink();logs.rmdir()
+        logs.symlink_to(self.repo, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError,'not a directory'):
+            verifier_log_directory(self.root)
     def official_patch(self):
         (self.repo/'tests/old.py').write_text('official\n');(self.repo/'tests/new.py').write_text('official new\n')
         git(['add','-A'],self.repo)
@@ -91,6 +102,7 @@ class OfficialTestReplay(unittest.TestCase):
         (self.repo/'setup.cfg').write_text('install_requires =\n')
         with self.assertRaises(ValueError):reviewed_test_dependencies('pytest-dev/pytest','5.4',self.repo)
         (self.repo/'setup.py').write_text("install_requires=['docutils>=0.12']\n")
+        self.assertEqual(reviewed_test_dependencies('sphinx-doc/sphinx','3.4',self.repo),['docutils==0.16'])
         self.assertEqual(reviewed_test_dependencies('sphinx-doc/sphinx','3.5',self.repo),['docutils==0.16'])
 
 if __name__=='__main__':unittest.main()

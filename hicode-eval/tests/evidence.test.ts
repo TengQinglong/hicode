@@ -84,6 +84,7 @@ printf '%s\n' '{"type":"result","execution":"completed","grading":"${uploadFailu
   process.env.PATH=tools+':'+oldPath;
   try {
     const machine=new LinuxMachine(config);await machine.prepare();
+    expect(calls.some(command=>command.includes('fixture-machine:/opt/hicode-eval/reviewed_test_deps.py'))).toBe(true);
     const executing=machine.execute(state,path,'fixture-secret',async()=>{});
     if(finalFailure){
       try {await executing;throw Error('Expected evidence export failure');}

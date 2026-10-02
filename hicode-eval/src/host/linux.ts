@@ -65,6 +65,7 @@ export class LinuxMachine {
     if (manifest.files['source.tar.gz'] !== hash) throw Error('Source payload changed');
     await run(this.docker('exec', this.config.machine, 'mkdir', '-p', '/opt/hicode-eval', '/opt/hicode/releases', '/eval/runs'));
     for (const name of ['runner.py', 'model_proxy.py', 'network_entry.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'scm.py', 'record.py', 'preflight.ts', 'bootstrap.py', 'swe.py', 'xarray_report.py']) await run(this.docker('cp', join(EVAL_ROOT, 'src/worker', name), this.config.machine + ':/opt/hicode-eval/' + name));
+    await run(this.docker('cp', join(EVAL_ROOT, 'src/datasets/reviewed_test_deps.py'), this.config.machine + ':/opt/hicode-eval/reviewed_test_deps.py'));
     const target = '/opt/hicode-eval/source-' + hash + '.tar.gz';
     await run(this.docker('cp', join(this.config.payload, 'source.tar.gz'), this.config.machine + ':' + target));
     this.release = await run(this.docker('exec', this.config.machine, 'python3', '/opt/hicode-eval/bootstrap.py', target, hash), { timeout: 660000 });

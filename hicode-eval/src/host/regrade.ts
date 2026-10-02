@@ -1,5 +1,5 @@
 import {constants} from 'node:fs';
-import {open, mkdir, realpath} from 'node:fs/promises';
+import {open, mkdir, realpath, writeFile} from 'node:fs/promises';
 import {join,dirname,resolve} from 'node:path';
 import {createHash, randomBytes} from 'node:crypto';
 import {z} from 'zod';
@@ -32,22 +32,33 @@ export async function regradeRun(data: string, runId: string) {
     const evidence = join(original,'evidence');
     const manifest = await readJson(join(evidence,'patch-manifest.json'),patchManifestSchema);
     const prediction = await readJson(join(evidence,'prediction.json'),predictionSchema,8*1024*1024);
-    const patchPath=join(evidence,'tests/model.patch');
+    let patchPath=join(evidence,'tests/model.patch');
     if(await realpath(dirname(patchPath))!==resolve(dirname(patchPath)))throw Error('Symlinked archived patch directory');
-    const fd = await open(patchPath,constants.O_RDONLY|constants.O_NOFOLLOW);
     let patch:Buffer;
-    try {
-      const stat = await fd.stat(); if(!stat.isFile()||stat.size>8*1024*1024)throw Error('Invalid archived patch size/type');
-      patch = await fd.readFile();
-    } finally {await fd.close();}
+    let predictionOnly = false;
+    const fd = await open(patchPath,constants.O_RDONLY|constants.O_NOFOLLOW).catch((error: NodeJS.ErrnoException) => {
+      if(error.code !== 'ENOENT')throw error;
+      predictionOnly = true;
+      return undefined;
+    });
+    if(fd){
+      try {
+        const stat = await fd.stat(); if(!stat.isFile()||stat.size>8*1024*1024)throw Error('Invalid archived patch size/type');
+        patch = await fd.readFile();
+      } finally {await fd.close();}
+    } else patch=Buffer.from(prediction.model_patch,'utf8');
+    if(patch.length>8*1024*1024)throw Error('Invalid archived patch size/type');
     const sha256 = createHash('sha256').update(patch).digest('hex');
     if (sha256!==manifest.sha256 || sha256!==createHash('sha256').update(prediction.model_patch).digest('hex') || prediction.instance_id!==task.instanceId || manifest.baseCommit!==task.baseCommit || manifest.baselineCommit!==task.baselineCommit || manifest.revision!==task.revision) throw Error('Archived prediction hash or baseline identity mismatch');
     const reviewId = randomBytes(8).toString('hex');
     const output = join(original,'rechecks',reviewId); await mkdir(output,{recursive:true,mode:0o700});
+    // A verifier setup failure can occur after sealing prediction.json but before
+    // model.patch is written. Reconstruct only in this independent recheck copy.
+    if(predictionOnly){patchPath=join(output,'model.patch');await writeFile(patchPath,patch,{mode:0o600});}
     const input:RegradeInput = {version:1,runId,reviewId,instanceId:task.instanceId,baseCommit:task.baseCommit,patchSha256:sha256,originalExecution:state.execution,originalGrading:state.grading,createdAt:new Date().toISOString()};
     await save(join(output,'input.json'),input);
     const machine = new LinuxMachine(config);
-    await machine.regrade(runId,reviewId,taskRoot,join(evidence,'tests/model.patch'),task,input,output);
+    await machine.regrade(runId,reviewId,taskRoot,patchPath,task,input,output);
     const result = await readJson(join(output,'result.json'),z.object({version:z.literal(1),runId:z.literal(runId),instanceId:z.literal(task.instanceId),patchSha256:z.literal(sha256),grading:z.enum(['passed','failed','unavailable']),reason:z.string().nullable(),originalExecution:z.literal(state.execution),modelCalls:z.literal(0)}).strict());
     return {...result,reviewId,evidencePath:output};
   } finally {await release();}

@@ -314,11 +314,21 @@ def verify_swe(root, config, uid, gid, cancelled):
     return grade_swe_patch(root, config, uid, gid, cancelled, patch)
 
 
+def verifier_log_directory(root):
+    logs = Path(root) / 'logs' / 'verifier'
+    if logs.is_symlink() or (logs.exists() and not logs.is_dir()):
+        raise ValueError('Verifier log path is not a directory')
+    # The runner creates this directory before invoking the SWE grader.
+    logs.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if any(logs.iterdir()):
+        raise ValueError('Verifier log directory already contains evidence')
+    return logs
+
+
 def grade_swe_patch(root, config, uid, gid, cancelled, patch):
     """Replay an immutable prediction in a fresh Host-owned grading workspace."""
     root = Path(root)
-    logs = root / 'logs' / 'verifier'
-    logs.mkdir(mode=0o755, parents=True, exist_ok=False)
+    logs = verifier_log_directory(root)
     prediction = {'instance_id': config['swe']['instanceId'], 'model_name_or_path': config['model']['model'], 'model_patch': patch}
     row = json.loads((root / 'tests' / 'evaluation.json').read_text())
     if row['instance_id'] != prediction['instance_id'] or row['base_commit'] != config['swe']['baseCommit'] or 'patch' in row:
