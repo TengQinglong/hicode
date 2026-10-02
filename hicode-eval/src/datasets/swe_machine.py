@@ -165,6 +165,8 @@ def main():
             target.mkdir(mode=0o700)
             extract(archive,target/'repository')
         repo=target/'repository'
+        from reviewed_test_deps import reviewed_test_dependencies
+        reviewed_test_dependencies(repo_name,version,repo)
         declaration=''
         if repo_name=='sphinx-doc/sphinx':
             from sphinx_setup import apply_setup, dependency_identity, build_requirements
@@ -200,9 +202,9 @@ def main():
             if json.loads(proof.read_text())['declarations']!=declaration:raise ValueError('Sphinx dependencies do not match source declarations')
         tooling_proof=json.loads(tooling_ready.read_text())
         if tooling_proof.get('developmentTools')!=pins:raise ValueError('Development-tool cache does not match this project')
-        if repo_name=='pydata/xarray' and reused:
-            from xarray_setup import source_version
-            source_version(repo,row['base_commit'],task_cache/'bin/python',ROOT/'upstream-metadata/xarray.git')
+        if repo_name in ('pydata/xarray','pytest-dev/pytest') and reused:
+            from source_version import prepare_source_version
+            prepare_source_version(repo_name,repo,row['base_commit'],task_cache/'bin/python',ROOT/'upstream-metadata'/(repo_name.split('/')[-1]+'.git'))
             # Only bookkeeping under .git changes; task source and assertions
             # stay frozen. Historical local bundles and runs are never rewritten.
             existing['files']['repository/.git/hicode-source-version.json']=hashlib.sha256((repo/'.git/hicode-source-version.json').read_bytes()).hexdigest()
@@ -222,7 +224,7 @@ def main():
                 atomic_json(target/'swe-task.json',existing)
                 print('Updated cached bundle environment: '+id,flush=True)
             else:print('Reusing frozen public bundle: '+id,flush=True)
-            if repo_name=='pydata/xarray':
+            if repo_name in ('pydata/xarray','pytest-dev/pytest'):
                 from protocol import atomic_json
                 atomic_json(target/'swe-task.json',existing)
             continue
@@ -230,9 +232,9 @@ def main():
         (repo/'.git/hooks').mkdir(exist_ok=True)
         git(['config','user.email','eval@localhost'],repo);git(['config','user.name','HiCode Eval'],repo)
         git(['add','-A'],repo);git(['commit','-qm','Original base tree '+row['base_commit']],repo)
-        if repo_name=='pydata/xarray':
-            from xarray_setup import source_version
-            source_version(repo,row['base_commit'],task_cache/'bin/python',ROOT/'upstream-metadata/xarray.git')
+        if repo_name in ('pydata/xarray','pytest-dev/pytest'):
+            from source_version import prepare_source_version
+            prepare_source_version(repo_name,repo,row['base_commit'],task_cache/'bin/python',ROOT/'upstream-metadata'/(repo_name.split('/')[-1]+'.git'))
         # Runtime replays this repository installation at the stable /testbed mount.
         run(editable_install_argv(task_cache/'bin/python',repo,repo_name),env={**os.environ,**project_environment(repo_name,repo)})
         git(['add','-A'],repo);git(['commit','--allow-empty','-qm','Prepared baseline'],repo)
@@ -317,6 +319,15 @@ print('SymPy original-runtime/common-parsing preflight passed')
 """
             argv=namespace_argv(['/opt/hicode-swe/env/bin/python','-c',program],project,home,logs,control,workdir='/testbed',environment=local_env)
             run(argv,timeout=30,preexec_fn=demote,env=probe_env)
+        if repo_name=='pytest-dev/pytest':
+            # Import alone accepts a bogus 0.1.dev build. Ask the project's own
+            # CLI to collect an existing public module and enforce minversion.
+            public_modules=sorted((project/'testing').glob('test_*.py'))
+            if not public_modules:raise ValueError('Missing original public Pytest test modules')
+            relative=str(public_modules[0].relative_to(project))
+            argv=namespace_argv(['python','-m','pytest','--collect-only','-q',relative],
+                                project,home,logs,control,workdir='/testbed',environment=local_env)
+            run(argv,timeout=120,preexec_fn=demote,env=probe_env)
         if repo_name=='sphinx-doc/sphinx':
             argv=namespace_argv(['tox','--current-env','-epy39','--showconfig'],project,home,logs,control,workdir='/testbed',environment=local_env)
             with (logs/'tox-preflight.txt').open('w') as output:

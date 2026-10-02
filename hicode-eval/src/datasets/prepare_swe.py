@@ -4,6 +4,7 @@ Host keeps test patches; repository and problem statement alone enter the Actor 
 import argparse
 import hashlib
 from sphinx_setup import VERSIONS as SPHINX_VERSIONS
+from reviewed_test_deps import reviewed_test_dependencies
 import json
 from pathlib import Path
 import subprocess
@@ -137,6 +138,7 @@ def environment_groups(prep, rows):
                 # Current setuptools removed it, and new docutils removed the
                 # bundled roman module. Both pins satisfy original requirements.
                 pins.extend(['setuptools==70.0.0', 'docutils==0.16'])
+            pins.extend(reviewed_test_dependencies(row['repo'], row['version']))
             if row['repo'] == 'pytest-dev/pytest':
                 # The project declares this build backend; keep it in the task
                 # cache because isolated build downloads are not reliable.
@@ -177,7 +179,9 @@ def main():
     run('cp',str(Path(__file__).with_name('legacy_python.py')),args.machine+':'+remote+'/legacy_python.py')
     run('cp',str(Path(__file__).with_name('sphinx_setup.py')),args.machine+':'+remote+'/sphinx_setup.py')
     run('cp',str(Path(__file__).with_name('xarray_setup.py')),args.machine+':'+remote+'/xarray_setup.py')
-    for filename in ['protocol.py','swe.py','xarray_report.py']:
+    run('cp',str(Path(__file__).with_name('source_version.py')),args.machine+':'+remote+'/source_version.py')
+    run('cp',str(Path(__file__).with_name('reviewed_test_deps.py')),args.machine+':'+remote+'/reviewed_test_deps.py')
+    for filename in ['protocol.py','swe.py','scm.py','xarray_report.py']:
         run('cp',str(Path(__file__).resolve().parents[1]/'worker'/filename),args.machine+':'+remote+'/'+filename)
     run('exec',args.machine,'chmod','700',remote)
     run('cp',str(Path(__file__).with_name('swe_machine.py')),args.machine+':'+remote+'/prepare.py')

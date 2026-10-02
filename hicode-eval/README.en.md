@@ -232,3 +232,13 @@ The Actor has a private filesystem root with explicit system/runtime mounts. Its
 HiCode `shutdown` is accepted as a saved cancellation reason while execution timeouts remain timeouts; event pairing, persistence and CLI exit checks still apply.
 
 Xarray preparation includes pinned CPU regression dependencies from the verified version declarations, genuine upstream SCM version metadata and per-task public regression preflight. Actor and grader reuse the same prepared environment. Tasks with missing, skipped or failing required public regressions are refused before a model starts. Old 0.12 source trees use compatible Pandas 1.3.5; unavailable CDAT dependencies remain a preparation blocker, never a passing skip. Only two verified non-strict ARM datetime XPASS results get faithful PASSED reporting; other XPASS and skipped results are unchanged. Historical scores are not rewritten. See the current [reference](../docs/reference/HICODE-EVAL.md) for boundaries and receipts.
+
+### Recheck grading of an existing SWE prediction
+
+For a fully collected, finished SWE run on the dedicated evaluation machine:
+
+```bash
+bun hicode-eval/src/cli.ts regrade --data-dir ../hicode-eval-data/runs --run RUN_ID
+```
+
+This verifies the archived model patch and frozen task identity, then runs the original verifier in a separate grading copy. It neither submits an Agent task nor calls a model. Results and test-validity evidence are stored under `runs/RUN_ID/rechecks/REVIEW_ID/`; the first score and logs remain intact. Missing or unexecuted original target tests produce `unavailable`, with details in `logs/verifier/validity.json`.

@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { validateSweTask } from './sweTasks.js';
+import type {SweTask} from './sweTasks.js';
+import type {RegradeInput} from './regrade.js';
 import { validatePublicTask, prepareTaskInputs, preparePublicTestInputs, taskSchema } from './publicTasks.js';
 import { run, readJson, save, evidenceTree, exists } from './store.js';
 import type { Config, Run } from './types.js';
@@ -26,6 +28,31 @@ export class LinuxMachine {
   private release = '';
   constructor(private readonly config: Config) {}
   private docker(...args: string[]) { return ['docker', '--context', this.config.context, ...args]; }
+  async regrade(runId:string, reviewId:string, taskRoot:string, patchPath:string, task:SweTask, input:RegradeInput, output:string):Promise<void> {
+    if(!/^[a-f0-9]{16}$/.test(runId)||!/^[a-f0-9]{16}$/.test(reviewId))throw Error('Invalid recheck identity');
+    const info=z.array(z.object({State:z.object({Running:z.literal(true)}),Config:z.object({Labels:z.record(z.string())})})).length(1).parse(JSON.parse(await run(this.docker('inspect',this.config.machine),{timeout:15000})))[0];
+    if(info.Config.Labels['dev.hicode.role']!=='eval')throw Error('Regrade requires the dedicated evaluation machine');
+    await run(this.docker('exec',this.config.machine,'sh','-c','pgrep -f "[r]unner.py" >/dev/null; code=$?; if [ "$code" -ne 1 ]; then echo "Cannot regrade while evaluation runners are active or their state is unknown" >&2; exit 1; fi'),{timeout:15000});
+    const remote=`/eval/rechecks/${runId}/${reviewId}`;
+    await run(this.docker('exec',this.config.machine,'mkdir','-p',`/eval/rechecks/${runId}`));
+    await run(this.docker('exec',this.config.machine,'mkdir',remote,remote+'/worker'));
+    for(const name of ['regrade.py','swe.py','scm.py','protocol.py','xarray_report.py'])await run(this.docker('cp',join(EVAL_ROOT,'src/worker',name),this.config.machine+':'+remote+'/worker/'+name));
+    await run(this.docker('cp',join(EVAL_ROOT,'src/datasets/source_version.py'),this.config.machine+':'+remote+'/worker/source_version.py'));
+    await run(this.docker('cp',join(EVAL_ROOT,'src/datasets/reviewed_test_deps.py'),this.config.machine+':'+remote+'/worker/reviewed_test_deps.py'));
+    await run(this.docker('cp',join(taskRoot,'repository'),this.config.machine+':'+remote+'/baseline'),{timeout:60000});
+    await run(this.docker('cp',join(taskRoot,'hidden'),this.config.machine+':'+remote+'/tests'));
+    await run(this.docker('cp',patchPath,this.config.machine+':'+remote+'/model.patch'));
+    await save(join(output,'job.json'),{dataset:'swe-bench-verified',swe:task,verifierSeconds:task.verifierSeconds,model:this.config.model});
+    for(const name of ['job.json','input.json'])await run(this.docker('cp',join(output,name),this.config.machine+':'+remote+'/'+name));
+    // No runner, tmux, provider credential or Actor release is involved.
+    await run(this.docker('exec',this.config.machine,'/opt/hicode-swe/grader/bin/python',remote+'/worker/regrade.py',remote),{timeout:(task.verifierSeconds+300)*1000});
+    for(const name of ['result.json','source-version.json','logs']){
+      const present=await run(this.docker('exec',this.config.machine,'python3','-c','import os,sys;print(int(os.path.exists(sys.argv[1])))',remote+'/'+name));
+      if(present==='1')await run(this.docker('cp',this.config.machine+':'+remote+'/'+name,join(output,name)),{timeout:60000});
+    }
+    // Check again after replay: neither the archived patch nor its frozen identity may change.
+    if(createHash('sha256').update(await readFile(patchPath)).digest('hex')!==input.patchSha256)throw Error('Archived patch changed during regrade');
+  }
   async prepare(): Promise<void> {
     const info = JSON.parse(await run(this.docker('inspect', this.config.machine), { timeout: 15000 }));
     const machine = z.array(z.object({ State: z.object({ Running: z.literal(true) }), Config: z.object({ Labels: z.record(z.string()) }) })).length(1).parse(info)[0];
@@ -37,7 +64,7 @@ export class LinuxMachine {
     const hash = createHash('sha256').update(archive).digest('hex');
     if (manifest.files['source.tar.gz'] !== hash) throw Error('Source payload changed');
     await run(this.docker('exec', this.config.machine, 'mkdir', '-p', '/opt/hicode-eval', '/opt/hicode/releases', '/eval/runs'));
-    for (const name of ['runner.py', 'model_proxy.py', 'network_entry.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'record.py', 'preflight.ts', 'bootstrap.py', 'swe.py', 'xarray_report.py']) await run(this.docker('cp', join(EVAL_ROOT, 'src/worker', name), this.config.machine + ':/opt/hicode-eval/' + name));
+    for (const name of ['runner.py', 'model_proxy.py', 'network_entry.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'scm.py', 'record.py', 'preflight.ts', 'bootstrap.py', 'swe.py', 'xarray_report.py']) await run(this.docker('cp', join(EVAL_ROOT, 'src/worker', name), this.config.machine + ':/opt/hicode-eval/' + name));
     const target = '/opt/hicode-eval/source-' + hash + '.tar.gz';
     await run(this.docker('cp', join(this.config.payload, 'source.tar.gz'), this.config.machine + ':' + target));
     this.release = await run(this.docker('exec', this.config.machine, 'python3', '/opt/hicode-eval/bootstrap.py', target, hash), { timeout: 660000 });

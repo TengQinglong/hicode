@@ -69,3 +69,7 @@ recover 用于 needs_recovery，证据不足会拒绝；resume 只恢复既有�
 周期收集失败见 `collection-error.txt`，不能仅据此判断 Agent 执行失败。快照中的符号链接只记录目标文本，不应解引用读取宿主文件。FEAL 编译只使用封存后的独立测试副本；Headless 临时根只用于判题。判题依赖准备失败是 unavailable，不能计作模型答错。
 
 准备新题可用 prepare-terminal/prepare-swe 的 `--ids ID1,ID2`，批量核对必需命令、输入与固定依赖。Django 的开发检查器随原仓库 pre-commit 版本缓存，SymPy 使用原环境声明的开发依赖；不升级旧尝试环境。公开自测 helper 与隐藏 verifier 使用不同视图；判题的私有 chroot 根不向 Agent 开放。源码正在调整时先保存批次配置和准备证据，待最新源码验证并冻结后再提交；不能复用旧 payload 声称测试了新框架。
+
+## 已完成 SWE 的仅验收复核
+
+仅在用户明确要求复验时使用 `bun hicode-eval/src/cli.ts regrade --data-dir "$HE_DATA" --run RUN_ID`。它先核对历史原题包、`prediction.json` 和原 `model.patch` 哈希，再在单独目录执行原判题；不会运行 Agent、调用模型或重交任务。结果位于 `runs/RUN_ID/rechecks/REVIEW_ID/`，含 `result.json`、`logs/verifier/validity.json`、原目标与回归测试状态；首次 run 的状态与分数不回写。验收环境、补丁或原测试节点无法完成时记录 `unavailable`，不是模型代码失败。复验成功也只是这次补丁判题结论，不改变首次执行事实。

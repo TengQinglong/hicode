@@ -11,16 +11,21 @@ import { configSchema, modelSchema, submissionSchema, idSchema } from './host/ty
 import { directory, readJson, run, save, exists } from './host/store.js';
 import { lease } from './host/lease.js';
 import { serve } from './host/server.js';
+import {regradeRun} from './host/regrade.js';
 async function main() {
   process.umask(0o077);
   const { positionals, values: v } = parseArgs({ allowPositionals: true, options: {
     network: {type:'string', default:'open'}, dataset: {type:'string'}, prep: {type:'string'}, output: {type:'string'}, ids: {type:'string'}, 'data-dir': { type: 'string' }, tasks: { type: 'string' }, 'swe-tasks': { type: 'string' }, payload: { type: 'string' }, 'docker-context': { type: 'string', default: 'colima-hicode' }, machine: { type: 'string', default: 'hicode-eval-linux' }, concurrency: { type: 'string', default: '2' }, port: { type: 'string', default: '8878' }, file: { type: 'string' }, run: { type: 'string' }, batch: { type: 'string' }, 'wait-seconds': { type: 'string', default: '30' }, source: { type: 'string' }, model: { type: 'string' }, 'model-config': { type: 'string' }, 'snapshot-worktree': { type: 'boolean' }, help: { type: 'boolean' }
   } });
   const command = positionals[0];
-  if (v.help || !command) { console.log('HiCode Eval · persistent Linux\n  serve --data-dir DIR --payload DIR --tasks DIR [--machine hicode-eval-linux] [--swe-tasks PREPARED_DIR] [--network open|isolated]\n  prepare --payload DIR [--snapshot-worktree]\n  prepare-terminal [--machine NAME] [--ids ID1,ID2]\n  prepare-swe --dataset VERIFIED_DIR --prep SWE_PREP_DIR --output EXTERNAL_DIR [--ids ID1,ID2]\n  catalog | submit --file batch.json | status [--batch ID]\n  wait --batch ID [--wait-seconds 30] | cancel --batch ID | resume --batch ID | recover --run ID | report --batch ID --file report.md'); return; }
-  if (positionals.length !== 1 || !['serve','prepare','prepare-terminal','prepare-swe','catalog','submit','status','wait','cancel','resume','recover','report'].includes(command)) throw Error('Unknown command');
+  if (v.help || !command) { console.log('HiCode Eval · persistent Linux\n  serve --data-dir DIR --payload DIR --tasks DIR [--machine hicode-eval-linux] [--swe-tasks PREPARED_DIR] [--network open|isolated]\n  prepare --payload DIR [--snapshot-worktree]\n  prepare-terminal [--machine NAME] [--ids ID1,ID2]\n  prepare-swe --dataset VERIFIED_DIR --prep SWE_PREP_DIR --output EXTERNAL_DIR [--ids ID1,ID2]\n  catalog | submit --file batch.json | status [--batch ID]\n  wait --batch ID [--wait-seconds 30] | cancel --batch ID | resume --batch ID | recover --run ID | report --batch ID --file report.md\n  regrade --data-dir DIR --run ID  # frozen SWE patch only; no Agent/model'); return; }
+  if (positionals.length !== 1 || !['serve','prepare','prepare-terminal','prepare-swe','catalog','submit','status','wait','cancel','resume','recover','report','regrade'].includes(command)) throw Error('Unknown command');
   const required = (key: keyof typeof v) => { const value = v[key]; if (typeof value !== 'string' || !value) throw Error('Missing --' + key); return value; };
   const port = z.number().int().min(1024).max(65535).parse(Number(v.port));
+  if(command==='regrade'){
+    console.log(JSON.stringify(await regradeRun(await directory(required('data-dir')),idSchema.parse(required('run'))),null,2));
+    return;
+  }
   if (command === 'prepare-swe' || command === 'prepare-terminal') {
     const args = command === 'prepare-swe' ? ['--dataset',resolve(required('dataset')),'--prep',resolve(required('prep')),'--output',resolve(required('output'))] : [];
     if (v.ids) {

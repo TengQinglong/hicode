@@ -236,3 +236,13 @@ SWE 的隔离与评分契约：
 接受 HiCode 的 `shutdown` 保存收尾原因；执行超时仍记为 timeout，保存、工具结果配对和 CLI 退出校验继续保留。
 
 Xarray 按已核对的版本声明补齐固定 CPU 回归依赖，恢复真实上游 SCM 版本，并逐题运行原基线的必需公开回归预检。Agent 和验收共用同一准备环境；缺包、跳过或基线失败会在模型启动前拦下。旧 0.12 源码桶使用兼容的 Pandas 1.3.5；缺少 CDAT 的题仍需准备可用环境，不能把跳过当通过。ARM 仅针对两项已核实、断言实际通过的 non-strict datetime XPASS 补充结果报告，其他 XPASS 和跳过不转换。历史成绩不回写。边界和回执见[当前 reference](../docs/reference/HICODE-EVAL.md)。
+
+### 仅复核已有 SWE 补丁的验收
+
+在原 run 已完成且证据完整、专用评测机可用时，可运行：
+
+```bash
+bun hicode-eval/src/cli.ts regrade --data-dir ../hicode-eval-data/runs --run RUN_ID
+```
+
+这个命令校验原 `model.patch` 哈希和冻结题包，重新运行原判题，结果保存在 `runs/RUN_ID/rechecks/REVIEW_ID/`。它不再提交任务或调用模型，也不会覆盖第一次的分数和日志。验收未启动或原目标测试没有实际执行时返回 `unavailable`；需要查看 `logs/verifier/validity.json` 和 `output.txt`。历史复验补齐的依赖及其来源单独写在 `dependency-conditions.json`。

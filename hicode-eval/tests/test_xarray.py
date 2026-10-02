@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from swe import project_environment,xarray_arm_reporting
-from xarray_setup import dependency_pins,source_version,public_preflight
+from xarray_setup import dependency_pins,public_preflight
+from source_version import prepare_source_version
 from xarray_report import report_arm_passes,PublicProof
 
 
@@ -21,8 +22,8 @@ class XarrayEnvironmentTest(unittest.TestCase):
     def test_upstream_ancestry_version_is_separate_from_synthetic_baseline(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/'.git').mkdir();metadata=root/'metadata';metadata.mkdir()
-            with patch('xarray_setup.subprocess.run',return_value=SimpleNamespace(returncode=0)),patch('xarray_setup.subprocess.check_output',side_effect=['v0.15.1-110-ga64cf2d5\n','2020-01-01T00:00:00+00:00\n','0.15.2.dev110+ga64cf2d5\n']):
-                receipt=source_version(root,'a'*40,'/python',metadata)
+            with patch('source_version.subprocess.run',return_value=SimpleNamespace(returncode=0)),patch('source_version.subprocess.check_output',side_effect=['v0.15.1-110-ga64cf2d5\n','2020-01-01T00:00:00+00:00\n','0.15.2.dev110+ga64cf2d5\n']):
+                receipt=prepare_source_version('pydata/xarray',root,'a'*40,'/python',metadata)
             self.assertEqual(receipt['version'],'0.15.2.dev110+ga64cf2d5')
             self.assertEqual(project_environment('pydata/xarray',root),{'SETUPTOOLS_SCM_PRETEND_VERSION':receipt['version']})
             receipt['version']='999\nPRIVATE_TOKEN=bad';(root/'.git/hicode-source-version.json').write_text(json.dumps(receipt))

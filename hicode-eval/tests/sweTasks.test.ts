@@ -175,6 +175,7 @@ test('Xarray submission rejects absent, skipped and wrong-environment public pre
   await writeFile(join(root,'repository/public.py'),'# original source');
   await writeFile(join(root,'instruction.md'),'public problem');await writeFile(join(root,'hidden/evaluation.json'),'{}');
   const environment='/opt/hicode-swe/cache/'+'c'.repeat(64),baseCommit='a'.repeat(40);
+  await save(join(root,'repository/.git/hicode-source-version.json'),{baseCommit,describe:'v0.15.1-10-gaaaaaaa',version:'0.15.2.dev10+gaaaaaaa'});
   const saveTask=async()=>save(join(root,'swe-task.json'),{
     kind:'swe-bench-verified',instanceId:id,revision:'c'.repeat(40),repo:'pydata/xarray',version:'0.12',
     baseCommit,harnessVersion:'4.1.0',environment,python:'3.10',verifierSeconds:1800,

@@ -43,7 +43,7 @@ export async function datasetTree(path: string, dataset: string) {
   }
   return files;
 }
-export async function validateSweTask(id: string, path: string): Promise<SweTask> {
+export async function validateFrozenSweTask(id: string, path: string): Promise<SweTask> {
   const task = await readJson(join(path, 'swe-task.json'), sweTaskSchema);
   if (task.instanceId !== id) throw Error('SWE task identity mismatch');
   checkPythonVersion(task);
@@ -53,6 +53,17 @@ export async function validateSweTask(id: string, path: string): Promise<SweTask
     Object.entries(actual).some(([name, file]) => task.files[name] !== file.sha256)) throw Error('SWE task differs from its prepared snapshot');
   // Frozen bundle separates inputs from host-only grading material; no gold patch is stored.
   if (!task.files['instruction.md'] || !task.files['hidden/evaluation.json'] || !Object.keys(task.files).some(p => p.startsWith('repository/'))) throw Error('Incomplete SWE bundle');
+  return task;
+}
+export async function validateSweTask(id: string, path: string): Promise<SweTask> {
+  const task = await validateFrozenSweTask(id,path);
+  if (task.repo === 'pytest-dev/pytest' || task.repo === 'pydata/xarray') {
+    await readJson(join(path,'repository/.git/hicode-source-version.json'),z.object({
+      baseCommit:z.literal(task.baseCommit),
+      describe:z.string().regex(/^v?[0-9]+(?:\.[0-9]+)+(?:[ab]\d+|rc\d+)?(?:\.dev\d+)?-\d+-g[a-f0-9]+$/),
+      version:z.string().regex(/^[0-9]+(?:\.[0-9]+)+(?:[ab]\d+|rc\d+)?(?:\.dev[0-9]+\+g[a-f0-9]+|\+[0-9]+\.g[a-f0-9]+)?$/),
+    }).strict());
+  }
   if (task.repo === 'pydata/xarray') {
     await readJson(join(path,'repository/.git/hicode-env-preflight.json'), z.object({
       sourceCommit:z.literal(task.baseCommit),environment:z.literal(task.environment),

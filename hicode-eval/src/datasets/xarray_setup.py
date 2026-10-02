@@ -24,48 +24,6 @@ def dependency_pins(declaration):
     return BUILD_PINS + [pin for name,pin in PINS.items() if name in names]
 
 
-def source_version(project, base_commit, python, metadata):
-    if not re.fullmatch(r'[a-f0-9]{40}',base_commit):
-        raise ValueError('Invalid Xarray source commit')
-    metadata=Path(metadata)
-    if not metadata.exists():
-        metadata.parent.mkdir(parents=True,exist_ok=True)
-        subprocess.run(['git','init','--bare','--template=',str(metadata)],check=True,timeout=15,stdout=subprocess.DEVNULL)
-    prefix=['git','-c','http.version=HTTP/1.1','-c','core.hooksPath=/dev/null','--git-dir='+str(metadata)]
-    if subprocess.run([*prefix,'cat-file','-e',base_commit+'^{commit}'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode:
-        # Public ancestry and release tags only. Never fetch answer patches or
-        # checkout blobs; this cache remains outside every Actor mount.
-        subprocess.run([*prefix,'fetch','--filter=blob:none','--no-tags',
-                        'https://github.com/pydata/xarray.git','+refs/tags/*:refs/tags/*',base_commit],
-                       check=True,timeout=180)
-    describe=subprocess.check_output([*prefix,'describe','--tags','--long',base_commit],text=True,timeout=15).strip()
-    match=re.fullmatch(r'v?([0-9]+(?:\.[0-9]+)+(?:[ab]\d+|rc\d+)?)-(\d+)-(g[a-f0-9]+)',describe)
-    if not match:raise ValueError('Unsupported upstream Xarray version description')
-    date=subprocess.check_output([*prefix,'show','-s','--format=%cI',base_commit],text=True,timeout=15).strip()
-    program="""import sys,importlib.util,os
-from setuptools_scm.version import meta,format_version
-from setuptools_scm.config import Configuration
-root,tag,distance,node,commit,date=sys.argv[1:]
-if os.path.isfile(os.path.join(root,'versioneer.py')):
-    spec=importlib.util.spec_from_file_location('versioneer',os.path.join(root,'versioneer.py'))
-    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-    config=module.get_config_from_root(root)
-    value=module.render({'closest-tag':tag,'distance':int(distance),'short':node[1:],'long':commit,'dirty':False,'date':date,'error':None},config.style)
-    module.write_to_version_file(os.path.join(root,config.versionfile_source),value)
-    print(value['version'])
-else:
-    value=meta(tag,distance=int(distance),node=node,dirty=False,config=Configuration())
-    print(format_version(value,version_scheme='guess-next-dev',local_scheme='node-and-date'))
-"""
-    version=subprocess.check_output([str(python),'-c',program,str(project),*match.groups(),base_commit,date],text=True,timeout=15).strip().splitlines()[-1]
-    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+)+(?:[ab]\d+|rc\d+)?(?:\.dev[0-9]+\+g[a-f0-9]+|\+[0-9]+\.g[a-f0-9]+)?',version):
-        raise ValueError('Invalid upstream Xarray build version')
-    receipt={'baseCommit':base_commit,'describe':describe,'version':version}
-    from protocol import atomic_json
-    atomic_json(Path(project)/'.git/hicode-source-version.json',receipt)
-    return receipt
-
-
 def public_regression_nodes(row):
     nodes=json.loads(row['PASS_TO_PASS']) if isinstance(row['PASS_TO_PASS'],str) else row['PASS_TO_PASS']
     if not isinstance(nodes,list) or not nodes or any(not isinstance(n,str) or not n.startswith('xarray/tests/') or '..' in Path(n.split('::')[0]).parts or '\n' in n for n in nodes):
