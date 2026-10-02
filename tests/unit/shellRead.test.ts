@@ -10,11 +10,11 @@ test("bounded literal waits compose with verified reads without expanding comman
 
 test("read-command analysis separates patterns, options, paths and complete pipelines", () => {
     expect(analyzeReadCommand("rg -n -F -e 'a.b()' -g '*.ts' 'src with spaces' | head -n 20")).toMatchObject({
-        kind: "search", pattern: "a.b()", paths: ["src with spaces"], singleSearch: false,
+        kind: "search", pattern: "a.b()", paths: ["src with spaces"],
         segments: [{program: "rg", next: "|"}, {program: "head"}],
     });
     expect(analyzeReadCommand("rg --files -g '*.ts' src")).toMatchObject({kind: "files", paths: ["src"]});
-    expect(analyzeReadCommand("rg -e '-leading' -- '中文 file.txt'")).toMatchObject({pattern: "-leading", paths: ["中文 file.txt"], singleSearch: true});
+    expect(analyzeReadCommand("rg -e '-leading' -- '中文 file.txt'")).toMatchObject({pattern: "-leading", paths: ["中文 file.txt"]});
     expect(analyzeReadCommand("ls -la")).toMatchObject({kind: "directory", paths: ["."]});
     expect(analyzeReadCommand("rg word src && ls tests")).toMatchObject({paths: ["src", "tests"], segments: [{next: "&&"}, {program: "ls"}]});
 });

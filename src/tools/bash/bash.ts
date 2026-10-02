@@ -2,7 +2,7 @@ import {formatTaskHeader} from "../../tasks/format.js";
 import {z} from "zod";
 import {ApprovalBudget, requestApproval} from "../../permissions/approval.js";
 import {realpath, stat} from "node:fs/promises";
-import {resolve} from "node:path";
+import {basename, resolve} from "node:path";
 import {ToolInputError, type Tool, type ToolContext} from "../types.js";
 import {matchPattern} from "../../permissions/index.js";
 import {
@@ -134,10 +134,20 @@ function runningOutput(task: ShellTaskSnapshot, service: boolean): string {
     return `Captured output (not a readiness check):\n${start ? "[Earlier output omitted; use task status for more]\n" : ""}${preview}`;
 }
 
-function formatShellResult(result: ShellExecutionResult, noMatches = false): string {
+function noMatchSearch(command: string, result: ShellExecutionResult): "rg" | "grep" | undefined {
+    if (result.termination.kind !== "exit" || result.termination.code !== 1 || result.termination.signal !== null ||
+        result.stdout.trim() || result.stderr.trim() || result.outputComplete === false) return undefined;
+    // This is a result hint, never an execution or permission decision. As in a shell,
+    // the final command usually determines the status of a command list.
+    const lastProgram = parseShellCommand(command).segments.at(-1)?.tokens[0];
+    const name = lastProgram ? basename(lastProgram) : undefined;
+    return name === "rg" || name === "grep" ? name : undefined;
+}
+
+function formatShellResult(result: ShellExecutionResult, noMatches?: "rg" | "grep"): string {
     const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
     const termination = result.termination;
-    if (noMatches) return "No matches found (rg exit code 1).";
+    if (noMatches) return `No matches found (${noMatches} exit code 1).`;
     if (termination.kind === "exit" && termination.code === 0) {
         return output || "(no output)";
     }
@@ -224,6 +234,7 @@ export const bashTool: Tool<typeof inputSchema> = {
     description: `Run shell commands, project scripts, dependencies, builds and tests; return stdout/stderr. Use read_file/write_file/edit_file for file contents, Bash rg for search, and rm for authorized file deletion.
 - Use $TMPDIR for temporary files and clean up only artifacts you created; directory grants and explicit denials still apply.
 - Each call is a separate process: pass cwd rather than relying on a previous cd. Run tests/builds directly; the runtime preserves and budgets output. Do not add tail/head/grep just to shorten results or mask failures with || echo. Search returned saved paths with rg, then read_file at relevant lines; rerun only after a relevant change or for a new check. Avoid byte truncation of non-ASCII text.
+- When independent operations need separate success/failure judgments, issue separate Bash calls in the same tool batch. A command list joined with semicolons exposes only its final status; it does not report each operation's exit code.
 - Access uses the runtime's current sandbox and approval policy. Network authorization follows actual domains/ports; dependency downloads do not inherently require leaving the sandbox. For a necessary command blocked by sandbox permissions, request require_escalated for that operation rather than changing implementation to evade the restriction. A denial or unavailable approval channel is not permission to bypass it.
 - Local search uses rg --files (paths), ls (directory entries), rg -n (content) and rg -F (literal text). Quote globs and paths; use -e for the pattern. Recognized read commands run with no writes or network, trusted host programs, no rg config/global-ignore files, and exact authorized read scopes. Read-only roles support literal rg/ls/pwd/cat/head/tail/wc/echo commands and safe combinations, not shell expansion, redirection, preprocessing or arbitrary programs. Search saved output using its exact provided path; private storage directory scans are forbidden. Use read_file before editing: Bash output does not establish a file read version. Missing rg is a host setup issue, not a reason to install during the task.
 - Run a minimal existing syntax/build/test check before starting a server. Use run_in_background for services, GUIs and watchers, omit timeout_ms, and manage the returned task ID with task. Ordinary continuable commands wait 10 seconds by default, then return the same running process as a Task; yield_time_ms changes only that window. Use task wait with its ID when its result blocks work, not sleep/pgrep loops. Omitted timeout_ms sets no hard execution limit; an explicit timeout terminates the process and its children even after yield. Restricted Ask commands stay foreground for network interaction unless explicitly yielded; one-shot Hosts and protected file commands stay foreground. Do not use shell &. For finite subprocess/signal tests, use one foreground test program to create, signal, wait for and clean up its own children in a finally block; keep normal Sandbox and permission checks. Reuse an existing managed service; stop it before restarting and do not overlap instances or take over unrelated processes with lsof/kill.
@@ -487,9 +498,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                     ...(readAccess ? {readAccess} : {}),
                     ...(workspace ? {fileWorkspace: workspace} : {}),
                 });
-                const noMatches = readAccess?.plan.singleSearch === true && result.termination.kind === "exit" &&
-                    result.termination.code === 1 && result.termination.signal === null && !result.stdout.trim() &&
-                    !result.stderr.trim() && result.outputComplete !== false;
+                const noMatches = noMatchSearch(command, result);
                 const shouldPersist =
                     (result.outputBytes ?? 0) > 30_000 ||
                     result.outputComplete === false;

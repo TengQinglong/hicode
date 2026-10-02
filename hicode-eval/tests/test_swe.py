@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from swe import export_patch, snapshot, relocate_environment, validate_swe_report
+from swe import editable_install_argv, export_patch, snapshot, relocate_environment, validate_swe_report
 from protocol import namespace_argv
 
 class SweExportTests(unittest.TestCase):
@@ -40,6 +40,14 @@ class SweExportTests(unittest.TestCase):
         self.assertNotIn('/tests',args);self.assertNotIn('/app',args)
         i=args.index('/eval/swe-envs/task');self.assertEqual(args[i+1],'/opt/hicode-swe/env')
         self.assertEqual(args[args.index('--chdir')+1],'/testbed')
+    def test_pytest_uses_reviewed_local_build_backend_in_preflight_and_actor(self):
+        self.assertEqual(editable_install_argv('/env/bin/python','/testbed','pytest-dev/pytest'),
+                         ['/env/bin/python','-m','pip','install','--no-deps','--no-build-isolation','-e','/testbed'])
+        self.assertNotIn('--no-build-isolation',editable_install_argv('/env/bin/python','/testbed','django/django'))
+    def test_sphinx_install_preserves_official_test_extra_without_new_downloads(self):
+        self.assertEqual(editable_install_argv('/python','/testbed','sphinx-doc/sphinx'),
+                         ['/python','-m','pip','install','--no-deps','--no-build-isolation','-e','/testbed[test]'])
+
     def test_report_requires_both_official_test_groups_and_consistent_resolution(self):
         item={'patch_is_None':False,'patch_exists':True,'patch_successfully_applied':True,'resolved':True,
               'tests_status':{'FAIL_TO_PASS':{'success':['fix'],'failure':[]},'PASS_TO_PASS':{'success':['regression'],'failure':[]}}}

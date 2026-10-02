@@ -156,6 +156,12 @@ export const taskTool: Tool<typeof inputSchema> = {
         if (!task) {
             return {content: await taskLookupFailure(ctx, task_id, action), outcome: "failed"};
         }
+        if (action === "stop") {
+            const operation = target.kind !== "agent" && target.status !== "running"
+                ? "Task already finished; no stop needed."
+                : "Task stopped.";
+            return {content: `${operation}\n${formatTask(task)}`, outcome: "ok"};
+        }
         return {
             content: formatTask(task),
             outcome: task.status === "failed" ? "failed" : "ok",

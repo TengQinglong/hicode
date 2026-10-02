@@ -4,9 +4,10 @@ import { runInNewContext } from 'node:vm';
 
 // Minimal DOM records observable rendering and requests, without a browser or network.
 class Element {
-  hidden = false; open = false; textContent = ''; className = ''; dataset = {}; children: Element[] = []; onclick?: () => void;
+  hidden = false; open = false; textContent = ''; className = ''; dataset = {}; attributes: Record<string,string> = {}; children: Element[] = []; onclick?: () => void;
   append(...children: Element[]) { this.children.push(...children); }
   replaceChildren(...children: Element[]) { this.children = children; }
+  setAttribute(name: string, value: string) { this.attributes[name] = value; }
 }
 test.each(['passed','needs_recovery','error'])('batch viewer distinguishes completion, collection and grading failures (%s)', async state => {
   const blocked=state==='needs_recovery';
@@ -14,7 +15,9 @@ test.each(['passed','needs_recovery','error'])('batch viewer distinguishes compl
   const el = (id: string) => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id)!; };
   const requests: string[] = []; const writes: string[] = [];
   const status = { concurrency: 2, schedulingBlocked: blocked, batches: [{ id: 'batch', name: '<img onerror=attack()>', createdAt: 1, model: { model: 'fixture' }, concurrency: 2, budget: { agentSeconds: 900 }, payload: { commit: 'abc12345' }, counts: { total: 1, completed: 1, active: 0, queued: 0, passed: 1, failed: 0, errors: 0, cancelled: 0 }, state: 'finished', report: { text: '<script>bad()</script>' } }], runs: [{ batchId: 'batch', id: 'one', task: 'fixture', budget: {agentSeconds: 900}, state: 'passed', displayState: 'passed', evidencePath: '/tmp/fixture', execution: 'completed', grading: 'passed', collection: 'complete' }] };
+  status.batches.push({ ...status.batches[0]!, id: 'batch-two', name: 'Older batch', createdAt: 0 });
   status.runs.push({ ...status.runs[0], id: 'two', task: 'queued-task', budget: {agentSeconds: 1800}, state: 'queued', displayState: 'queued', execution: 'pending', grading: 'pending', collection: 'pending' });
+  status.runs.push({ ...status.runs[0]!, batchId: 'batch-two', id: 'three', task: 'other-task' });
   if (state!=='passed') {status.runs[0]!.state=state;status.runs[0]!.displayState=state;}
   if (state==='error')status.runs[0]!.grading='unavailable';
   const sizes: number[][] = [];
@@ -46,6 +49,8 @@ test.each(['passed','needs_recovery','error'])('batch viewer distinguishes compl
   expect(el('batches').children[0].children[1].children[1].children[1].textContent).toContain('30 分钟');
   expect(el('detail').textContent).toContain('15 分钟');
   expect(el('batches').children[0].children[1].className).toBe('task-tree');
+  expect(el('batches').children[0].children[0].attributes['aria-expanded']).toBe('true');
+  expect(el('batches').children[1].children).toHaveLength(1);
   expect(el('terminal-shell').hidden).toBe(false);
   expect(el('terminal-status').textContent).toContain(blocked ? '收尾异常' : state==='error'?'任务已结束 · 判题无有效判分':'任务已结束 · 判题通过');
   if (blocked) expect(el('error').textContent).toContain('fixture');
@@ -65,5 +70,18 @@ test.each(['passed','needs_recovery','error'])('batch viewer distinguishes compl
   expect(el('terminal-shell').hidden).toBe(true);
   expect(el('terminal-empty').textContent).toContain(blocked ? '调度暂停' : '正在排队');
   expect(el('preparation-panel').open).toBe(false);
+  const collapsed = new Promise<void>(resolve => { finish = resolve; });
+  el('batches').children[0].children[0].onclick!();
+  await collapsed;
+  expect(el('batches').children[0].children).toHaveLength(1);
+  expect(el('batches').children[0].children[0].attributes['aria-expanded']).toBe('false');
+  expect(el('batch-title').textContent).toBe('<img onerror=attack()>');
+  const opened = new Promise<void>(resolve => { finish = resolve; });
+  el('batches').children[1].children[0].onclick!();
+  await opened;
+  expect(el('batches').children[0].children).toHaveLength(1);
+  expect(el('batches').children[1].children[1].className).toBe('task-tree');
+  expect(el('batches').children[1].children[0].attributes['aria-expanded']).toBe('true');
+  expect(el('batch-title').textContent).toBe('Older batch');
   expect(requests.every(r => r.startsWith('/api/status') || r.startsWith('/api/terminal') || r.startsWith('/api/preparation'))).toBe(true);
 });

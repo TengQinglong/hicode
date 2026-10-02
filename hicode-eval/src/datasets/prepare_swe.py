@@ -3,6 +3,7 @@ Host keeps test patches; repository and problem statement alone enter the Actor 
 """
 import argparse
 import hashlib
+from sphinx_setup import VERSIONS as SPHINX_VERSIONS
 import json
 from pathlib import Path
 import subprocess
@@ -17,6 +18,7 @@ PYTHON_BY_REPO_VERSION = {
     ('django/django', '5.0'): '3.11',
     **{('sympy/sympy', version): '3.9' for version in ('1.0', '1.1', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12')},
     **{('pytest-dev/pytest', version): '3.9' for version in ('5.0', '5.1', '5.2', '5.4', '6.0', '6.2', '7.2')},
+    **{('sphinx-doc/sphinx', version): '3.9' for version in SPHINX_VERSIONS},
     **{('pydata/xarray', version): '3.10' for version in ('0.12', '2022.03', '2022.06', '2022.09')},
 }
 
@@ -32,6 +34,8 @@ RECIPE_SHA256 = {
     **{('pydata/xarray', version): '57cd6f90cac8623e1c337e57b766848e6e527b44d41f311d587d0db62dc9f944'
        for version in ('0.12', '2022.03', '2022.06', '2022.09')},
 }
+PYTEST_LEGACY_BACKPORT = 'importlib-metadata==4.13.0'
+PYTEST_BUILD_BACKEND = 'setuptools-scm[toml]==7.1.0'
 
 def selected_rows(dataset, ids):
     dataset = Path(dataset)
@@ -71,6 +75,9 @@ def environment_groups(prep, rows):
                                'pip_packages':['mpmath==1.3.0','flake8-comprehensions'],
                                'install':'python -m pip install -e .',
                                'test_cmd':"PYTHONWARNINGS='ignore::UserWarning,ignore::SyntaxWarning' bin/test -C --verbose"}
+        elif row['repo'] == 'sphinx-doc/sphinx':
+            from sphinx_setup import reviewed_recipe
+            expected_recipe = reviewed_recipe(row['version'])
         else:
             expected_recipe = None
         if identity in result:
@@ -112,7 +119,16 @@ def environment_groups(prep, rows):
                 if root not in dependency.parents or hashlib.sha256(dependency.read_bytes()).hexdigest() != source['sha256']:
                     raise ValueError('Original dependency input changed or escaped')
             # The reviewed recipes explicitly use these pip pins (xarray has no_use_env).
-            requirement_bytes = ('\n'.join(group['recipe']['pip_packages']) + '\n').encode()
+            pins = list(group['recipe']['pip_packages'])
+            if row['repo'] == 'pytest-dev/pytest':
+                # The project declares this build backend; keep it in the task
+                # cache because isolated build downloads are not reliable.
+                pins.append(PYTEST_BUILD_BACKEND)
+                if row['version'] in ('5.0', '5.1', '5.2', '5.4'):
+                    # Pytest 5.x also declares this runtime dependency, but
+                    # the harness pin list omits it. Runtime uses --no-deps.
+                    pins.append(PYTEST_LEGACY_BACKPORT)
+            requirement_bytes = ('\n'.join(pins) + '\n').encode()
         result[identity] = {'rows':[row], 'requirements':requirement_bytes}
     return list(result.values())
 
@@ -141,6 +157,7 @@ def main():
     run('exec',args.machine,'mkdir','-p','/opt/hicode-swe/staging','/opt/hicode-swe/env','/testbed')
     remote='/opt/hicode-swe/staging'
     run('cp',str(wheel),args.machine+':'+remote+'/harness.whl')
+    run('cp',str(Path(__file__).with_name('sphinx_setup.py')),args.machine+':'+remote+'/sphinx_setup.py')
     for filename in ['protocol.py','swe.py']:
         run('cp',str(Path(__file__).resolve().parents[1]/'worker'/filename),args.machine+':'+remote+'/'+filename)
     run('exec',args.machine,'chmod','700',remote)

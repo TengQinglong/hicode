@@ -14,6 +14,11 @@ from protocol import atomic_json, namespace_argv
 
 ENV_MOUNT = '/opt/hicode-swe/env'
 
+def editable_install_argv(python, project, repo):
+    args = [str(python), '-m', 'pip', 'install', '--no-deps']
+    if repo in ('pytest-dev/pytest', 'sphinx-doc/sphinx'): args.append('--no-build-isolation')
+    return [*args, '-e', str(project) + ('[test]' if repo == 'sphinx-doc/sphinx' else '')]
+
 
 def snapshot(source, target):
     """Copy file objects without following symlinks or using Agent-controlled Git."""

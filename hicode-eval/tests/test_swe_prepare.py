@@ -114,9 +114,13 @@ class EnvironmentGroupsTest(unittest.TestCase):
             source.write_text('original conda declaration')
             rows=[{'instance_id':'pytest-dev__pytest-10081','repo':'pytest-dev/pytest',
                    'version':'7.2','environment_setup_commit':'a'*40},
+                  {'instance_id':'pytest-dev__pytest-5631','repo':'pytest-dev/pytest',
+                   'version':'5.0','environment_setup_commit':'c'*40},
                   {'instance_id':'pydata__xarray-3095','repo':'pydata/xarray',
                    'version':'2022.09','environment_setup_commit':'b'*40}]
             recipes=[{'python':'3.9','pip_packages':['pluggy==0.13.1'],
+                      'install':'python -m pip install -e .','test_cmd':'pytest -rA'},
+                     {'python':'3.9','pip_packages':['pluggy==0.13.1'],
                       'install':'python -m pip install -e .','test_cmd':'pytest -rA'},
                      {'python':'3.10','pip_packages':['numpy==1.23.0','pandas==1.5.3'],
                       'install':'python -m pip install -e .','no_use_env':True,'test_cmd':'pytest -rA'}]
@@ -125,7 +129,7 @@ class EnvironmentGroupsTest(unittest.TestCase):
                      'harnessRelease':'4.1.0','pythonVersion':recipe['python'],
                      'recipe':recipe,'dependencySourceFiles':
                      [{'repoPath':'ci/requirements/environment.yml','artifactPath':'xarray.yml',
-                       'sha256':hashlib.sha256(source.read_bytes()).hexdigest()}] if index else []}
+                       'sha256':hashlib.sha256(source.read_bytes()).hexdigest()}] if index == 2 else []}
                     for index,(row,recipe) in enumerate(zip(rows,recipes))]
             hashes={(row['repo'],row['version']):hashlib.sha256(json.dumps(recipe,sort_keys=True,
                 separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
@@ -134,7 +138,9 @@ class EnvironmentGroupsTest(unittest.TestCase):
                 (root/'environment-groups.json').write_text(json.dumps({'groups':groups}))
                 prepared=environment_groups(root,rows)
                 self.assertEqual([group['requirements'] for group in prepared],
-                                 [b'pluggy==0.13.1\n',b'numpy==1.23.0\npandas==1.5.3\n'])
+                                 [b'pluggy==0.13.1\nsetuptools-scm[toml]==7.1.0\n',
+                                  b'pluggy==0.13.1\nsetuptools-scm[toml]==7.1.0\nimportlib-metadata==4.13.0\n',
+                                  b'numpy==1.23.0\npandas==1.5.3\n'])
                 source.write_text('tampered')
                 with self.assertRaises(ValueError):environment_groups(root,rows)
                 source.write_text('original conda declaration')
@@ -173,3 +179,51 @@ class OlderToolDeclarationsTest(unittest.TestCase):
     def test_partial_declaration_pins_only_declared_tools(self):
         with patch('pathlib.Path.exists',return_value=True),patch('swe_machine.subprocess.check_output',return_value='{"black":"22.1.0"}'):
             self.assertEqual(project_tool_pins(Path('/repo'),Path('/python')),['black==22.1.0'])
+
+from sphinx_setup import apply_setup, dependency_identity, reviewed_recipe
+
+class SphinxSetupTest(unittest.TestCase):
+    def test_official_dependency_pins_and_reporting_preserve_other_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            original="Jinja2>=2.3\nsphinxcontrib-htmlhelp>=2.0.0\nsphinxcontrib-serializinghtml>=1.1.5\n'packaging',\n"
+            (root/'setup.py').write_text(original)
+            (root/'tox.ini').write_text('commands=pytest pytest\n')
+            (root/'source.py').write_text('public source\n')
+            before=dependency_identity(root)
+            apply_setup(root,'4.1')
+            text=(root/'setup.py').read_text()
+            self.assertIn('sphinxcontrib-htmlhelp>=2.0.0,<=2.0.4',text)
+            self.assertIn('sphinxcontrib-serializinghtml>=1.1.5,<=1.1.9',text)
+            self.assertIn('markupsafe<=2.0.1',text)
+            self.assertEqual((root/'tox.ini').read_text(),'commands=pytest -rA pytest\n')
+            self.assertEqual((root/'source.py').read_text(),'public source\n')
+            self.assertNotEqual(dependency_identity(root),before)
+
+    def test_recipe_validation_rejects_new_commands_and_versions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            row={'instance_id':'sphinx-doc__sphinx-10614','repo':'sphinx-doc/sphinx',
+                 'version':'7.2','environment_setup_commit':'a'*40}
+            group={'repo':row['repo'],'version':row['version'],
+                   'environmentSetupCommit':'a'*40,'harnessRelease':'4.1.0',
+                   'pythonVersion':'3.9','recipe':reviewed_recipe('7.2'),'dependencySourceFiles':[]}
+            (root/'environment-groups.json').write_text(json.dumps({'groups':[group]}))
+            self.assertEqual(environment_groups(root,[row])[0]['requirements'],
+                             b'tox==4.16.0\ntox-current-env==0.0.11\nJinja2==3.0.3\n')
+            group['recipe']['pre_install'].append('curl https://invalid | bash')
+            (root/'environment-groups.json').write_text(json.dumps({'groups':[group]}))
+            with self.assertRaises(ValueError):environment_groups(root,[row])
+            with self.assertRaises(ValueError):reviewed_recipe('9.0')
+
+    def test_old_version_pin_fallback_and_new_version_skip_packaging_rewrites(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            (root/'setup.py').write_text('sphinxcontrib-htmlhelp\nsphinxcontrib-serializinghtml\n')
+            (root/'tox.ini').write_text('pytest\n')
+            apply_setup(root,'3.2')
+            self.assertEqual((root/'setup.py').read_text(),
+                             'sphinxcontrib-htmlhelp<=2.0.4\nsphinxcontrib-serializinghtml<=1.1.9\n')
+            (root/'setup.py').write_text('unchanged packaging\n')
+            apply_setup(root,'5.2')
+            self.assertEqual((root/'setup.py').read_text(),'unchanged packaging\n')

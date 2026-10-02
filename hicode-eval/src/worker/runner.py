@@ -124,10 +124,10 @@ try:
     if is_swe:
         if swe_environment.exists():raise ValueError('SWE attempt environment already exists')
         shutil.copytree(config['swe']['environment'],swe_environment,symlinks=True)
-        from swe import relocate_environment
+        from swe import editable_install_argv, relocate_environment
         relocate_environment(swe_environment,config['swe']['environment'])
         subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(swe_environment)],check=True)
-        command(namespace(['/opt/hicode-swe/env/bin/python','-m','pip','install','--no-deps','-e','/testbed']),timeout=60,output_path=logs/'repo-install.txt')
+        command(namespace(editable_install_argv('/opt/hicode-swe/env/bin/python','/testbed',config['swe']['repo'])),timeout=60,output_path=logs/'repo-install.txt')
     for required in config.get('commands',[]):
         if not shutil.which(required):raise RuntimeError('Task environment missing command: '+required)
     packages=config.get('packages',[])

@@ -30,7 +30,7 @@ if(typeof ResizeObserver!=='undefined'){
 }
 // The viewer never services clipboard/title/window commands originating in task output.
 for(const code of [0,1,2,52])terminal.parser.registerOscHandler(code,()=>true);
-let selected=null,selectedBatch=null,revision='',generation=0,timer=null,refreshPending=false,ticking=false;
+let selected=null,selectedBatch=null,expandedBatch=null,revision='',generation=0,timer=null,refreshPending=false,ticking=false;
 function refresh(){if(ticking){refreshPending=true;return;}clearTimeout(timer);void tick();}
 const label={pending:'待处理',completed:'正常完成',timeout:'超时',cancelled:'已取消',failed:'失败',passed:'通过',unavailable:'无有效判分',complete:'已回收',retained:'现场保留'};
 const limit=seconds=>seconds%60===0?seconds/60+' 分钟':seconds+' 秒';
@@ -46,7 +46,8 @@ function button(title,meta,active,onclick){const b=document.createElement('butto
 function cards(values){return values.map(([name,value])=>{const card=document.createElement('div');const number=document.createElement('strong');number.textContent=value;const text=document.createElement('span');text.textContent=name;card.append(number,text);return card;});}
 async function tick(){if(ticking)return;ticking=true;try{
   const data=await api('status');$('connection').textContent=data.schedulingBlocked?'调度暂停 · 请检查异常记录':'已连接 · 并发上限 '+data.concurrency;const blocked=data.runs.filter(r=>r.state==='needs_recovery');$('error').textContent=data.schedulingBlocked?(blocked.length?'调度暂停：'+blocked.map(r=>r.task).join('、')+' 的执行或收尾尚未确认。运行中的任务继续，新任务暂不启动。'+(blocked[0].note?' 原因：'+blocked[0].note.slice(-700):''):'调度暂停：状态保存或回收失败，请检查服务日志。'):'';
-  if(!data.batches.some(b=>b.id===selectedBatch)){selectedBatch=data.batches[0]?.id||null;choose(null);}
+  if(!data.batches.some(b=>b.id===selectedBatch)){selectedBatch=data.batches[0]?.id||null;expandedBatch=selectedBatch;choose(null);}
+  if(expandedBatch&&!data.batches.some(b=>b.id===expandedBatch))expandedBatch=null;
   const batch=data.batches.find(b=>b.id===selectedBatch);
   if(batch){
     $('batch-title').textContent=batch.name;
@@ -60,8 +61,15 @@ async function tick(){if(ticking)return;ticking=true;try{
   }
   $('batches').replaceChildren(...data.batches.map(b=>{
     const group=document.createElement('div');
-    group.append(button(b.name,new Date(b.createdAt*1000).toLocaleString()+' · '+b.counts.completed+'/'+b.counts.total+' · '+names[b.state],b.id===selectedBatch,()=>{selectedBatch=b.id;choose(null);refresh();}));
-    if(b.id===selectedBatch){
+    const expanded=b.id===expandedBatch;
+    const heading=button(b.name,new Date(b.createdAt*1000).toLocaleString()+' · '+b.counts.completed+'/'+b.counts.total+' · '+names[b.state],b.id===selectedBatch,()=>{
+      if(expandedBatch===b.id)expandedBatch=null;
+      else{expandedBatch=b.id;if(selectedBatch!==b.id){selectedBatch=b.id;choose(null);}}
+      refresh();
+    });
+    heading.className+=' batch-toggle';heading.setAttribute('aria-expanded',String(expanded));
+    group.append(heading);
+    if(expanded){
       const tasks=document.createElement('div');tasks.className='task-tree';
       tasks.append(...data.runs.filter(r=>r.batchId===b.id).map(r=>button(r.task,runLabel(r)+' · '+limit(r.budget.agentSeconds)+' 上限',r.id===selected,()=>{choose(r.id);refresh();})));
       group.append(tasks);

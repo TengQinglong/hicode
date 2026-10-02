@@ -4,6 +4,7 @@ import type {ShellRunnerLike} from "../../src/tools/bash/shellRunner.js";
 import {createTaskRuntimeForTest} from "../helpers/taskRuntime.js";
 import {createTestContext} from "../helpers/testContext.js";
 import {withTempProject} from "../helpers/tempProject.js";
+import {waitForTaskCompletion} from "../../src/tasks/wait.js";
 
 {
     const toolName = "task";
@@ -78,6 +79,33 @@ import {withTempProject} from "../helpers/tempProject.js";
         });
     });
 }
+
+test("stopping an already failed Shell succeeds without changing its process result", async () => {
+    await withTempProject(async cwd => {
+        const ctx = createTestContext(cwd);
+        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner);
+        const session = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
+        ctx.tasks = session;
+        const tools = createToolRuntime();
+        try {
+            const task = await session.startShell({command: "printf 'original failure'; exit 7", cwd, toolCallId: "failed-shell"});
+            await waitForTaskCompletion(session, [task.id], ctx.signal, "shell");
+            expect(await session.pendingNotifications()).toHaveLength(1);
+            const args = JSON.stringify({action: "stop", task_id: task.id});
+            const stopped = await tools.executeTool("task", args, ctx, "stop-failed");
+            expect(stopped.outcome).toBe("ok");
+            expect(stopped.modelContent).toContain("Task already finished; no stop needed.");
+            expect(stopped.modelContent).toContain("status: failed");
+            expect(stopped.modelContent).toContain("exit code 7");
+            expect(stopped.modelContent).toContain("original failure");
+            expect(await session.get(task.id)).toMatchObject({status: "failed", termination: {kind: "exit", code: 7}});
+            expect(await session.pendingNotifications()).toHaveLength(0);
+            expect((await tools.executeTool("task", args, ctx, "stop-again")).outcome).toBe("ok");
+            const status = await tools.executeTool("task", JSON.stringify({action: "status", task_id: task.id}), ctx, "status-failed");
+            expect(status.outcome).toBe("failed");
+        } finally {await runtime.close();}
+    });
+});
 
 test("task 默认停止自有 Agent，已删除的 discard 在 Schema 边界拒绝", async () => {
     await withTempProject(async cwd => {

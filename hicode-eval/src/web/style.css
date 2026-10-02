@@ -52,6 +52,9 @@ h1 { font-size: 18px; font-weight: 650; letter-spacing: -.3px; margin: 0; overfl
 footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 11px; }
 .run { display: block; width: 100%; text-align: left; border-color: transparent; background: transparent; margin: 4px 0; padding: 10px; }
 .run.active { border-color: #d3e6df; background: #eaf4f1; color: #175e54; box-shadow: inset 2px 0 #36a18f; }
+.run.batch-toggle { position: relative; padding-right: 32px; }
+.run.batch-toggle::after { content: ''; position: absolute; right: 14px; top: 50%; width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-70%) rotate(45deg); }
+.run.batch-toggle[aria-expanded="true"]::after { transform: translateY(-25%) rotate(225deg); }
 .run b { display: block; font-size: 12px; font-weight: 550; overflow-wrap: anywhere; }
 .run small { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
 details { margin-top: 8px; color: var(--muted); font-size: 12px; }

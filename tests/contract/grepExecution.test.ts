@@ -23,6 +23,33 @@ test("native regex errors remain failures; PCRE and multiline are explicit rg op
     });
 });
 
+test("the last search command reports exit 1 as no matches without hiding actual errors", async () => {
+    await withTempProject(async cwd => {
+        await writeFile(join(cwd, "source.txt"), "present\n");
+        const ctx = createTestContext(cwd);
+        const run = (command: string) => executeToolResult("bash", JSON.stringify({command}), ctx, command);
+        for (const command of [
+            "rg -n ABSENT source.txt",
+            `cd '${cwd}' && rg -n ABSENT source.txt`,
+            "printf '' && grep -n ABSENT source.txt",
+        ]) {
+            const result = await run(command);
+            expect(result.outcome).toBe("ok");
+            expect(result.modelContent).toContain("No matches found (");
+            expect(result.modelContent).toContain("exit code 1");
+        }
+        for (const command of [
+            "rg -n -e '[' source.txt",
+            "rg -n ABSENT missing.txt",
+            "cd missing && rg -n ABSENT source.txt",
+        ]) {
+            const result = await run(command);
+            expect(result.outcome).toBe("failed");
+            expect(result.modelContent).not.toContain("No matches found");
+        }
+    });
+});
+
 test("large saved results are searched without the old per-file limit and remain session scoped", async () => {
     await withTempProject(async cwd => {
         const ctx = createTestContext(cwd);

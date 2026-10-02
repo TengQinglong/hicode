@@ -6,7 +6,6 @@ export interface ReadCommand {
     paths: string[];
     kind: "search" | "files" | "directory" | "read";
     pattern?: string;
-    singleSearch: boolean;
 }
 
 const RG_SWITCHES = new Set(["files", "files-with-matches", "files-without-match", "count", "count-matches",
@@ -23,7 +22,7 @@ const RG_SHORT_VALUES: Record<string, string> = {e: "regexp", g: "glob", t: "typ
 export function analyzeReadCommand(command: string): ReadCommand | undefined {
     const parsed = parseShellCommand(command);
     if (command.includes("\0") || !parsed.literal || parsed.segments.length > 16) return undefined;
-    const result: ReadCommand = {segments: [], paths: [], kind: "read", singleSearch: false};
+    const result: ReadCommand = {segments: [], paths: [], kind: "read"};
     for (let segmentIndex = 0; segmentIndex < parsed.segments.length; segmentIndex++) {
         const segment = parsed.segments[segmentIndex]!;
         const original = segment.tokens[0]!;
@@ -105,6 +104,5 @@ export function analyzeReadCommand(command: string): ReadCommand | undefined {
         result.segments.push({program: original, args, ...(segment.next ? {next: segment.next} : {})});
     }
     if (result.segments.every(segment => basename(segment.program) === "sleep")) return undefined;
-    result.singleSearch = result.segments.length === 1 && basename(result.segments[0]!.program) === "rg" && result.kind !== "read";
     return result;
 }

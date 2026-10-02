@@ -1,5 +1,6 @@
 """Linux setup stage. Cached dependencies once; independent frozen public base trees."""
 import hashlib
+from sphinx_setup import VERSIONS as SPHINX_VERSIONS
 import json
 import os
 import platform
@@ -20,6 +21,7 @@ PYTHON_BY_REPO_VERSION={
     ('django/django','5.0'):'3.11',
     **{('sympy/sympy',version):'3.9' for version in ('1.0','1.1','1.4','1.5','1.6','1.7','1.8','1.9','1.10','1.11','1.12')},
     **{('pytest-dev/pytest',version):'3.9' for version in ('5.0','5.1','5.2','5.4','6.0','6.2','7.2')},
+    **{('sphinx-doc/sphinx', version): '3.9' for version in SPHINX_VERSIONS},
     **{('pydata/xarray',version):'3.10' for version in ('0.12','2022.03','2022.06','2022.09')},
 }
 
@@ -109,14 +111,17 @@ def main():
         # Original requirements include native bindings; install their actual headers once.
         run(['apt-get','-o','Acquire::Retries=1','-o','Acquire::http::Timeout=20','-o','Acquire::https::Timeout=20','update'])
         headers=['python3.11-dev'] if python=='3.11' else []
+        if repo_name=='sphinx-doc/sphinx': headers.append('graphviz')
         run(['apt-get','install','-y','--no-install-recommends','libmemcached-dev','zlib1g-dev','libffi-dev',*headers])
         run([uv,'venv','--seed','--python',python,str(cache)],env=env)
         run([uv,'pip','install','--python',str(cache/'bin/python'),'-r',str(STAGE/'requirements.txt')],env=env)
         installed=subprocess.check_output([uv,'pip','freeze','--python',str(cache/'bin/python')],env=env,text=True)
         ready.write_text(json.dumps({'python':python,'requirementsSha256':hashlib.sha256((STAGE/'requirements.txt').read_bytes()).hexdigest(),'resolvedPackages':installed,'mode':'shared-linux-development'}))
     bundles=ROOT/'bundles';bundles.mkdir(exist_ok=True)
+    from swe import editable_install_argv
     for row in rows:
         id=row['instance_id'];target=bundles/id
+        reused=False
         if target.exists():
             if (target/'swe-task.json').exists():
                 existing=json.loads((target/'swe-task.json').read_text())
@@ -124,21 +129,28 @@ def main():
                     for name,sha in existing['files'].items():
                         if hashlib.sha256(os.fsencode(os.readlink(target/name)) if (target/name).is_symlink() else (target/name).read_bytes()).hexdigest()!=sha:raise ValueError('Cached SWE bundle changed')
                     (target/'repository/.git/hooks').mkdir(exist_ok=True)
-                    print('Reusing frozen public bundle: '+id,flush=True);continue
-            raise ValueError('Incomplete or mismatched cached bundle; inspect before removing: '+id)
-        archive=STAGE/(row['base_commit']+'.tar.gz')
-        if not archive.exists():
-            partial=archive.with_suffix('.partial')
-            try:
-                run(['curl','--http1.1','-fL','--retry','3','--retry-all-errors','--retry-delay','1',
-                     '--connect-timeout','20','--max-time','120',
-                     'https://codeload.github.com/'+repo_name+'/tar.gz/'+row['base_commit'],'-o',str(partial)])
-                partial.replace(archive)
-            finally:partial.unlink(missing_ok=True)
-        target.mkdir(mode=0o700)
-        repo=target/'repository';extract(archive,repo)
+                    reused=True
+            if not reused:raise ValueError('Incomplete or mismatched cached bundle; inspect before removing: '+id)
+        else:
+            archive=STAGE/(row['base_commit']+'.tar.gz')
+            if not archive.exists():
+                partial=archive.with_suffix('.partial')
+                try:
+                    run(['curl','--http1.1','-fL','--retry','3','--retry-all-errors','--retry-delay','1',
+                         '--connect-timeout','20','--max-time','120',
+                         'https://codeload.github.com/'+repo_name+'/tar.gz/'+row['base_commit'],'-o',str(partial)])
+                    partial.replace(archive)
+                finally:partial.unlink(missing_ok=True)
+            target.mkdir(mode=0o700)
+            extract(archive,target/'repository')
+        repo=target/'repository'
+        declaration=''
+        if repo_name=='sphinx-doc/sphinx':
+            from sphinx_setup import apply_setup, dependency_identity, build_requirements
+            if not reused: apply_setup(repo,version)
+            declaration=dependency_identity(repo)
         pins=project_tool_pins(repo,cache/'bin/python') if repo_name=='django/django' else []
-        tooling_key=hashlib.sha256((key+json.dumps(pins)+'-development-tools-v1').encode()).hexdigest()
+        tooling_key=hashlib.sha256((key+json.dumps(pins)+declaration+'-development-tools-v1').encode()).hexdigest()
         task_cache=ROOT/'cache'/tooling_key;tooling_ready=task_cache/'.ready.json'
         if not tooling_ready.exists():
             if task_cache.exists():raise ValueError('Incomplete development-tool cache; inspect before removing')
@@ -149,14 +161,38 @@ def main():
             packages=subprocess.check_output([uv,'pip','freeze','--python',str(task_cache/'bin/python')],env=env,text=True)
             tooling_ready.write_text(json.dumps({'python':python,'requirementsSha256':hashlib.sha256((STAGE/'requirements.txt').read_bytes()).hexdigest(),
                 'developmentTools':pins,'resolvedPackages':packages,'mode':'shared-linux-development'}))
+        if repo_name=='sphinx-doc/sphinx':
+            proof=task_cache/'.project-dependencies.json'
+            backend=build_requirements(repo)
+            installed_proof=json.loads(proof.read_text()) if proof.exists() else {}
+            if installed_proof.get('buildRequirements')!=backend:
+                if backend:run([uv,'pip','install','--python',str(task_cache/'bin/python'),*backend],env=env)
+            if not proof.exists():
+                run([str(task_cache/'bin/python'),'-m','pip','install','--no-build-isolation','-e',str(repo)+'[test]'])
+                run([str(task_cache/'bin/python'),'-m','pip','uninstall','-y','Sphinx'])
+                packages=subprocess.check_output([uv,'pip','freeze','--python',str(task_cache/'bin/python')],env=env,text=True)
+                proof.write_text(json.dumps({'declarations':declaration,'buildRequirements':backend,'resolvedPackages':packages}))
+            elif installed_proof.get('buildRequirements')!=backend:
+                installed_proof['buildRequirements']=backend
+                installed_proof['resolvedPackages']=subprocess.check_output([uv,'pip','freeze','--python',str(task_cache/'bin/python')],env=env,text=True)
+                proof.write_text(json.dumps(installed_proof))
+            if json.loads(proof.read_text())['declarations']!=declaration:raise ValueError('Sphinx dependencies do not match source declarations')
         tooling_proof=json.loads(tooling_ready.read_text())
         if tooling_proof.get('developmentTools')!=pins:raise ValueError('Development-tool cache does not match this project')
+        if reused:
+            if existing['environment']!=str(task_cache):
+                from protocol import atomic_json
+                existing['environment']=str(task_cache)
+                atomic_json(target/'swe-task.json',existing)
+                print('Updated cached bundle environment: '+id,flush=True)
+            else:print('Reusing frozen public bundle: '+id,flush=True)
+            continue
         git(['init','--template='],repo)
         (repo/'.git/hooks').mkdir(exist_ok=True)
         git(['config','user.email','eval@localhost'],repo);git(['config','user.name','HiCode Eval'],repo)
         git(['add','-A'],repo);git(['commit','-qm','Original base tree '+row['base_commit']],repo)
         # Runtime replays this repository installation at the stable /testbed mount.
-        run([str(task_cache/'bin/python'),'-m','pip','install','--no-deps','-e',str(repo)])
+        run(editable_install_argv(task_cache/'bin/python',repo,repo_name))
         git(['add','-A'],repo);git(['commit','--allow-empty','-qm','Prepared baseline'],repo)
         baseline=git(['rev-parse','HEAD'],repo)
         git(['gc','--prune=now'],repo)
@@ -166,6 +202,7 @@ def main():
             'sympy/sympy':'sympy',
             'pytest-dev/pytest':'pytest',
             'pydata/xarray':'xarray',
+            'sphinx-doc/sphinx':'Sphinx',
         }[repo_name]
         run([str(task_cache/'bin/python'),'-m','pip','uninstall','-y',project_package])
         (target/'instruction.md').write_text(row['problem_statement'])
@@ -200,18 +237,22 @@ def main():
             'sympy/sympy':'sympy,mpmath',
             'pytest-dev/pytest':'pytest,pluggy',
             'pydata/xarray':'xarray,numpy,pandas',
+            'sphinx-doc/sphinx':'sphinx,pytest,tox,jinja2',
         }[repo_name]
         probe_env={'PATH':'/opt/hicode-swe/env/bin:'+os.environ['PATH'],
                    'HOME':str(home),'LANG':'C.UTF-8'}
-        if repo_name=='pytest-dev/pytest':
-            # Pytest uses src/ layout, so a bare import from /testbed would miss
-            # the source tree. Match the real runner's editable install first.
-            install=namespace_argv(['/opt/hicode-swe/env/bin/python','-m','pip',
-                                    'install','--no-deps','-e','/testbed'],
+        if repo_name in ('pytest-dev/pytest','sphinx-doc/sphinx'):
+            # Install the task's source registration using cached build backends,
+            # matching the real runner before imports and tox discovery.
+            install=namespace_argv(editable_install_argv('/opt/hicode-swe/env/bin/python','/testbed',repo_name),
                                    project,home,logs,control,workdir='/testbed',environment=local_env)
             run(install,timeout=60,preexec_fn=demote,env=probe_env)
         argv=namespace_argv(['/opt/hicode-swe/env/bin/python','-c',f"import sys,{imports};assert sys.version_info[:2]=={version_tuple!r};assert sys.prefix=='/opt/hicode-swe/env';print('SWE namespace/import preflight passed')"],project,home,logs,control,workdir='/testbed',environment=local_env)
         run(argv,timeout=30,preexec_fn=demote,env=probe_env)
+        if repo_name=='sphinx-doc/sphinx':
+            argv=namespace_argv(['tox','--current-env','-epy39','--showconfig'],project,home,logs,control,workdir='/testbed',environment=local_env)
+            with (logs/'tox-preflight.txt').open('w') as output:
+                run(argv,timeout=60,preexec_fn=demote,env=probe_env,stdout=output,stderr=subprocess.STDOUT)
     print('Ready: '+str(len(rows))+' SWE bundles; no model or hidden assertions executed',flush=True)
 
 if __name__=='__main__':main()

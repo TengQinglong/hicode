@@ -130,3 +130,24 @@ test('SWE catalog ties each repository identity to its original Python version',
   await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+
+test('Sphinx catalog enforces reviewed versions and original Python 3.9',async()=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-sphinx-catalog-')));
+ const id='sphinx-doc__sphinx-10614',path=join(root,id);
+ try {
+  await mkdir(path);
+  const base={kind:'swe-bench-verified',instanceId:id,repo:'sphinx-doc/sphinx',version:'7.2',
+   revision:'c'.repeat(40),baseCommit:'a'.repeat(40),harnessVersion:'4.1.0',
+   environment:'/opt/hicode-swe/cache/'+'a'.repeat(64),verifierSeconds:1800,
+   baselineCommit:'b'.repeat(40),files:{},evaluationMode:'shared-linux-development'};
+  for(const version of ['3.1','3.2','3.3','3.4','3.5','4.0','4.1','4.2','4.3','5.0','5.1','5.2','7.1','7.2']) {
+   await save(join(path,'swe-task.json'),{...base,version,python:'3.9'});
+   expect((await sweCatalog(root))[0]?.id).toBe(id);
+  }
+  await save(join(path,'swe-task.json'),{...base,python:'3.11'});
+  await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
+  await save(join(path,'swe-task.json'),{...base,version:'6.2',python:'3.9'});
+  await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
+ }finally{await rm(root,{recursive:true,force:true});}
+});
