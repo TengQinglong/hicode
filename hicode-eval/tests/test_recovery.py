@@ -11,6 +11,7 @@ class RecoveryTest(unittest.TestCase):
     def fixture(self, parent):
         root = Path(parent).resolve() / ('a' * 16)
         (root/'logs/verifier').mkdir(parents=True)
+        (root/'actor-events').mkdir()
         identity = {'version':2,'run':root.name,'user':'eval-'+root.name,'uid':20001,'pid':12345,'runnerStart':'100'}
         outcome = {'execution':'completed','grading':'passed','uid':20001}
         (root/'identity.json').write_text(json.dumps(identity))
@@ -21,7 +22,7 @@ class RecoveryTest(unittest.TestCase):
             {'type':'settled','reason':'completed','sealed':True,'runningAgents':0,'pendingAgentMessages':0},
             {'type':'state','busy':False,'waitingForApproval':False},
         ]
-        (root/'logs/events.jsonl').write_text(''.join(json.dumps({'version':1,'sequence':i+1,'sessionId':'fixture',**r})+'\n' for i,r in enumerate(records)))
+        (root/'actor-events/events.jsonl').write_text(''.join(json.dumps({'version':1,'sequence':i+1,'sessionId':'fixture',**r})+'\n' for i,r in enumerate(records)))
         summary={'tests':1,'passed':1,'failed':0,'skipped':0,'pending':0,'other':0}
         (root/'logs/verifier/ctrf.json').write_text(json.dumps({'results':{'summary':summary,'tests':[{'status':'passed'}]}}))
         (root/'logs/verifier/reward.txt').write_text('1\n')
@@ -52,8 +53,8 @@ class RecoveryTest(unittest.TestCase):
             lambda root:(root/'logs/verifier/reward.txt').write_text('0'),
             lambda root:(root/'logs/verifier/ctrf.json').write_text('{}'),
             lambda root:(root/'result.json').write_text(json.dumps({'execution':'failed','grading':'unavailable','uid':20001})),
-            lambda root:(root/'logs/events.jsonl').write_text((root/'logs/events.jsonl').read_text()+'{"partial":'),
-            lambda root:(root/'logs/events.jsonl').write_text((root/'logs/events.jsonl').read_text().replace('"sealed": true','"sealed": false')),
+            lambda root:(root/'actor-events/events.jsonl').write_text((root/'actor-events/events.jsonl').read_text()+'{"partial":'),
+            lambda root:(root/'actor-events/events.jsonl').write_text((root/'actor-events/events.jsonl').read_text().replace('"sealed": true','"sealed": false')),
         ]
         for mutate in mutations:
             with tempfile.TemporaryDirectory() as tmp:
@@ -91,7 +92,7 @@ class RecoveryTest(unittest.TestCase):
                    {'type':'agent_event','event':{'type':'turn_end','input':{
                        'session_id':'fixture','status':'failed','reason':'error','persistence_status':'saved'}}},
                    {'type':'state','busy':False,'waitingForApproval':False}]
-        (root/'logs/events.jsonl').write_text(''.join(json.dumps({'version':1,'sequence':i+1,'sessionId':'fixture',**r})+'\n'
+        (root/'actor-events/events.jsonl').write_text(''.join(json.dumps({'version':1,'sequence':i+1,'sessionId':'fixture',**r})+'\n'
                                                    for i,r in enumerate(records)))
         (root/'shutdown.json').write_text(json.dumps({'version':1,'reason':'failed','cliExited':True,
             'turnSaved':True,'pendingToolCallIds':[],'eventStreamComplete':True,'error':None}))
@@ -105,7 +106,7 @@ class RecoveryTest(unittest.TestCase):
                 self.assertEqual(recover(root), outcome)
             proof = json.loads((root/'recovery.json').read_text())['evidence']
             self.assertIn('shutdown.json', proof)
-            self.assertIn('logs/events.jsonl', proof)
+            self.assertIn('actor-events/events.jsonl', proof)
 
     def test_failed_attempt_without_shutdown_proof_cannot_recover_a_grade(self):
         for field,value in [('cliExited',False),('turnSaved',False),('pendingToolCallIds',['a']),

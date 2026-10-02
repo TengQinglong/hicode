@@ -59,7 +59,6 @@ def apply_setup(project, version):
         for old, new in replacements(version, text):
             text = ''.join(line.replace(old, new, 1) for line in text.splitlines(keepends=True))
         setup.write_text(text)
-    elif version not in VERSIONS: raise ValueError('Unsupported Sphinx version')
 
 def dependency_identity(project):
     project = Path(project)

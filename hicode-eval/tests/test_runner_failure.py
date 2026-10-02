@@ -1,5 +1,6 @@
 """Exercise the real runner control flow with offline process/namespace fixtures."""
 import contextlib
+import itertools
 import builtins
 import io
 import json
@@ -17,7 +18,7 @@ RUN_ID = '1234567890abcdef'
 
 
 class RunnerFailureTest(unittest.TestCase):
-    def run_attempt(self, *, saved=True, pending=False, exits=True, handoff=True, completed=False, claimed_dependencies=False, isolated=False):
+    def run_attempt(self, *, saved=True, pending=False, exits=True, handoff=True, completed=False, claimed_dependencies=False, isolated=False, timed_out=False):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             root = base / 'eval/runs' / RUN_ID
@@ -38,16 +39,25 @@ class RunnerFailureTest(unittest.TestCase):
                 events.append({'type': 'agent_event', 'event': {'type': 'tool_call_start', 'toolCallId': 'pending'}})
             events += [{'type': 'agent_event', 'event': {'type': 'turn_end', 'input': {
                 'session_id': 'fixture',
-                'status': 'completed' if completed else 'failed', 'reason': 'completed' if completed else 'error',
+                'status': 'cancelled' if timed_out else 'completed' if completed else 'failed', 'reason': 'shutdown' if timed_out else 'completed' if completed else 'error',
                 'persistence_status': 'saved' if saved else 'failed'}}},
                        {'type': 'state', 'busy': False, 'waitingForApproval': False}]
             if completed:
                 events.append({'type': 'settled', 'reason': 'completed', 'runningAgents': 0,
                                'pendingAgentMessages': 0, 'sealed': True})
-            (logs / 'events.jsonl').write_text(''.join(json.dumps({
+            (root/'actor-events').mkdir()
+            (root/'actor-events/events.jsonl').write_text(''.join(json.dumps({
                 'version': 1, 'sequence': i, 'sessionId': 'fixture', **event}) + '\n'
                 for i, event in enumerate(events, 1)))
             calls = []
+            def terminate(fd,drain):
+                calls.append('shutdown')
+                if timed_out:
+                    with (root/'actor-events/events.jsonl').open('a') as output:
+                        output.write(json.dumps({'version':1,'sequence':len(events)+1,'sessionId':'fixture',
+                            'type':'settled','reason':'shutdown','runningAgents':0,'pendingAgentMessages':0,'sealed':True})+'\n')
+                    drain()
+                return exits
 
             class FixturePath(PosixPath):
                 def __new__(cls, *args):
@@ -94,10 +104,11 @@ class RunnerFailureTest(unittest.TestCase):
                 stack.enter_context(patch('signal.signal'))
                 stack.enter_context(patch('subprocess.run', side_effect=execute))
                 stack.enter_context(patch('cleanup.open_task_cli', return_value=7))
-                stack.enter_context(patch('cleanup.terminate_task_cli', side_effect=lambda *args: calls.append('shutdown') or exits))
+                stack.enter_context(patch('cleanup.terminate_task_cli', side_effect=terminate))
                 stack.enter_context(patch('cleanup.stop_task_processes', side_effect=lambda *args: calls.append('stop')))
                 stack.enter_context(patch('cleanup.finalize_task', side_effect=lambda *args: calls.append('finalize')))
                 stack.enter_context(patch('recovery.process_start', return_value='fixture'))
+                stack.enter_context(patch('protocol.actor_readonly_mounts',return_value=['--ro-bind','/usr','/usr']))
                 stack.enter_context(patch('protocol.wait_verifier_handoff', side_effect=upload))
                 stack.enter_context(patch('terminal.capture'))
                 stack.enter_context(patch('terminal.settle', return_value=True))
@@ -105,7 +116,11 @@ class RunnerFailureTest(unittest.TestCase):
                 stack.enter_context(patch('verifier.verify', side_effect=grade))
                 gateway = stack.enter_context(patch('model_proxy.Gateway'))
                 gateway.return_value.close.side_effect = lambda: calls.append('gateway-close')
-                stack.enter_context(patch('time.sleep', side_effect=AssertionError('Failed turn must not wait for budget')))
+                if timed_out:
+                    clock=itertools.count(step=10000)
+                    stack.enter_context(patch('time.monotonic',side_effect=lambda:next(clock)))
+                    stack.enter_context(patch('time.sleep'))
+                else:stack.enter_context(patch('time.sleep', side_effect=AssertionError('Failed turn must not wait for budget')))
                 stack.enter_context(contextlib.redirect_stdout(output))
                 runpy.run_path(str(RUNNER), run_name='__main__')
                 if isolated:
@@ -117,6 +132,12 @@ class RunnerFailureTest(unittest.TestCase):
                     settings=json.loads((root/'home/.hicode/settings.json').read_text())
                     self.assertIn('web_fetch',settings['permissions']['deny'])
                     self.assertEqual(json.loads((root/'network.json').read_text())['mode'],'isolated')
+            submitted=(root/'submitted-instruction.md').read_text()
+            self.assertIn('60 分钟',submitted)
+            self.assertIn('/app',submitted)
+            self.assertEqual('当前外网不可用' in submitted,isolated)
+            settings=json.loads((root/'home/.hicode/settings.json').read_text())
+            self.assertIn(str(root/'actor-events'),settings['sandbox']['filesystem']['denyWrite'])
             packets = [json.loads(line) for line in output.getvalue().splitlines()]
             self.assertIn('finalize', calls)
             self.assertEqual(calls.count('shutdown'), 0 if completed else 1)
@@ -126,6 +147,15 @@ class RunnerFailureTest(unittest.TestCase):
         result, calls, _ = self.run_attempt(completed=True)
         self.assertEqual(result['execution'], 'completed')
         self.assertEqual(calls, ['stop', 'handoff', 'install-verifier', 'verify', 'finalize'])
+
+    def test_saved_shutdown_still_records_execution_timeout_without_false_cleanup_error(self):
+        result,calls,receipt=self.run_attempt(timed_out=True)
+        self.assertEqual(result['execution'],'timeout')
+        self.assertEqual(result['grading'],'failed')
+        self.assertEqual(receipt['reason'],'timeout')
+        self.assertTrue(receipt['cliExited']);self.assertTrue(receipt['turnSaved'])
+        self.assertEqual(receipt['pendingToolCallIds'],[]);self.assertIsNone(receipt['error'])
+        self.assertIn('verify',calls)
 
     def test_saved_failure_stops_then_grades_without_waiting_for_budget(self):
         result, calls, receipt = self.run_attempt()

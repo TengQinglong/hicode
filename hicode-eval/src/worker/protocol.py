@@ -109,7 +109,7 @@ class Events:
             if kind=='settled':
                 if type(event.get('sealed')) is not bool:raise ValueError('Missing execution seal state')
                 if any(type(event.get(k)) is not int or event[k]<0 for k in ['runningAgents','pendingAgentMessages']):raise ValueError('Invalid Agent completion counters')
-                if event.get('reason') not in {'completed','incomplete','max_turns','permission_denied','hook_blocked','hook_error','hook_limit','no_tool_calls','interrupted','error'}:raise ValueError('Unknown stop reason')
+                if event.get('reason') not in {'completed','incomplete','max_turns','permission_denied','hook_blocked','hook_error','hook_limit','no_tool_calls','interrupted','shutdown','error'}:raise ValueError('Unknown stop reason')
             if kind=='agent_event' and (not isinstance(event.get('event'),dict) or not isinstance(event['event'].get('type'),str)):
                 raise ValueError('Invalid Agent event')
             if kind == 'ready': self.ready = True
@@ -174,14 +174,83 @@ def prepare_verifier_root(project, target):
     copy_tree(project,target/'app');(target/'tmp').mkdir(mode=0o700)
 
 
-def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False, workdir="/app", environment=None, readonly_logs=False, public_tests=None, private_root=None, isolated_network=False):
+
+def actor_readonly_mounts(release, environment):
+    """Expose system/runtime inputs, never the evaluation machine's root."""
+    release=Path(release)
+    if not re.fullmatch(r'/opt/hicode/releases/[a-f0-9]{64}',str(release)) or release.is_symlink() or not release.is_dir():
+        raise ValueError('Invalid actor source release')
+    paths=[]
+    for name in ['/usr','/bin','/sbin','/lib','/lib64']:
+        path=Path(name)
+        if path.exists():
+            if path.is_symlink() and not path.resolve().is_relative_to(Path('/usr')):
+                raise ValueError('System tool link escapes allowed runtime')
+            paths.append(path)
+    for name in ['/etc/passwd','/etc/group','/etc/nsswitch.conf','/etc/hosts','/etc/hostname',
+                 '/etc/resolv.conf','/etc/localtime','/etc/locale.alias','/etc/ld.so.cache',
+                 '/etc/alternatives','/etc/ssl/certs','/etc/ssl/openssl.cnf',
+                 '/etc/fonts','/etc/ImageMagick-6','/etc/R','/etc/python3.11', '/opt/python313']:
+        path=Path(name)
+        if path.exists():paths.append(path)
+    dependencies=(release/'node_modules').resolve(strict=True)
+    if not (dependencies==Path('/opt/hicode/node_modules') or
+            re.fullmatch(r'/opt/hicode/dependencies/[a-f0-9]{64}/node_modules',str(dependencies))):
+        raise ValueError('Actor dependencies escape prepared runtime')
+    paths.extend([release,dependencies,Path('/opt/hicode-eval/preflight.ts'),Path('/opt/hicode-eval/network_entry.py')])
+    if environment is not None:
+        interpreter=(Path(environment)/'bin/python').resolve(strict=True)
+        if not interpreter.is_relative_to(Path('/usr')):
+            runtime=interpreter.parent.parent
+            if runtime.parent!=Path('/opt/hicode-swe/python') or not runtime.name.startswith('cpython-'):
+                raise ValueError('Actor interpreter escapes prepared runtime')
+            paths.append(runtime)
+            if runtime.name=='cpython-3.6.15-source':paths.append(Path('/opt/hicode-swe/python/openssl-1.1.1w/lib'))
+    result=[]
+    for path in dict.fromkeys(paths):
+        if not path.exists():raise ValueError('Missing required actor runtime: '+str(path))
+        result+=['--ro-bind',str(path),str(path)]
+    return result
+
+
+def assignment_prompt(instruction, agent_seconds, network, workdir, public_entries):
+    if type(agent_seconds) is not int or not 30<=agent_seconds<=7200:raise ValueError('Invalid assignment time limit')
+    if network not in {'open','isolated'} or workdir not in {'/app','/testbed'}:raise ValueError('Invalid assignment environment')
+    minutes,seconds=divmod(agent_seconds,60)
+    duration=(str(minutes)+' 分钟' if minutes else '')+(' '+str(seconds)+' 秒' if seconds else '')
+    lines=['[评测环境说明]',f'本题最多执行 {duration.strip()}。完成必要修复和验证后即可交付，无需跑满时限。',
+           '本题工作区：'+workdir+'。',
+           '公开测试入口：'+('、'.join(public_entries) if public_entries else '未提供额外挂载；可使用工作区已有的公开测试与自测')+'。',
+           '仅提供本题文件、必要运行工具和已准备依赖；其他题目、准备缓存和隐藏验收不向做题进程提供。']
+    if network=='isolated':lines.append('当前外网不可用，请使用提供的工作区、已准备依赖和公开测试；模型连接由评测系统单独管理。')
+    else:lines.append('模型连接由评测系统管理。')
+    return '\n'.join(lines)+'\n\n'+instruction
+
+
+def public_test_entries(config):
+    if config.get('dataset')=='swe-bench-verified':
+        return {
+            'django/django':['/testbed/tests/（原仓库公开测试）'],
+            'sympy/sympy':['/testbed/sympy/**/tests/','/testbed/bin/test'],
+            'pytest-dev/pytest':['/testbed/testing/'],
+            'pydata/xarray':['/testbed/xarray/tests/'],
+            'sphinx-doc/sphinx':['/testbed/tests/'],
+        }[config['swe']['repo']]
+    return ['/tests/'+entry['target'] for entry in config.get('publicTestInputs',[])]
+
+
+def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False, workdir="/app", environment=None, readonly_logs=False, public_tests=None, private_root=None, isolated_network=False, actor_release=None, actor_events=None):
+    if (actor_release is None)!=(actor_events is None):raise ValueError('Actor release and event storage must be paired')
+    if actor_release is not None and (tests is not None or root_overlay or readonly_logs):raise ValueError('Actor and verifier views cannot be combined')
     if tests is None and (writable_tests or root_overlay):raise ValueError('Verifier-only filesystem options')
     if private_root is not None and (tests is None or not root_overlay or workdir!='/app'):raise ValueError('Private chroot is verifier-only')
     if public_tests is not None and tests is not None:raise ValueError('Public helpers and hidden verifier are separate views')
     if isolated_network and tests is not None:raise ValueError('Network isolation is for the actor only')
     result=['bwrap','--unshare-user','--unshare-pid','--die-with-parent']
     if isolated_network:result+=['--unshare-net']
-    if root_overlay:
+    if actor_release is not None:
+        result+=['--tmpfs','/',*actor_readonly_mounts(actor_release,environment),'--dir','/run','--dir','/var','--dir','/var/tmp']
+    elif root_overlay:
         # A verifier may create new top-level directories in a private tmpfs;
         # every existing system entry remains read-only. The host root is never writable.
         result+=['--bind',str(private_root),'/','--uid','0','--gid','0','--cap-add','CAP_SYS_CHROOT'] if private_root is not None else ['--tmpfs','/']
@@ -192,7 +261,10 @@ def namespace_argv(args, project, home, logs, control, tests=None, *, writable_t
     result+=['--proc','/proc','--dev','/dev']
     if isolated_network:result+=['--tmpfs','/run']
     if private_root is None:result+=['--tmpfs','/tmp','--bind',str(project),workdir]
-    result+=['--bind',str(home),str(home),'--ro-bind' if readonly_logs else '--bind',str(logs),str(logs),'--ro-bind',str(control),str(control),'--chdir',workdir]
+    result+=['--bind',str(home),str(home)]
+    if actor_release is not None:result+=['--bind',str(actor_events),str(actor_events)]
+    else:result+=['--ro-bind' if readonly_logs else '--bind',str(logs),str(logs)]
+    result+=['--ro-bind',str(control),str(control),'--chdir',workdir]
     if environment is not None:result+=['--bind',str(environment),'/opt/hicode-swe/env']
     if tests is not None:result+=['--bind' if writable_tests else '--ro-bind',str(tests),'/tests','--ro-bind' if readonly_logs else '--bind',str(Path(logs)/'verifier'),'/logs/verifier']
     if public_tests is not None:result+=['--ro-bind',str(public_tests),'/tests']

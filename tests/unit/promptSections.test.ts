@@ -35,6 +35,9 @@ describe("English prompt contracts", () => {
             expect(prompt).toContain("For implementation work");
             expect(prompt).toContain("next verifiable change");
             expect(prompt).toContain("smallest relevant experiment or focused test");
+            expect(prompt).toContain("Broaden a search only to answer a specific unresolved question");
+            expect(prompt).toContain("follow the actual call chain through inputs, outputs and callers");
+            expect(prompt).toContain("verify the reported reproduction, relevant boundary conditions and affected related implementations");
             expect(prompt).toContain("without making unsolicited implementation changes");
             expect(prompt).toContain("Speed does not justify skipping necessary analysis or verification");
         }

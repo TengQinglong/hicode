@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from swe import editable_install_argv, export_patch, snapshot, relocate_environment, validate_swe_report
+from swe import project_environment, editable_install_argv, export_patch, snapshot, relocate_environment, validate_swe_report
 from protocol import namespace_argv
 
 class SweExportTests(unittest.TestCase):
@@ -44,9 +44,18 @@ class SweExportTests(unittest.TestCase):
         self.assertEqual(editable_install_argv('/env/bin/python','/testbed','pytest-dev/pytest'),
                          ['/env/bin/python','-m','pip','install','--no-deps','--no-build-isolation','-e','/testbed'])
         self.assertNotIn('--no-build-isolation',editable_install_argv('/env/bin/python','/testbed','django/django'))
+        from swe import namespace_eval_commands
+        self.assertEqual(namespace_eval_commands(['python -m pip install -e .','pytest -rA xarray/tests/test_dataset.py'],
+                                                'pydata/xarray','0.12'),
+                         ['python -m pip install --no-deps --no-build-isolation -e .','pytest -rA xarray/tests/test_dataset.py'])
     def test_sphinx_install_preserves_official_test_extra_without_new_downloads(self):
         self.assertEqual(editable_install_argv('/python','/testbed','sphinx-doc/sphinx'),
                          ['/python','-m','pip','install','--no-deps','--no-build-isolation','-e','/testbed[test]'])
+
+    def test_tox_fake_python_reuses_only_public_source_and_attempt_dependencies(self):
+        self.assertEqual(project_environment('sphinx-doc/sphinx'),
+                         {'PYTHONPATH':'/testbed:/opt/hicode-swe/env/lib/python3.9/site-packages'})
+        self.assertEqual(project_environment('django/django'),{})
 
     def test_report_requires_both_official_test_groups_and_consistent_resolution(self):
         item={'patch_is_None':False,'patch_exists':True,'patch_successfully_applied':True,'resolved':True,
@@ -66,3 +75,16 @@ class SweExportTests(unittest.TestCase):
         self.assertTrue(script.stat().st_mode & 0o111)
 
 if __name__=='__main__':unittest.main()
+
+
+class SweLocaleAdaptationTest(unittest.TestCase):
+    def test_readonly_grader_checks_prepared_locale_and_preserves_other_commands(self):
+        from swe import namespace_eval_commands
+        locale_command="sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen"
+        original=['source /opt/miniconda3/bin/activate','conda activate testbed',locale_command,
+                  'export LANG=en_US.UTF-8','git apply model.patch','./tests/runtests.py']
+        self.assertEqual(namespace_eval_commands(original,'django/django','3.2'),
+                         ['locale -a | grep -Fxq en_US.utf8 || exit 1',*original[3:]])
+        self.assertEqual(namespace_eval_commands(original,'django/django','4.2'),original[2:])
+        self.assertEqual(namespace_eval_commands(['locale-gen','sed -i x /etc/other'],'django/django','3.2'),
+                         ['locale-gen','sed -i x /etc/other'])

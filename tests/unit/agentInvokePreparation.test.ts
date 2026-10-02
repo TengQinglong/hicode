@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, spyOn } from "bun:test";
 import { prepareAgentInvoke } from "../../src/agent/invokePreparation.js";
 import { tokenCountWithEstimation } from "../../src/context/tokens.js";
 import { getUserContextBlocks } from "../../src/prompt/attachments.js";
@@ -46,6 +46,33 @@ function noCompactResult(preTokenCount: number, message?: string) {
 }
 
 describe("Agent invoke preparation", () => {
+  test("compaction refreshes elapsed time at the request tail without archiving the reminder", async () => {
+    await withTempProject(async cwd => {
+      let now = 12 * 60_000 + 34_999;
+      const clock = spyOn(performance, "now").mockImplementation(() => now);
+      const messages = history();
+      const tools = [tool()];
+      try {
+        const result = await prepareAgentInvoke({
+          history: messages, ctx: createTestContext(cwd), onEvent: () => {},
+          getToolSchemas: () => tools, forceCompact: true, elapsedTaskStartedAt: 0,
+          compactHistory: async ({history, additionalUserContextBlocks, preTokenCount}) => {
+            expect(JSON.stringify(history)).not.toContain("You have been working on this task for");
+            expect(JSON.stringify(additionalUserContextBlocks)).not.toContain("You have been working on this task for");
+            now += 2 * 60_000;
+            history.splice(1, history.length - 1, {role: "user", origin: "user", content: "compacted history"});
+            return {compacted: true, preTokenCount, postTokenCount: 1, threshold: 1};
+          },
+        });
+        expect(result.invokeMessages.at(-2)?.content).toBe("compacted history");
+        expect(result.invokeMessages.at(-1)).toEqual({role: "user", origin: "runtime",
+          content: "<system-reminder>\nYou have been working on this task for 14m 34s.\n</system-reminder>"});
+        expect(JSON.stringify(messages)).not.toContain("You have been working on this task for");
+        expect(result.estimatedTokens).toBe(tokenCountWithEstimation(result.invokeMessages, tools));
+      } finally {clock.mockRestore();}
+    });
+  });
+
   test("无 Compact 时构造临时 userContext、复用 schemas 且不修改 History", async () => {
     await withTempProject(async (cwd) => {
       const messages = history();

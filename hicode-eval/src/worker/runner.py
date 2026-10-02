@@ -1,7 +1,7 @@
 """One assignment, one Linux user, one tmux session. No installs or per-task containers."""
 import base64,fcntl,json,os,pwd,signal,subprocess,sys,time,shutil
 from pathlib import Path
-from protocol import Events,atomic_json,namespace_argv,package_install_argv,prepare_verifier_root,wait_verifier_handoff
+from protocol import assignment_prompt,public_test_entries,Events,atomic_json,namespace_argv,package_install_argv,prepare_verifier_root,wait_verifier_handoff
 from verifier import verify,verifier_environment
 from terminal import capture,settle,submit_prompt
 from cleanup import stop_task_processes,finalize_task,open_task_cli,terminate_task_cli
@@ -16,7 +16,7 @@ network=config.get('network','open')
 if network not in {'open','isolated'}:raise ValueError('Invalid evaluation network mode')
 is_swe=config.get('dataset')=='swe-bench-verified'
 swe_environment=Path('/eval/swe-envs')/run_id if is_swe else None
-project=root/'project';home=root/'home';logs=root/'logs';control=Path('/run/hicode-eval')/run_id
+project=root/'project';home=root/'home';logs=root/'logs';actor_events=root/'actor-events';event_path=actor_events/'events.jsonl';control=Path('/run/hicode-eval')/run_id
 name='eval-'+run_id
 cancelled=False
 verifier_root=None
@@ -40,12 +40,12 @@ with open('/eval/users.lock','a') as lock:
         except KeyError:break
     subprocess.run(['useradd','--uid',str(uid),'--user-group','--no-create-home','--shell','/bin/bash',name],check=True)
     account=pwd.getpwnam(name)
-for p in [root,project,home,logs,control]:p.mkdir(parents=True,exist_ok=True)
-subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(project),str(home),str(logs),str(control)],check=True)
+for p in [root,project,home,logs,actor_events,control]:p.mkdir(parents=True,exist_ok=True)
+subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(project),str(home),str(logs),str(actor_events),str(control)],check=True)
 if config.get('publicTestInputs'):
     subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(root/'public-tests')],check=True)
 os.chown(root,uid,account.pw_gid);os.chmod(root,0o700)
-for p in [project,home,logs,control]:os.chmod(p,0o700)
+for p in [project,home,logs,actor_events,control]:os.chmod(p,0o700)
 atomic_json(root/'identity.json',{'version':2,'uid':uid,'user':name,'pid':os.getpid(),'runnerStart':process_start(os.getpid()),'run':run_id})
 
 def demote():
@@ -58,11 +58,14 @@ def namespace(args,verifier=False,setup=False,actor=False):
                           workdir='/testbed' if is_swe else '/app',environment=swe_environment,
                           public_tests=root/'public-tests' if not verifier and config.get('publicTestInputs') else None,
                           private_root=verifier_root if verifier else None,
-                          isolated_network=actor and network=='isolated')
+                          isolated_network=actor and network=='isolated',
+                          actor_release=config['release'] if actor else None,actor_events=actor_events if actor else None)
 
 def command(args,timeout=15,extra=None,cwd=None,output_path=None):
     env={'PATH':'/opt/python313/bin:'+str(home/'.local/bin')+':'+str(home/'bin')+':'+os.environ['PATH'],'HOME':str(home),'TERM':'xterm-256color','COLORTERM':'truecolor','LANG':'C.UTF-8'}
     if is_swe:
+        from swe import project_environment
+        env.update(project_environment(config['swe']['repo'],root/'baseline'))
         env.update(PATH='/opt/hicode-swe/env/bin:'+str(home/'.local/bin')+':'+str(home/'bin')+':'+os.environ['PATH'],VIRTUAL_ENV='/opt/hicode-swe/env',PYTHONDONTWRITEBYTECODE='1')
     if config.get('packages'):
         env['PYTHONPATH']='/app/.eval-python'
@@ -85,7 +88,6 @@ model=config['model'];release=config['release'];status='failed';grade='unavailab
 
 def drain_events():
     global offset
-    event_path=logs/'events.jsonl'
     if event_path.exists():
         if event_path.is_symlink():raise ValueError('Event file replaced with symlink')
         with event_path.open('rb') as f:f.seek(offset);data=f.read(256*1024)
@@ -116,7 +118,7 @@ try:
     config['permissionMode']='full-access'
     atomic_json(root/'job.json',config)
     emit('phase',phase='Deploying task on shared Linux')
-    settings={'sources':{model['source']:{'baseUrl':model['baseUrl'],'apiKeyEnv':model['apiKeyEnv'],'models':[{'id':model['model'],'label':model['model'],'imageInput':model.get('imageInput',False)}]}},'models':{'primary':{'source':model['source'],'model':model['model']}},'memory':{'enabled':False},'permissions':{'defaultMode':config['permissionMode'],'deny':[f'{t}({p}/**)' for t in ['write_file','edit_file'] for p in [str(logs),str(control)]]},'sandbox':{'network':{'mode':'open'},'filesystem':{'denyWrite':[str(logs),str(control)]}}}
+    settings={'sources':{model['source']:{'baseUrl':model['baseUrl'],'apiKeyEnv':model['apiKeyEnv'],'models':[{'id':model['model'],'label':model['model'],'imageInput':model.get('imageInput',False)}]}},'models':{'primary':{'source':model['source'],'model':model['model']}},'memory':{'enabled':False},'permissions':{'defaultMode':config['permissionMode'],'deny':[f'{t}({p}/**)' for t in ['write_file','edit_file'] for p in [str(logs),str(actor_events),str(control)]]},'sandbox':{'network':{'mode':'open'},'filesystem':{'denyWrite':[str(logs),str(actor_events),str(control)]}}}
     if network=='isolated':settings['permissions']['deny'].append('web_fetch')
     conf=home/'.hicode';conf.mkdir(exist_ok=True);atomic_json(conf/'settings.json',settings)
     subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(home)],check=True)
@@ -155,7 +157,7 @@ try:
     emit('phase',phase='Starting HiCode')
     launch=control/'launch.sh'
     import shlex
-    actor_command=['bun',release+'/src/index.tsx','--single-task','--event-log',str(logs/'events.jsonl'),'--permission-mode',config['permissionMode'],'--source',model['source'],'--model',model['model']]
+    actor_command=['bun',release+'/src/index.tsx','--single-task','--event-log',str(event_path),'--permission-mode',config['permissionMode'],'--source',model['source'],'--model',model['model']]
     if gateway:actor_command=['python3','/opt/hicode-eval/network_entry.py',str(control/'model.sock'),str(conf/'settings.json'),*actor_command]
     launch.write_text('#!/bin/bash\nset -eu\nexec '+shlex.join(namespace(actor_command,actor=True))+'\n')
     launch.chmod(0o755)
@@ -180,10 +182,10 @@ try:
             start=time.monotonic()
             emit('phase',phase='Running HiCode')
         if events.ready and submitted is None:
-            cli_fd=open_task_cli(uid,release+'/src/index.tsx',logs/'events.jsonl')
+            cli_fd=open_task_cli(uid,release+'/src/index.tsx',event_path)
             instruction=(root/'instruction.md').read_text()
-            if network=='isolated':
-                instruction='Evaluation environment: external networking is disabled during this attempt. Use the supplied workspace and prepared local dependencies; public package downloads and web_fetch are unavailable. The model connection is managed separately.\n\n'+instruction
+            instruction=assignment_prompt(instruction,config['agentSeconds'],network,'/testbed' if is_swe else '/app',public_test_entries(config))
+            (root/'submitted-instruction.md').write_text(instruction)
             prompt=control/'prompt.txt';prompt.write_text(instruction);prompt.chmod(0o644)
             submit_prompt(tmux,prompt);submitted=time.monotonic()
         if events.failed_turn():

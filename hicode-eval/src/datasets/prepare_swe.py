@@ -12,6 +12,7 @@ import tempfile
 IDS = ['django__django-15731', 'django__django-15741', 'django__django-15863', 'django__django-16136']
 REVISION = 'c104f840cc67f8b6eec6f759ebc8b2693d585d4a'
 PYTHON_BY_REPO_VERSION = {
+    ('django/django','3.2'): '3.6',
     ('django/django', '4.0'): '3.8',
     ('django/django', '4.1'): '3.9',
     ('django/django', '4.2'): '3.9',
@@ -70,6 +71,9 @@ def environment_groups(prep, rows):
             expected_recipe = {'python':python, 'packages':'requirements.txt',
                                'install':'python -m pip install -e .',
                                'test_cmd':'./tests/runtests.py --verbosity 2 --settings=test_sqlite --parallel 1'}
+            if row['version']=='3.2':
+                expected_recipe['eval_commands']=["sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen",
+                                                   'export LANG=en_US.UTF-8','export LANGUAGE=en_US:en','export LC_ALL=en_US.UTF-8']
         elif row['repo'] == 'sympy/sympy':
             expected_recipe = {'python':python, 'packages':'mpmath flake8',
                                'pip_packages':['mpmath==1.3.0','flake8-comprehensions'],
@@ -120,6 +124,19 @@ def environment_groups(prep, rows):
                     raise ValueError('Original dependency input changed or escaped')
             # The reviewed recipes explicitly use these pip pins (xarray has no_use_env).
             pins = list(group['recipe']['pip_packages'])
+            if row['repo'] == 'pydata/xarray':
+                from xarray_setup import dependency_pins
+                pins.extend(dependency_pins(dependency.read_text()))
+                if row['version']=='0.12':
+                    # The harness bucket includes 0.12–0.16 source trees.
+                    # Pandas 1.5 requires Xarray >=0.19; use its compatible
+                    # Python 3.10 predecessor without falsifying Xarray's version.
+                    pins=[('pandas==1.3.5' if pin=='pandas==1.5.3' else pin) for pin in pins]
+            if row['repo'] == 'sphinx-doc/sphinx' and row['version'] in ('3.1', '3.2', '3.3'):
+                # These public base trees import pkg_resources at runtime.
+                # Current setuptools removed it, and new docutils removed the
+                # bundled roman module. Both pins satisfy original requirements.
+                pins.extend(['setuptools==70.0.0', 'docutils==0.16'])
             if row['repo'] == 'pytest-dev/pytest':
                 # The project declares this build backend; keep it in the task
                 # cache because isolated build downloads are not reliable.
@@ -157,18 +174,24 @@ def main():
     run('exec',args.machine,'mkdir','-p','/opt/hicode-swe/staging','/opt/hicode-swe/env','/testbed')
     remote='/opt/hicode-swe/staging'
     run('cp',str(wheel),args.machine+':'+remote+'/harness.whl')
+    run('cp',str(Path(__file__).with_name('legacy_python.py')),args.machine+':'+remote+'/legacy_python.py')
     run('cp',str(Path(__file__).with_name('sphinx_setup.py')),args.machine+':'+remote+'/sphinx_setup.py')
-    for filename in ['protocol.py','swe.py']:
+    run('cp',str(Path(__file__).with_name('xarray_setup.py')),args.machine+':'+remote+'/xarray_setup.py')
+    for filename in ['protocol.py','swe.py','xarray_report.py']:
         run('cp',str(Path(__file__).resolve().parents[1]/'worker'/filename),args.machine+':'+remote+'/'+filename)
     run('exec',args.machine,'chmod','700',remote)
     run('cp',str(Path(__file__).with_name('swe_machine.py')),args.machine+':'+remote+'/prepare.py')
+    failed_groups=[]
     for group in groups:
         with tempfile.TemporaryDirectory() as tmp:
             requirements=Path(tmp)/'requirements.txt';requirements.write_bytes(group['requirements'])
             selected=Path(tmp)/'selected.json';selected.write_text(json.dumps(group['rows']))
             run('cp',str(requirements),args.machine+':'+remote+'/requirements.txt')
             run('cp',str(selected),args.machine+':'+remote+'/selected.json')
-        run('exec',args.machine,'python3',remote+'/prepare.py',timeout=1800)
+        try:run('exec',args.machine,'python3',remote+'/prepare.py',timeout=1800)
+        except subprocess.CalledProcessError:
+            failed_groups.extend(row['instance_id'] for row in group['rows'])
+    if failed_groups:raise ValueError('Preparation/preflight failed; no incomplete catalog was published: '+', '.join(failed_groups))
     out.mkdir(mode=0o700,parents=True)
     for id in args.ids:run('cp',args.machine+':/opt/hicode-swe/bundles/'+id,str(out/id))
     print(json.dumps({'prepared':args.ids,'output':str(out),'modelAttempts':0,'evaluationMode':'shared-linux-development'}))

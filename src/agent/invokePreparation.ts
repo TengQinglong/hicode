@@ -23,6 +23,8 @@ interface PrepareAgentInvokeInput {
     compactHistory: CompactHistoryRunner;
     contextWindow?: number;
     forceCompact?: boolean;
+    /** Monotonic Turn start, supplied only on elapsed-time reminder iterations. */
+    elapsedTaskStartedAt?: number;
     additionalUserContextBlocks?: readonly string[];
     getAdditionalUserContextBlocks?: () => Promise<readonly string[]>;
     getTodos?: () => readonly Todo[];
@@ -42,12 +44,23 @@ export async function prepareAgentInvoke({
                                              compactHistory,
                                              contextWindow,
                                              forceCompact = false,
+                                             elapsedTaskStartedAt,
                                              additionalUserContextBlocks = [],
                                              getTodos,
                                              getAdditionalUserContextBlocks,
                                          }: PrepareAgentInvokeInput): Promise<PreparedAgentInvoke> {
     throwIfTurnAborted(ctx.signal);
 
+    const buildMessages = (blocks: string[]): Message[] => {
+        const messages = projectImagesForRequest(withExecutionContext(buildInvokeMessages(history, blocks), ctx));
+        if (elapsedTaskStartedAt !== undefined) {
+            const elapsedSeconds = Math.floor((performance.now() - elapsedTaskStartedAt) / 1_000);
+            const elapsed = `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
+            // Keep changing time out of the cached prefix and persistent History.
+            messages.push({role: "user", origin: "runtime", content: `<system-reminder>\nYou have been working on this task for ${elapsed}.\n</system-reminder>`});
+        }
+        return messages;
+    };
     const getRuntimeBlocks = async () => [
         ...mcpCatalogContext(ctx),
         ...additionalUserContextBlocks,
@@ -59,7 +72,7 @@ export async function prepareAgentInvoke({
         ...getUserContextBlocks(ctx.skills, ctx.instructions),
         ...runtimeBlocks,
     ];
-    let invokeMessages = projectImagesForRequest(withExecutionContext(buildInvokeMessages(history, userContextBlocks), ctx));
+    let invokeMessages = buildMessages(userContextBlocks);
     const tools = getToolSchemas();
     const scope = () => ({model: ctx.model, provider: ctx.provider, compactCount: ctx.compactState.compactCount});
     contextWindow ??= ctx.contextUsage.contextWindow(scope());
@@ -105,7 +118,7 @@ export async function prepareAgentInvoke({
                 ...getUserContextBlocks(ctx.skills, ctx.instructions),
                 ...runtimeBlocks,
             ];
-            invokeMessages = projectImagesForRequest(withExecutionContext(buildInvokeMessages(history, userContextBlocks), ctx));
+            invokeMessages = buildMessages(userContextBlocks);
             estimatedTokens = ctx.contextUsage.estimate(scope(), invokeMessages, tools);
             await onEvent({
                 type: "compact_end",

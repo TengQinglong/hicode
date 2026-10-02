@@ -68,7 +68,7 @@ def recover(root):
         proof = {'identity.json': hashlib.sha256(read_bytes(root / 'identity.json', 65536)).hexdigest(),
                  'outcome.json': hashlib.sha256(read_bytes(root / 'outcome.json', 65536)).hexdigest()}
         if outcome['execution'] == 'completed' or (outcome['execution'] == 'failed' and outcome['grading'] != 'unavailable'):
-            data = read_bytes(root / 'logs/events.jsonl', 256 * 1024 * 1024)
+            data = read_bytes(root / 'actor-events/events.jsonl', 256 * 1024 * 1024)
             events = Events()
             for offset in range(0, len(data), 65536):
                 events.accept(data[offset:offset + 65536])
@@ -85,7 +85,7 @@ def recover(root):
                         or shutdown.get('eventStreamComplete') is not True or shutdown.get('error') is not None):
                     raise ValueError('No confirmed shutdown for failed execution')
                 proof['shutdown.json'] = hashlib.sha256(read_bytes(root/'shutdown.json',65536)).hexdigest()
-            proof['logs/events.jsonl'] = hashlib.sha256(data).hexdigest()
+            proof['actor-events/events.jsonl'] = hashlib.sha256(data).hexdigest()
         if outcome['grading'] != 'unavailable':
             if outcome['execution'] not in {'completed', 'timeout', 'failed'}:
                 raise ValueError('Cancelled execution cannot claim a grade')

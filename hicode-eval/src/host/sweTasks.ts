@@ -9,14 +9,15 @@ export const sweTaskSchema = z.object({
   version: z.enum(['0.12', '1.0', '1.1', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '3.1', '3.2', '3.3', '3.4', '3.5', '4.3', '7.1', '4.0', '4.1', '4.2', '5.0', '5.1', '5.2', '5.4', '6.0', '6.2', '7.2', '2022.03', '2022.06', '2022.09']),
   baseCommit: z.string().regex(/^[a-f0-9]{40}$/), harnessVersion: z.literal('4.1.0'),
   environment: z.string().regex(/^\/opt\/hicode-swe\/cache\/[a-f0-9]{64}$/),
-  python: z.enum(['3.8', '3.9', '3.10', '3.11']), verifierSeconds: z.number().int().min(60).max(7200),
+  python: z.enum(['3.6', '3.8', '3.9', '3.10', '3.11']), verifierSeconds: z.number().int().min(60).max(7200),
   baselineCommit: z.string().regex(/^[a-f0-9]{40}$/),
   files: z.record(sha), evaluationMode: z.literal('shared-linux-development'),
 }).strict();
 export type SweTask = z.infer<typeof sweTaskSchema>;
 function checkPythonVersion(task: SweTask): void {
   const expected = task.repo === 'django/django'
-    ? task.version === '4.0' ? '3.8'
+    ? task.version === '3.2' ? '3.6'
+      : task.version === '4.0' ? '3.8'
       : task.version === '4.1' || task.version === '4.2' ? '3.9'
       : task.version === '5.0' ? '3.11' : undefined
     : task.repo === 'sympy/sympy'
@@ -52,6 +53,12 @@ export async function validateSweTask(id: string, path: string): Promise<SweTask
     Object.entries(actual).some(([name, file]) => task.files[name] !== file.sha256)) throw Error('SWE task differs from its prepared snapshot');
   // Frozen bundle separates inputs from host-only grading material; no gold patch is stored.
   if (!task.files['instruction.md'] || !task.files['hidden/evaluation.json'] || !Object.keys(task.files).some(p => p.startsWith('repository/'))) throw Error('Incomplete SWE bundle');
+  if (task.repo === 'pydata/xarray') {
+    await readJson(join(path,'repository/.git/hicode-env-preflight.json'), z.object({
+      sourceCommit:z.literal(task.baseCommit),environment:z.literal(task.environment),
+      passed:z.literal(true),checked:z.number().int().positive(),
+    }).strict());
+  }
   return task;
 }
 export async function sweCatalog(root?: string) {

@@ -108,7 +108,7 @@ CLI 可由人或 Codex 等工具操作，**不依赖 Codex 做调度或判题**�
 - `open`：做题过程可联网，适用于需要在线资源的任务。
 - `isolated`：准备依赖和判题仍可联网；做题时 curl、pip、Fetch 等无法访问外网，模型请求通过固定的模型代理转发。普通依赖可从已准备的本地缓存安装。
 
-不填 `network` 时继承服务默认值。模式随批次冻结，不影响其他批次，也不热切换正在运行的任务。网络隔离失败会停止准备，不自动放开网络。真实模型 Key 留在隔离环境外；代理不接受任意目标网址、跨域重定向或服务端搜索工具。共享文件/缓存的答案可见性需要另行审核，不能只凭断网宣称结果完全独立。
+不填 `network` 时继承服务默认值。模式随批次冻结，不影响其他批次，也不热切换正在运行的任务。网络隔离失败会停止准备，不自动放开网络。真实模型 Key 留在隔离环境外；代理不接受任意目标网址、跨域重定向或服务端搜索工具。Actor 仅挂入本题、必要运行工具和本题依赖；其他题目、准备缓存、grader 与终端采集留在 Host。本题 HiCode 存储和请求日志仍可用。
 
 ## 判题、日志与停止
 
@@ -200,7 +200,7 @@ Terminal-Bench 和 SWE-bench Verified 共用批次、并发、每题时限、TUI
 bash hicode-eval/eval.sh prepare-terminal --docker-context YOUR_CONTEXT --machine YOUR_EVAL_MACHINE
 ```
 
-SWE 准备入口支持 Django 4.0 / Python 3.8、Django 4.1/4.2 / Python 3.9、Django 5.0 / Python 3.11，以及 SymPy 1.0、1.1、1.4–1.12 / Python 3.9、Pytest 5.0–5.2/5.4/6.0/6.2/7.2 / Python 3.9、Xarray 0.12/2022.03/2022.06/2022.09 / Python 3.10 的 Verified 题，通过 `--ids` 选择。准备入口核对固定数据 revision、公开/判题 JSONL 的哈希及对应字段，使用准备包里的官方 harness 4.1.0 wheel；Django 核对原 requirements，SymPy 核对原声明的包列表与配方；Pytest 和 Xarray 核对审定的官方配方哈希，Xarray 另核对原 environment.yml 哈希，并只安装其配方声明的 pip 包。准备包作为外部输入，不复制或提交到此仓库：
+SWE 准备入口支持 Django 3.2 / Python 3.6、Django 4.0 / Python 3.8、Django 4.1/4.2 / Python 3.9、Django 5.0 / Python 3.11，以及 SymPy 1.0、1.1、1.4–1.12 / Python 3.9、Pytest 5.0–5.2/5.4/6.0/6.2/7.2 / Python 3.9、Xarray 0.12/2022.03/2022.06/2022.09 / Python 3.10、Sphinx 3.1–3.5/4.0–4.3/5.0–5.2/7.1/7.2 / Python 3.9 的 Verified 题，通过 `--ids` 选择。准备入口核对固定数据 revision、公开/判题 JSONL 的哈希及对应字段，使用准备包里的官方 harness 4.1.0 wheel；Django 核对原 requirements，SymPy 核对原声明的包列表与配方；Pytest 和 Xarray 核对审定的官方配方哈希，Xarray 另核对原 environment.yml 哈希，并安装审定的 pip 依赖与源码声明的构建后端。Sphinx 重放审定的原始 tox/依赖调整，按公开源码打包声明隔离缓存 test extra，预检只收集一个原有公开测试模块，不执行隐藏断言。准备包作为外部输入，不复制或提交到此仓库：
 
 ```bash
 bash hicode-eval/eval.sh prepare-swe \
@@ -221,9 +221,18 @@ SWE 的隔离与评分契约：
 - Agent 仅收到原始题面、指定 base code、仓库自带公开测试和各题独立的 Python 环境，工作目录 `/testbed`。不提供 gold patch、hints、隐藏 test patch 或评分测试名单。
 - Agent 结束或超时后先停止该题所有进程，再由宿主读取实际文件，以受保护的安装基线导出新增、修改、删除、二进制及可执行位变化。忽略 Agent 控制的 Git/index/hooks，不采信模型自报补丁。
 - `prediction.json` 使用官方 `instance_id`、`model_name_or_path`、`model_patch` 字段；`patch-manifest.json` 记录原 base commit、安装基线 commit、数据 revision 和补丁哈希。
-- 在干净代码、独立依赖和新 Home 中重放补丁，原 hidden test patch 仅此时进入判题视图。使用官方 4.1.0 的 Django 测试命令、日志解析和 FAIL_TO_PASS/PASS_TO_PASS 评分；保存原始 `logs/verifier/output.txt` 和 `report.json`，不转换成虚构的 CTRF。
+- 在干净代码、独立依赖和新 Home 中重放补丁，原 hidden test patch 仅此时进入判题视图。使用官方 4.1.0 的对应仓库测试命令、日志解析和 FAIL_TO_PASS/PASS_TO_PASS 评分；保存原始 `logs/verifier/output.txt` 和 `report.json`，不转换成虚构的 CTRF。
 - 无完整测试输出、初始化失败或判题超时记为 `unavailable`，不误判模型错误；官方回归测试未通过记为 `failed`。恢复只核验已有报告和补丁哈希，不重跑 Agent 或判题。
 
-这是 **共享 Linux 研发评测**：使用 venv 替代官方 Conda/实例镜像、从源码归档重建 Git 基线，官方脚本的环境激活及测试文件 reset commit 随之适配，测试、断言和评分规则不变。不能把这些结果表述为官方镜像下的榜单复现。目前仅接入上述三个 Django 版本的环境组；5.0 仍需在评测机空闲后完成 Linux 环境预检；其他仓库需新增对应环境配方后再登记。
+这是 **共享 Linux 研发评测**：使用 venv 替代官方 Conda/实例镜像、从源码归档重建 Git 基线，官方脚本的环境激活及测试文件 reset commit 随之适配，测试、断言和评分规则不变。不能把这些结果表述为官方镜像下的榜单复现。支持范围以本节列出的仓库/版本和生产校验为准；每个选定环境组仍须在评测机空闲时完成准备及隔离预检，不能仅凭题号登记为已就绪。
 
 准备器从外部 `environment-groups.json` 按 repo、version、environmentSetupCommit 选取并校验原始 requirements；混合版本按组准备，缓存按版本、环境提交、依赖内容及架构隔离。工具版本只读取各题基线实际声明的 pre-commit 配置，不借用新版配置。准备期间必须无活动评测任务。
+
+
+### 本题边界与环境就绪
+
+作答使用私有文件系统根与明确的系统/运行时挂载。事件导出为 `actor-events/events.jsonl`，终端和判题日志不挂入 Actor。题干前置说明采用本题实际时限和公开测试路径；只有实际隔离网络才声明外网不可用。
+
+接受 HiCode 的 `shutdown` 保存收尾原因；执行超时仍记为 timeout，保存、工具结果配对和 CLI 退出校验继续保留。
+
+Xarray 按已核对的版本声明补齐固定 CPU 回归依赖，恢复真实上游 SCM 版本，并逐题运行原基线的必需公开回归预检。Agent 和验收共用同一准备环境；缺包、跳过或基线失败会在模型启动前拦下。旧 0.12 源码桶使用兼容的 Pandas 1.3.5；缺少 CDAT 的题仍需准备可用环境，不能把跳过当通过。ARM 仅针对两项已核实、断言实际通过的 non-strict datetime XPASS 补充结果报告，其他 XPASS 和跳过不转换。历史成绩不回写。边界和回执见[当前 reference](../docs/reference/HICODE-EVAL.md)。

@@ -111,7 +111,7 @@ class EnvironmentGroupsTest(unittest.TestCase):
             root=Path(tmp)
             source=root/'artifacts/dependency-inputs/xarray.yml'
             source.parent.mkdir(parents=True)
-            source.write_text('original conda declaration')
+            source.write_text('dependencies:\n'+''.join('  - '+name+'\n' for name in ('bottleneck','cftime','sparse','pint','numba','numexpr','numbagg','iris')))
             rows=[{'instance_id':'pytest-dev__pytest-10081','repo':'pytest-dev/pytest',
                    'version':'7.2','environment_setup_commit':'a'*40},
                   {'instance_id':'pytest-dev__pytest-5631','repo':'pytest-dev/pytest',
@@ -140,10 +140,10 @@ class EnvironmentGroupsTest(unittest.TestCase):
                 self.assertEqual([group['requirements'] for group in prepared],
                                  [b'pluggy==0.13.1\nsetuptools-scm[toml]==7.1.0\n',
                                   b'pluggy==0.13.1\nsetuptools-scm[toml]==7.1.0\nimportlib-metadata==4.13.0\n',
-                                  b'numpy==1.23.0\npandas==1.5.3\n'])
+                                  ('numpy==1.23.0\npandas==1.5.3\n'+'\n'.join(__import__('xarray_setup').dependency_pins(source.read_text()))+'\n').encode()])
                 source.write_text('tampered')
                 with self.assertRaises(ValueError):environment_groups(root,rows)
-                source.write_text('original conda declaration')
+                source.write_text('dependencies:\n'+''.join('  - '+name+'\n' for name in ('bottleneck','cftime','sparse','pint','numba','numexpr','numbagg','iris')))
                 groups[0]['recipe']['pip_packages']=['pluggy==9.9.9']
                 (root/'environment-groups.json').write_text(json.dumps({'groups':groups}))
                 with self.assertRaises(ValueError):environment_groups(root,rows)
@@ -227,3 +227,76 @@ class SphinxSetupTest(unittest.TestCase):
             (root/'setup.py').write_text('unchanged packaging\n')
             apply_setup(root,'5.2')
             self.assertEqual((root/'setup.py').read_text(),'unchanged packaging\n')
+
+
+class SphinxUnknownVersionTest(unittest.TestCase):
+    def test_unknown_version_does_not_partially_rewrite_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);tox=root/'tox.ini';tox.write_text('pytest\n')
+            with self.assertRaises(ValueError):apply_setup(root,'9.0')
+            self.assertEqual(tox.read_text(),'pytest\n')
+
+
+class SphinxLegacyDependenciesTest(unittest.TestCase):
+    def test_legacy_pkg_resources_keeps_a_compatible_fixed_setuptools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            row={'instance_id':'sphinx-doc__sphinx-8120','repo':'sphinx-doc/sphinx',
+                 'version':'3.3','environment_setup_commit':'a'*40}
+            group={'repo':row['repo'],'version':row['version'],
+                   'environmentSetupCommit':'a'*40,'harnessRelease':'4.1.0',
+                   'pythonVersion':'3.9','recipe':reviewed_recipe('3.3'),'dependencySourceFiles':[]}
+            (root/'environment-groups.json').write_text(json.dumps({'groups':[group]}))
+            requirements=environment_groups(root,[row])[0]['requirements']
+            self.assertIn(b'setuptools==70.0.0\n',requirements)
+            self.assertIn(b'docutils==0.16\n',requirements)
+
+from legacy_python import source_archive, unpack
+from swe_machine import install_argv, freeze_argv
+import io
+import tarfile
+
+class LegacyPythonPreparationTest(unittest.TestCase):
+    def test_cached_runtime_hash_is_checked_without_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive=Path(tmp)/'source.tar';archive.write_bytes(b'original')
+            source_archive(archive,'https://invalid.example',hashlib.sha256(b'original').hexdigest())
+            with self.assertRaises(ValueError):source_archive(archive,'https://invalid.example','0'*64)
+
+    def test_runtime_archives_reject_paths_and_links_outside_build_tree(self):
+        for name,kind in [('../escape',tarfile.REGTYPE),('/escape',tarfile.REGTYPE),('link',tarfile.SYMTYPE)]:
+            with tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);archive=root/'unsafe.tar'
+                with tarfile.open(archive,'w') as output:
+                    entry=tarfile.TarInfo(name);entry.type=kind;entry.linkname='/outside'
+                    output.addfile(entry,io.BytesIO())
+                with self.assertRaises(ValueError):unpack(archive,root/'output')
+                self.assertFalse((root/'output').exists())
+
+    def test_original_python_36_uses_its_supported_pip_without_affecting_modern_groups(self):
+        env=Path('/env')
+        self.assertEqual(install_argv('/uv',env,'3.6',['-r','requirements.txt']),
+                         ['/env/bin/python','-m','pip','install','-r','requirements.txt'])
+        self.assertEqual(freeze_argv('/uv',env,'3.6'),['/env/bin/python','-m','pip','freeze'])
+        self.assertEqual(install_argv('/uv',env,'3.9',['pytest']),
+                         ['/uv','pip','install','--python','/env/bin/python','pytest'])
+
+    def test_django32_requires_the_original_locale_and_python_recipe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);source=root/'artifacts/dependency-inputs/django.txt'
+            source.parent.mkdir(parents=True);source.write_text('asgiref>=3.3.2\n')
+            row={'instance_id':'django__django-12754','repo':'django/django',
+                 'version':'3.2','environment_setup_commit':'a'*40}
+            group={'repo':row['repo'],'version':row['version'],'environmentSetupCommit':'a'*40,
+                   'harnessRelease':'4.1.0','pythonVersion':'3.6',
+                   'recipe':{'python':'3.6','packages':'requirements.txt','install':'python -m pip install -e .',
+                    'eval_commands':["sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen",
+                                     'export LANG=en_US.UTF-8','export LANGUAGE=en_US:en','export LC_ALL=en_US.UTF-8'],
+                    'test_cmd':'./tests/runtests.py --verbosity 2 --settings=test_sqlite --parallel 1'},
+                   'dependencySourceFiles':[{'repoPath':'tests/requirements/py3.txt','artifactPath':'django.txt',
+                                            'sha256':hashlib.sha256(source.read_bytes()).hexdigest()}]}
+            (root/'environment-groups.json').write_text(json.dumps({'groups':[group]}))
+            self.assertEqual(environment_groups(root,[row])[0]['requirements'],source.read_bytes())
+            group['recipe']['python']='3.9'
+            (root/'environment-groups.json').write_text(json.dumps({'groups':[group]}))
+            with self.assertRaises(ValueError):environment_groups(root,[row])

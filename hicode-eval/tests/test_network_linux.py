@@ -29,7 +29,7 @@ class LinuxNetworkTest(unittest.TestCase):
             with tempfile.TemporaryDirectory(prefix='hicode-net-') as directory:
                 root=Path(directory);root.chmod(0o755)
                 home=root/'home';project=root/'project';logs=root/'logs';control=root/'control'
-                for p in [home,project,logs,control]:p.mkdir();os.chown(p,65534,65534);p.chmod(0o700)
+                for p in [home,project,logs,control,root/'actor-events']:p.mkdir();os.chown(p,65534,65534);p.chmod(0o700)
                 settings=home/'settings.json';settings.write_text(json.dumps({'sources':{'fixture':{'baseUrl':'unused'}}}));os.chown(settings,65534,65534)
                 actor=home/'actor.py'
                 actor.write_text('''import http.client,json,socket,subprocess,sys
@@ -56,9 +56,8 @@ print('ISOLATED_OK' if isolated else 'OPEN_OK')
                 try:
                     if gateway:os.chown(control/'model.sock',65534,65534)
                     args=['python3',str(actor),str(settings),str(provider.server_port),str(isolated)]
-                    if isolated:args=['python3',str(worker/'network_entry.py'),str(control/'model.sock'),str(settings),*args]
-                    args=['--ro-bind',str(worker),str(worker),*args]
-                    argv=namespace_argv(args,project,home,logs,control,isolated_network=isolated)
+                    if isolated:args=['python3','/opt/hicode-eval/network_entry.py',str(control/'model.sock'),str(settings),*args]
+                    argv=namespace_argv(args,project,home,logs,control,isolated_network=isolated,actor_release=os.environ['HICODE_EVAL_ACTOR_RELEASE'],actor_events=root/'actor-events')
                     def demote():os.setgroups([]);os.setgid(65534);os.setuid(65534)
                     result=subprocess.run(argv,env={'PATH':os.environ['PATH'],'HOME':str(home)},preexec_fn=demote,
                                           capture_output=True,text=True,timeout=20)

@@ -87,3 +87,50 @@ class NamespaceTest(unittest.TestCase):
         self.assertIn(['--tmpfs','/run'],[args[i:i+2] for i in range(len(args)-1)])
         self.assertNotIn('--unshare-net',namespace_argv(['pip'],'/p','/h','/l','/c'))
         with self.assertRaises(ValueError):namespace_argv(['pytest'],'/p','/h','/l','/c','/tests',isolated_network=True)
+
+
+class ActorFilesystemTest(unittest.TestCase):
+    def test_actor_has_no_host_root_terminal_logs_or_hidden_tests(self):
+        with patch('protocol.actor_readonly_mounts',return_value=['--ro-bind','/usr','/usr']):
+            args=namespace_argv(['bun','cli'],'/run/a/project','/run/a/home','/run/a/logs','/run/a/control',
+                                actor_release='/release',actor_events='/run/a/events',public_tests='/run/a/public')
+        self.assertIn(['--tmpfs','/'],[args[i:i+2] for i in range(len(args)-1)])
+        self.assertNotIn(['--ro-bind','/','/'],[args[i:i+3] for i in range(len(args)-2)])
+        self.assertNotIn('/run/a/logs',args)
+        self.assertEqual(args[args.index('/run/a/home')-1],'--bind')
+        self.assertEqual(args[args.index('/run/a/events')-1],'--bind')
+        self.assertEqual(args[args.index('/run/a/public')-1],'--ro-bind')
+        self.assertEqual(args[args.index('/run/a/public')+1],'/tests')
+
+    def test_incomplete_or_mixed_actor_views_fail_closed(self):
+        for options in [{'actor_release':'/release'},{'actor_events':'/events'},
+                        {'actor_release':'/release','actor_events':'/events','root_overlay':True},
+                        {'actor_release':'/release','actor_events':'/events','readonly_logs':True}]:
+            with self.assertRaises(ValueError):namespace_argv(['bun'],'/p','/h','/l','/c',**options)
+        with self.assertRaises(ValueError):namespace_argv(['bun'],'/p','/h','/l','/c','/hidden',actor_release='/release',actor_events='/events')
+
+
+class AssignmentPromptTest(unittest.TestCase):
+    def test_actual_limits_have_second_precision_and_no_network_claim_when_open(self):
+        from protocol import assignment_prompt
+        for seconds,label in [(900,'15 分钟'),(1800,'30 分钟'),(2700,'45 分钟'),(2120,'35 分钟 20 秒'),(30,'30 秒')]:
+            message=assignment_prompt('Original question',seconds,'open','/app',[])
+            self.assertIn(label,message)
+            self.assertNotIn('当前外网不可用',message)
+            self.assertTrue(message.endswith('Original question'))
+        message=assignment_prompt('Original question',1200,'isolated','/testbed',['/testbed/testing/'])
+        self.assertIn('20 分钟',message);self.assertIn('当前外网不可用',message)
+        self.assertIn('/testbed/testing/',message)
+        self.assertIn('无需跑满时限',message)
+
+    def test_invalid_limits_and_network_fail_before_submission(self):
+        from protocol import assignment_prompt
+        for seconds in [29,7201,1.5,True]:
+            with self.assertRaises(ValueError):assignment_prompt('q',seconds,'isolated','/app',[])
+        with self.assertRaises(ValueError):assignment_prompt('q',900,'unknown','/app',[])
+
+    def test_swe_and_terminal_public_tests_use_their_real_entries(self):
+        from protocol import public_test_entries
+        self.assertEqual(public_test_entries({'dataset':'swe-bench-verified','swe':{'repo':'pytest-dev/pytest'}}),['/testbed/testing/'])
+        self.assertEqual(public_test_entries({'publicTestInputs':[{'source':'environment/file.py','target':'file.py'}]}),['/tests/file.py'])
+        self.assertEqual(public_test_entries({}),[])

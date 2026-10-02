@@ -109,6 +109,7 @@ async function runAgentCore(
     options: AgentRunOptions,
     dependencies: AgentRunnerDependencies
 ): Promise<AgentResult> {
+    const taskStartedAt = performance.now();
     assertCompleteToolPairs(history);
     const maxIterations = options.maxIterations === undefined
         ? undefined
@@ -224,6 +225,7 @@ async function runAgentCore(
                 compactHistory: compactHistoryImpl,
                 contextWindow: providerContextWindow,
                 forceCompact,
+                elapsedTaskStartedAt: iterations % 4 === 0 ? taskStartedAt : undefined,
                 getTodos: options.getTodos,
                 getAdditionalUserContextBlocks:options.getAdditionalUserContextBlocks,
                 additionalUserContextBlocks: [

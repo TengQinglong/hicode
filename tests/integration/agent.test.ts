@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, spyOn } from "bun:test";
 import { runAgentForTest as runAgent } from "../helpers/agent.js";
 import type { LLMCaller } from "../../src/llm/types.js";
 import type { AgentEvent } from "../../src/agent/types.js";
@@ -12,6 +12,7 @@ import {
 import { createTestContext } from "../helpers/testContext.js";
 import { withTempProject } from "../helpers/tempProject.js";
 import { createFileChange } from "../../src/fileChanges/index.js";
+import {hasCompleteToolPairs} from "../../src/session/codec.js";
 
 function initialHistory(): Message[] {
   return [{ role: "system", content: "test system prompt" }];
@@ -902,6 +903,47 @@ describe("agent loop", () => {
       expect(result.reply).toBe("任务完成");
       expect(result.iterations).toBe(toolIterations + 1);
       expect(fake.calls).toHaveLength(toolIterations + 1);
+    });
+  });
+
+  test("elapsed time is a transient request suffix every fourth loop and resets for the next Turn", async () => {
+    await withTempProject(async cwd => {
+      let now = 1_000;
+      const clock = spyOn(performance, "now").mockImplementation(() => now);
+      const history = initialHistory();
+      const isElapsedReminder = (message: Message) => typeof message.content === "string" &&
+        message.content.includes("You have been working on this task for");
+      try {
+        for (const [turn, toolRounds] of [[1, 8], [2, 3]] as const) {
+          // Idle time between Turns must not carry into the next task's clock.
+          now += 60_000_000;
+          const fake = createFakeLLM([
+            ...Array.from({length: toolRounds}, (_, round) => assistantToolCalls([
+              {id: `time-${turn}-${round}-a`, type: "function", function: {name: "read_file", arguments: "{}"}},
+              {id: `time-${turn}-${round}-b`, type: "function", function: {name: "read_file", arguments: "{}"}},
+            ])),
+            assistantText("completed"),
+          ]);
+          const result = await runAgent("finish the task", history, () => {}, createTestContext(cwd), {
+            callLLM: fake.callLLM,
+            executeTool: async () => {now += turn === 1 ? 122_000 : 3_400; return "read completed";},
+            isToolConcurrencySafe: () => false,
+          });
+          expect(result.reason).toBe("completed");
+          for (const [index, request] of fake.calls.entries()) {
+            const reminders = request.messages.filter(isElapsedReminder);
+            expect(reminders).toHaveLength((index + 1) % 4 === 0 ? 1 : 0);
+            expect(hasCompleteToolPairs(request.messages)).toBe(true);
+            expect(request.messages.slice(0, 2)).toEqual(fake.calls[0]!.messages.slice(0, 2));
+            if (reminders.length) {
+              const elapsed = turn === 2 ? "0m 20s" : index === 3 ? "12m 12s" : "28m 28s";
+              expect(request.messages.at(-1)).toEqual({role: "user", origin: "runtime",
+                content: `<system-reminder>\nYou have been working on this task for ${elapsed}.\n</system-reminder>`});
+            }
+          }
+          expect(history.some(isElapsedReminder)).toBe(false);
+        }
+      } finally {clock.mockRestore();}
     });
   });
 

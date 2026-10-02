@@ -10,14 +10,36 @@ import stat
 import subprocess
 import tempfile
 import time
+import re
+import ast
 from protocol import atomic_json, namespace_argv
 
 ENV_MOUNT = '/opt/hicode-swe/env'
 
 def editable_install_argv(python, project, repo):
     args = [str(python), '-m', 'pip', 'install', '--no-deps']
-    if repo in ('pytest-dev/pytest', 'sphinx-doc/sphinx'): args.append('--no-build-isolation')
+    if repo in ('pytest-dev/pytest', 'sphinx-doc/sphinx', 'pydata/xarray'): args.append('--no-build-isolation')
     return [*args, '-e', str(project) + ('[test]' if repo == 'sphinx-doc/sphinx' else '')]
+
+
+def project_environment(repo, project=None):
+    # tox-current-env's fake Python links bypass venv discovery. Keep the same
+    # public source and cached packages visible without changing test commands.
+    if repo == 'sphinx-doc/sphinx':
+        return {'PYTHONPATH':'/testbed:'+ENV_MOUNT+'/lib/python3.9/site-packages'}
+    if repo == 'pydata/xarray':
+        if project is None:raise ValueError('Xarray requires verified upstream version metadata; prepare this task again')
+        path=Path(project)/'.git/hicode-source-version.json'
+        if path.is_symlink() or not path.is_file() or path.stat().st_size>4096:
+            raise ValueError('Missing trusted Xarray source-version metadata; prepare this task again')
+        receipt=json.loads(path.read_text())
+        if (set(receipt)!={'baseCommit','describe','version'} or
+            not isinstance(receipt['baseCommit'],str) or not re.fullmatch(r'[a-f0-9]{40}',receipt['baseCommit']) or
+            not isinstance(receipt['describe'],str) or not re.fullmatch(r'v?[0-9]+(?:\.[0-9]+)+(?:[ab]\d+|rc\d+)?-\d+-g[a-f0-9]+',receipt['describe']) or
+            not isinstance(receipt['version'],str) or not re.fullmatch(r'[0-9]+(?:\.[0-9]+)+(?:[ab]\d+|rc\d+)?(?:\.dev[0-9]+\+g[a-f0-9]+|\+[0-9]+\.g[a-f0-9]+)?',receipt['version'])):
+            raise ValueError('Invalid trusted Xarray source-version metadata')
+        return {'SETUPTOOLS_SCM_PRETEND_VERSION':receipt['version']}
+    return {}
 
 
 def snapshot(source, target):
@@ -127,6 +149,45 @@ def validate_swe_report(data, instance_id, expected_grade):
         if not item['patch_successfully_applied']:raise ValueError('Unapplied SWE patch cannot pass')
 
 
+
+def namespace_eval_commands(commands, repo, version):
+    result=[]
+    for command in commands:
+        if command.startswith('source /opt/miniconda3/bin/activate') or command.startswith('conda activate '):
+            continue
+        if repo=='pydata/xarray' and command=='python -m pip install -e .':
+            # Both phases use the same cached dependencies and SCM backend.
+            # Rebuilding in an isolated env would resolve another toolchain.
+            result.append('python -m pip install --no-deps --no-build-isolation -e .')
+            continue
+        if (repo=='django/django' and version=='3.2' and
+            command=="sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen"):
+            # Locale generation belongs to trusted preparation. The read-only
+            # grader checks that same precondition instead of writing /etc.
+            result.append('locale -a | grep -Fxq en_US.utf8 || exit 1')
+        else:result.append(command)
+    return result
+
+
+def xarray_arm_reporting(project):
+    """Recognize the original platform marker before enabling the narrow reporter."""
+    if platform.machine() not in {'aarch64','arm64'}:return False
+    project=Path(project)
+    marker=project/'xarray/tests/__init__.py'
+    tests=project/'xarray/tests/test_duck_array_ops.py'
+    if not marker.is_file() or not tests.is_file():return False
+    definitions=ast.parse(marker.read_text())
+    valid=False
+    expected=ast.parse('pytest.mark.xfail(platform.machine() == "aarch64" or "arm" in platform.machine(), reason="expected failure on ARM")',mode='eval').body
+    for node in definitions.body:
+        if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='arm_xfail' for t in node.targets):
+            valid=ast.dump(node.value)==ast.dump(expected)
+    for node in ast.parse(tests.read_text()).body:
+        if isinstance(node,ast.FunctionDef) and node.name=='test_datetime_mean':
+            return valid and any(isinstance(d,ast.Name) and d.id=='arm_xfail' for d in node.decorator_list)
+    return False
+
+
 def verify_swe(root, config, uid, gid, cancelled):
     """Seal/export, replay in clean code+dependencies, then invoke official grading."""
     root = Path(root)
@@ -153,6 +214,7 @@ def verify_swe(root, config, uid, gid, cancelled):
     def demote(): os.setgroups([]); os.setgid(gid); os.setuid(uid)
     env = {'PATH': ENV_MOUNT+'/bin:'+os.environ['PATH'], 'HOME': str(grade_home), 'LANG': 'C.UTF-8',
            'VIRTUAL_ENV': ENV_MOUNT, 'PYTHONDONTWRITEBYTECODE':'1', 'PIP_DISABLE_PIP_VERSION_CHECK':'1'}
+    env.update(project_environment(config['swe']['repo'],root/'baseline'))
     args = namespace_argv(['git','apply','--whitespace=nowarn','/tests/model.patch'], work, grade_home,
                           root/'logs', root/'control-placeholder', root/'tests', workdir='/testbed', environment=grade_env, readonly_logs=True)
     # Patch replay happens after stopping every Actor process. Hidden data is only in this view.
@@ -177,11 +239,12 @@ def verify_swe(root, config, uid, gid, cancelled):
                     FAIL_TO_PASS=json.loads(row['FAIL_TO_PASS']) if isinstance(row['FAIL_TO_PASS'],str) else row['FAIL_TO_PASS'],
                     PASS_TO_PASS=json.loads(row['PASS_TO_PASS']) if isinstance(row['PASS_TO_PASS'],str) else row['PASS_TO_PASS'],
                     language='py',docker_specs={},namespace=None)
-    commands = []
-    for command in spec.eval_script_list:
-        if command.startswith('source /opt/miniconda3/bin/activate') or command.startswith('conda activate '):
-            continue
-        commands.append(command)
+    commands = namespace_eval_commands(spec.eval_script_list,row['repo'],row['version'])
+    if row['repo']=='pydata/xarray' and row['version']=='0.12' and xarray_arm_reporting(root/'baseline'):
+        reporter=root/'tests/hicode_platform_report.py'
+        shutil.copyfile(Path(__file__).with_name('xarray_report.py'),reporter);reporter.chmod(0o644)
+        env['PYTHONPATH']='/tests'
+        commands=[command+' -p hicode_platform_report' if command.startswith('pytest ') else command for command in commands]
     script = '#!/bin/bash\nset -uxo pipefail\n'+'\n'.join(commands)+'\n'
     (root/'tests'/'eval.sh').write_text(script)
     argv = namespace_argv(['bash','/tests/eval.sh'], work, grade_home, root/'logs', root/'control-placeholder',

@@ -151,3 +151,46 @@ test('Sphinx catalog enforces reviewed versions and original Python 3.9',async()
   await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('Django 3.2 retains its original Python 3.6 contract',async()=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-django32-')));
+ const id='django__django-12754',path=join(root,id);
+ try{
+  await mkdir(path);
+  const base={kind:'swe-bench-verified',instanceId:id,repo:'django/django',version:'3.2',
+   revision:'c'.repeat(40),baseCommit:'a'.repeat(40),harnessVersion:'4.1.0',
+   environment:'/opt/hicode-swe/cache/'+'a'.repeat(64),verifierSeconds:1800,
+   baselineCommit:'b'.repeat(40),files:{},evaluationMode:'shared-linux-development'};
+  await save(join(path,'swe-task.json'),{...base,python:'3.6'});
+  expect((await sweCatalog(root))[0]?.id).toBe(id);
+  await save(join(path,'swe-task.json'),{...base,python:'3.9'});
+  await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('Xarray submission rejects absent, skipped and wrong-environment public preflight proofs',async()=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-xarray-ready-'))),id='pydata__xarray-4094';
+ try {
+  await mkdir(join(root,'repository/.git'),{recursive:true});await mkdir(join(root,'hidden'));
+  await writeFile(join(root,'repository/public.py'),'# original source');
+  await writeFile(join(root,'instruction.md'),'public problem');await writeFile(join(root,'hidden/evaluation.json'),'{}');
+  const environment='/opt/hicode-swe/cache/'+'c'.repeat(64),baseCommit='a'.repeat(40);
+  const saveTask=async()=>save(join(root,'swe-task.json'),{
+    kind:'swe-bench-verified',instanceId:id,revision:'c'.repeat(40),repo:'pydata/xarray',version:'0.12',
+    baseCommit,harnessVersion:'4.1.0',environment,python:'3.10',verifierSeconds:1800,
+    baselineCommit:'b'.repeat(40),evaluationMode:'shared-linux-development',
+    files:Object.fromEntries(Object.entries(await tree(root)).filter(([name])=>name!=='swe-task.json').map(([name,file])=>[name,file.sha256])),
+  });
+  await saveTask();await expect(validateSweTask(id,root)).rejects.toThrow();
+  for(const proof of [
+    {sourceCommit:baseCommit,environment,passed:false,checked:0},
+    {sourceCommit:baseCommit,environment:'/opt/hicode-swe/cache/'+'b'.repeat(64),passed:true,checked:10},
+    {sourceCommit:baseCommit,environment,passed:true,checked:0},
+  ]){
+    await save(join(root,'repository/.git/hicode-env-preflight.json'),proof);await saveTask();
+    await expect(validateSweTask(id,root)).rejects.toThrow();
+  }
+  await save(join(root,'repository/.git/hicode-env-preflight.json'),{sourceCommit:baseCommit,environment,passed:true,checked:10});
+  await saveTask();expect((await validateSweTask(id,root)).instanceId).toBe(id);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
