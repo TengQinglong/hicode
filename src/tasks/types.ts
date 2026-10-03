@@ -26,7 +26,6 @@ export interface ShellTaskSnapshot {
     phase: "queued" | "starting" | "running" | "finished";
     timing: {queuedMs: number; runningMs: number};
     processStartedAt?: string;
-    blockedByTaskId?: string;
     executionMode: "sandbox" | "host";
     id: string;
     kind: "shell";
@@ -155,6 +154,8 @@ export interface TaskNotification {
     label: string;
     status: Exclude<AgentTaskStatus, "running">;
     summary: string;
+    shellTermination?: ShellTermination["kind"];
+    shellOutputIssue?: boolean;
     resultId?: string;
     message: string;
 }

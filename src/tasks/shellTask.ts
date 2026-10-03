@@ -4,7 +4,6 @@ import type {ShellRunnerLike} from "../tools/bash/shellRunner.js";
 import type {StartShellTaskInput, TaskSessionBinding, TaskStatus,} from "./types.js";
 import {type ManagedShellTask, readOutputPreview,} from "./managed.js";
 import {isExpectedShellShutdown} from "./notifications.js";
-import type {FileCommitCoordinator} from "../tools/shared/fileCommit.js";
 
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
@@ -46,7 +45,7 @@ export async function runShellTask(
     task: ManagedShellTask,
     input: StartShellTaskInput,
     shellRunner: ShellRunnerLike,
-    execution: {kind: "background" | "continuation"; timeoutMs: number | null; fileCommits: FileCommitCoordinator; onPhaseChanged(): void},
+    execution: {timeoutMs: number | null; onPhaseChanged(): void},
     onFinished: (task: ManagedShellTask) => Promise<void>
 ): Promise<void> {
     let finalStatus: TaskStatus = "failed";
@@ -54,7 +53,6 @@ export async function runShellTask(
         const run = () => {
             task.phase = "starting";
             task.acquiredTick = performance.now();
-            task.blockedByTaskId = undefined;
             execution.onPhaseChanged();
             return shellRunner.run({
                 command: input.command,
@@ -70,8 +68,7 @@ export async function runShellTask(
                 networkAccess: input.networkAccess,
             });
         };
-        const result = execution.kind === "continuation"
-            ? await execution.fileCommits.exclusive(task.controller.signal, run, task.id, owner => {task.blockedByTaskId = owner; execution.onPhaseChanged();}) : await run();
+        const result = await run();
         if (!task.published) task.inlineResult = result;
         finalStatus = statusFromResult(result);
         task.termination = result.termination;
@@ -106,7 +103,6 @@ export async function runShellTask(
         task.status = finalStatus;
         task.phase = "finished";
         task.finishedTick = performance.now();
-        task.blockedByTaskId = undefined;
         task.completedAt = new Date().toISOString();
         task.notificationPending = !task.suppressTerminalNotification && !isExpectedShellShutdown(task);
         await task.store.removeTemporaryFile(task.outputPath);

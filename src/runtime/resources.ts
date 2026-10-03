@@ -111,7 +111,6 @@ interface RootRuntimeDependencies {
         createSubagentThread: CreateSubagentThread,
         subagents: SubagentCatalog,
         memory:MemoryRuntimeLike,
-        fileCommits: FileCommitCoordinator,
         reviewTask: AgentRuntime["reviewTask"]
     ): TaskRuntimeLike;
     createAgentRuntime: typeof createAgentRuntime;
@@ -341,7 +340,6 @@ export function createRootRuntimeResourcesFactory(
                 agentRuntime.createSubagentThread,
                 subagents,
                 createdMemory,
-                fileCommits,
                 agentRuntime.reviewTask
             );
             taskRuntime = createdTaskRuntime;

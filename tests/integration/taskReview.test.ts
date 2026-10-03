@@ -37,7 +37,7 @@ test("round 10 launches review without blocking round 11 or final completion; Tu
             });
             return report;
         };
-        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, undefined, factory);
+        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, factory);
         const session = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
         const ctx = createTestContext(cwd, {tasks: session, taskReviewEnabled: true});
         const fake = createFakeLLM([...steps(), async options => {
@@ -80,7 +80,7 @@ test("a delayed review is injected once at the request tail with the frozen roun
             started.resolve(); await finish.promise;
             return report;
         };
-        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, undefined, factory);
+        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, factory);
         const session = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
         session.subscribe(event => {if (event.type === "task_finished" && event.task.kind === "review") published.resolve();});
         const ctx = createTestContext(cwd, {tasks: session, taskReviewEnabled: true});
@@ -165,7 +165,7 @@ test("review calls the LLM directly with only a short dedicated prompt and froze
             expect(options.kind).toBe("task_review");
             return assistantText(report);
         }]);
-        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined, undefined,
+        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined,
             createTaskReviewRunner({callLLM: fake.callLLM}));
         const session = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
         try {
@@ -182,7 +182,7 @@ test.each(["empty", "tool_call"])("%s review output fails only the advisory task
     await withTempProject(async cwd => {
         const ctx = createTestContext(cwd);
         const fake = createFakeLLM([kind === "empty" ? assistantText("  ") : assistantToolCall("read_file", {path: "source.py"}, "unexpected")]);
-        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined, undefined,
+        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined,
             createTaskReviewRunner({callLLM: fake.callLLM}));
         const session = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
         try {
@@ -199,7 +199,7 @@ test("long plain-text feedback is bounded without discarding the review or split
     await withTempProject(async cwd => {
         const ctx = createTestContext(cwd);
         const fake = createFakeLLM([assistantText("✨".repeat(1_200))]);
-        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined, undefined,
+        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined,
             createTaskReviewRunner({callLLM: fake.callLLM}));
         try {
             const result = await runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore})
@@ -228,7 +228,7 @@ test("advisory review remains available in one-shot Hosts and archived results d
     await withTempProject(async cwd => {
         const base = createTestContext(cwd);
         const factory: TaskReviewRunner = async () => report;
-        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, undefined, factory);
+        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, factory);
         const binding = {sessionId: base.sessionId, toolResultStore: base.toolResultStore, allowBackgroundTasks: false};
         try {
             const result = await runtime.forSession(binding).startReview({parentContext: base, signal: base.signal,

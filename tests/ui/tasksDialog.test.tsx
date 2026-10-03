@@ -14,24 +14,22 @@ import {layoutTerminalMarkdown} from "../../src/ui/conversation/TerminalMarkdown
 
 afterEach(cleanup);
 
-test("queued Shell is shown as unstarted and does not refresh periodically", async () => {
+test("running Shell is shown without periodic refresh", async () => {
   await withTempProject(async cwd => {
     const ctx = createTestContext(cwd);
     const resources = createTestRuntimeResources(cwd);
     const tasks = resources.taskRuntime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
-    let release!: () => void;
-    const lock = resources.fileCommits.exclusive(ctx.signal, () => new Promise<void>(resolve => {release = resolve;}));
     let view: ReturnType<typeof render> | undefined;
     try {
-      const result = await tasks.runShell({command: "printf later", cwd, toolCallId: "queued", waitMs: 100,
+      const result = await tasks.runShell({command: "sleep 30", cwd, toolCallId: "running", waitMs: 100,
         signal: ctx.signal, onHandoff() {}});
       expect(result.kind).toBe("task");
       view = render(<TasksDialog tasks={tasks} stopTask={async () => {}} onClose={() => {}}/>);
-      await until(() => view?.lastFrame()?.includes("queued (file commit lock)") === true);
+      await until(() => view?.lastFrame()?.includes("Command · running") === true);
       const count = view.frames.length;
       await new Promise(resolve => setTimeout(resolve, 150));
       expect(view.frames.length).toBe(count);
-    } finally {view?.unmount(); await resources.close(); release(); await lock;}
+    } finally {view?.unmount(); await resources.close();}
   });
 });
 async function until(predicate: () => boolean | Promise<boolean>) {
@@ -221,7 +219,7 @@ test("followup displays the current run duration and excludes idle time from the
 test("advisory task review displays its covered rounds rather than a Memory or ordinary delegate label", async () => {
   await withTempProject(async cwd => {
     const ctx = createTestContext(cwd);
-    const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined, undefined,
+    const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined,
       async () => "Verified recent progress");
     const tasks = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
     let view: ReturnType<typeof render> | undefined;

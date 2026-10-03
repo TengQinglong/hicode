@@ -75,6 +75,22 @@ test.each(["task", "agent_message"])("%s waits collapse only running/success row
     }
 });
 
+test("failed Shell wait is shown once unless its completion notification is already visible", () => {
+    const receipt = {taskId: "t_123456789abc", notificationId: "a".repeat(64)};
+    const waiting: ToolCallThread = {id: "wait", role: "tool_call", toolCallId: "wait", name: "task",
+        args: JSON.stringify({action: "wait", task_id: receipt.taskId}), status: "done", outcome: "failed",
+        completedTask: receipt, result: "task_id: t_123456789abc kind: shell status: failed\nTermination: exit code 1"};
+    const notification: UIThread = {id: "done", role: "task_notification", kind: "shell",
+        taskId: receipt.taskId, status: "failed", shellTermination: "exit", label: "pytest -q", summary: "exit 1 · 1 failed"};
+    expect(render(<MessageList threads={[waiting]}/>).lastFrame()).toContain("Termination: exit code 1");
+    const frame = render(<MessageList threads={[notification, waiting]}/>).lastFrame()!;
+    expect(frame).toContain("Background command exited");
+    expect(frame).not.toContain("Task wait");
+    expect(render(<MessageList threads={[notification, waiting]} transcript/>).lastFrame()).toContain("Termination: exit code 1");
+    const failedWait = {...waiting, completedTask: undefined, result: "Shell task became unavailable"};
+    expect(render(<MessageList threads={[notification, failedWait]}/>).lastFrame()).toContain("Shell task became unavailable");
+});
+
 test("incremental appends and full replay keep identical individual Agent rows", () => {
     const calls = [agent("board"), agent("ui")];
     expect(projectDefaultThreads(calls)).toEqual(calls.flatMap(call => projectDefaultThreads([call])));

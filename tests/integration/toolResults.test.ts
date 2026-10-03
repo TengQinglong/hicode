@@ -16,7 +16,7 @@ describe("large tool result integration", () => {
         options => {
           const result = options.messages.find(message => message.role === "tool" && message.tool_call_id === "failed-test");
           const content = contentText(result?.content);
-          expect(content).toContain("exit code 1");
+          expect(content).toContain("Command exited with code 1");
           expect(content).toContain("START");
           expect(content).toContain("FAIL: 1 test");
           expect(content).not.toContain("ERR_ASSERTION");

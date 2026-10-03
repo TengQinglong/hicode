@@ -379,7 +379,7 @@ describe("phase-based tool presentation", () => {
         expect(frame).toContain("● Agent Explore · 调查后端");
     });
 
-    test("后台任务失败使用专用行并直接展示首要原因", () => {
+    test("命令非零退出显示为命令结果，框架故障仍显示任务失败", () => {
         const threads: UIThread[] = [{
             id: "task-notification",
             role: "task_notification",
@@ -388,14 +388,30 @@ describe("phase-based tool presentation", () => {
             kind: "shell",
             label: "node server.js",
             status: "failed",
+            shellTermination: "exit",
             summary: "exit 1 · Error: listen EADDRINUSE :::3000",
             resultId: "task_task-1",
+        }, {
+            id: "runtime-failure", role: "task_notification", taskId: "task-2", kind: "shell",
+            label: "node server.js", status: "failed", shellTermination: "spawn_error",
+            summary: "spawn error · permission denied",
         }];
         const frame = render(<MessageList threads={threads}/>).lastFrame() ?? "";
+        expect(frame).toContain("● Background command exited · node server.js");
         expect(frame).toContain("● Background task failed · node server.js");
         expect(frame).toContain("⎿ exit 1 · Error: listen EADDRINUSE :::3000");
         expect(frame).toContain("Full output is available in task details");
         expect(frame).not.toContain("完整输出可通过");
+    });
+
+    test("失败工具保留诊断，但默认展示只用标记强调失败", () => {
+        const threads = completeTool([], {id: "bash-exit", name: "bash", args: {command: "pytest -q"},
+            result: "Command exited with code 1:\nFAILED test_example.py::test_case\n1 failed", outcome: "failed"});
+        const frame = render(<MessageList threads={threads}/>).lastFrame() ?? "";
+        expect(frame).toContain("Bash pytest -q");
+        expect(frame).toContain("Command exited with code 1");
+        expect(frame).toContain("FAILED test_example.py::test_case");
+        expect(render(<MessageList threads={threads} transcript/>).lastFrame()).toContain("1 failed");
     });
 });
 

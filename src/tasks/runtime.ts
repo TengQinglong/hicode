@@ -22,7 +22,6 @@ import {
 } from "./managed.js";
 import {TaskNotificationCenter, taskNotificationId, isExpectedShellShutdown} from "./notifications.js";
 import {createShellTask, runShellTask} from "./shellTask.js";
-import type {FileCommitCoordinator} from "../tools/shared/fileCommit.js";
 import {
     createAgentTask,
     resetAgentRun,
@@ -199,7 +198,6 @@ class TaskRuntime implements TaskRuntimeLike {
         private readonly journal: TaskJournalLike,
         private readonly subagents: SubagentRegistry,
         private readonly memory:MemoryRuntimeLike,
-        private readonly fileCommits: FileCommitCoordinator,
         private readonly reviewTask: TaskReviewRunner
     ) {
     }
@@ -374,8 +372,7 @@ class TaskRuntime implements TaskRuntimeLike {
                 task,
                 input,
                 this.shellRunner,
-                {kind: continuation ? "continuation" : "background", timeoutMs: continuation?.timeoutMs ?? null,
-                    fileCommits: this.fileCommits, onPhaseChanged: () => {
+                {timeoutMs: continuation?.timeoutMs ?? null, onPhaseChanged: () => {
                         if (task.published) void snapshotShell(task).then(snapshot => {
                             if (task.status === "running" && task.phase === snapshot.phase) {
                                 this.notifyListeners(this.createEvent("task_progress", snapshot));
@@ -836,7 +833,7 @@ class TaskRuntime implements TaskRuntimeLike {
                 restored = {
                     ...restored,
                     status: "cancelled",
-                    ...(restored.kind === "shell" ? {phase: "finished" as const, blockedByTaskId: undefined} : {}),
+                    ...(restored.kind === "shell" ? {phase: "finished" as const} : {}),
                     completedAt: new Date().toISOString(),
                     outputIssue: [
                         restored.outputIssue,
@@ -864,7 +861,6 @@ export function createTaskRuntime(
     createSubagentThread: CreateSubagentThread,
     subagents: SubagentRegistry,
     memory:MemoryRuntimeLike,
-    fileCommits: FileCommitCoordinator,
     reviewTask: TaskReviewRunner
 ): TaskRuntimeLike {
     return new TaskRuntime(
@@ -873,7 +869,6 @@ export function createTaskRuntime(
         createTaskJournal(storage, cwd),
         subagents,
         memory,
-        fileCommits,
         reviewTask
     );
 }

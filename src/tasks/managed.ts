@@ -32,7 +32,6 @@ export interface ManagedShellTask extends ManagedTaskBase {
     processStartedTick?: number;
     processStartedAt?: string;
     finishedTick?: number;
-    blockedByTaskId?: string;
     published: boolean;
     publication: Promise<void>;
     inlineResult?: ShellExecutionResult;
@@ -132,7 +131,6 @@ export async function snapshotShell(
         timing: {queuedMs: Math.max(0, Math.round((task.acquiredTick ?? task.finishedTick ?? performance.now()) - task.createdTick)),
             runningMs: task.processStartedTick === undefined ? 0 : Math.max(0, Math.round((task.finishedTick ?? performance.now()) - task.processStartedTick))},
         ...(task.processStartedAt ? {processStartedAt: task.processStartedAt} : {}),
-        ...(task.blockedByTaskId ? {blockedByTaskId: task.blockedByTaskId} : {}),
         owner: task.owner,
         command: task.command,
         cwd: task.cwd,

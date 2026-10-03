@@ -51,10 +51,9 @@ ${task.resultPreview ?? task.outputIssue ?? "Reviewing frozen evidence"}`;
         const termination = formatTermination(task);
         return [
             formatTaskHeader(task),
-            `phase: ${task.phase}${task.phase === "queued" ? " (waiting for the file commit lock; process not started)" : ""}`,
+            `phase: ${task.phase}${task.phase === "queued" ? " (process not started)" : ""}`,
             `Process started: ${task.processStartedAt ?? "no"}`,
             `Queued: ${task.timing.queuedMs} ms; running: ${task.timing.runningMs} ms`,
-            ...(task.blockedByTaskId ? [`Blocked by task_id: ${task.blockedByTaskId}`] : []),
             `Command: ${task.command}`,
             `Cwd: ${task.cwd}`,
             ...(termination ? [`Termination: ${termination}`] : []),

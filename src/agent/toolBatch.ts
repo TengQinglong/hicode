@@ -232,6 +232,7 @@ export async function executeToolCallBatch({
                     result: interruptedContent ?? execution.displayContent,
                     outcome: interrupted ? "interrupted" : execution.outcome,
                     ...(execution.persisted ? {persisted: execution.persisted} : {}),
+                    ...(!interrupted && execution.completedTask ? {completedTask: execution.completedTask} : {}),
                     ...(!interrupted && execution.uiData
                         ? {uiData: execution.uiData}
                         : {}),

@@ -19,6 +19,21 @@ import {getSessionIndexPath, getSessionSnapshotPath} from "../../src/session/pat
 import {getProjectSessionsDirectory} from "../../src/persistence/index.js";
 
 describe("session persistence", () => {
+  test("失败 Shell 的完成回执在恢复后仍可用于消除重复展示", async () => {
+    await withTempProject(async (cwd, storage) => {
+      const completedTask = {taskId: "t_123456789abc", notificationId: "a".repeat(64)};
+      await saveSessionSnapshot(storage, {
+        cwd, model: "glm-test", sessionId: "shell-receipt",
+        history: [{role: "system", content: "system"}, {role: "user", origin: "user", content: "check"}],
+        todos: [], permissionMode: "ask", collaborationMode: "build",
+        uiEvents: [{version: 1, type: "tool_call", turnId: "turn", toolCallId: "wait",
+          timestamp: "2026-10-02T00:00:00.000Z", outcome: "failed", completedTask}],
+      });
+      const event = loadSession(storage, cwd, "shell-receipt", "glm-test")?.uiEvents[0];
+      expect(event).toMatchObject({type: "tool_call", outcome: "failed", completedTask});
+    });
+  });
+
   test("保存并恢复尚未消费的运行中消息", async () => {
     await withTempProject(async (cwd, storage) => {
       await saveSessionSnapshot(storage, {

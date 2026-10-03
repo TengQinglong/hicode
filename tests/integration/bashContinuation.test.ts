@@ -30,28 +30,19 @@ function fixture(cwd: string) {
     return {resources, tasks, ctx};
 }
 
-test("queued Shell returns its ID, remains unstarted, and cancellation never spawns it", async () => {
+test("a finite Shell does not queue another command behind its process lifetime", async () => {
     await withTempProject(async cwd => {
         const {resources, tasks, ctx} = fixture(cwd);
         try {
             const first = await tasks.runShell({command: "sleep 30", cwd, toolCallId: "lock-owner", waitMs: 100,
                 signal: ctx.signal, onHandoff() {}});
             expect(first.kind).toBe("task");
-            const queued = await tasks.runShell({command: "printf never > queued-start", cwd, toolCallId: "queued", waitMs: 100,
-                timeoutMs: 100, signal: ctx.signal, onHandoff() {}});
-            if (queued.kind !== "task") throw new Error("Expected queued task");
-            expect(queued.task.phase).toBe("queued");
-            expect(queued.task.blockedByTaskId).toBe(first.kind === "task" ? first.task.id : undefined);
-            expect(queued.task.timing.queuedMs).toBeGreaterThanOrEqual(90);
-            expect(queued.task.timing.runningMs).toBe(0);
-            expect(queued.task.processStartedAt).toBeUndefined();
-            expect(queued.task.id).toMatch(/^t_[a-f0-9]{12}$/);
-            const status = await executeToolResult("task", JSON.stringify({action: "status", task_id: queued.task.id}), ctx, "queue-status");
-            expect(status.modelContent).toContain("process not started");
-            expect((await tasks.stop(queued.task.id))?.status).toBe("cancelled");
+            const next = await tasks.runShell({command: "printf ready > next-start", cwd, toolCallId: "next", waitMs: 1000,
+                signal: ctx.signal, onHandoff() {}});
+            expect(next.kind).toBe("inline");
+            expect(await readFile(join(cwd, "next-start"), "utf8")).toBe("ready");
+            if (first.kind === "task") expect((await tasks.get(first.task.id))?.status).toBe("running");
             if (first.kind === "task") await tasks.stop(first.task.id);
-            await expect(readFile(join(cwd, "queued-start"))).rejects.toThrow();
-            expect((await tasks.get(queued.task.id))?.status).toBe("cancelled");
         } finally {await resources.close();}
     });
 });
@@ -78,7 +69,7 @@ test("task mistakes return accessible IDs without rerunning work or exposing ano
     });
 });
 
-test("verified read compounds proceed during a writer while file mutations remain blocked", async () => {
+test("structured file writes proceed while an unrelated finite Shell runs", async () => {
     await withTempProject(async cwd => {
         const {resources, tasks, ctx} = fixture(cwd);
         await writeFile(join(cwd, "evidence.txt"), "existing evidence");
@@ -90,10 +81,9 @@ test("verified read compounds proceed during a writer while file mutations remai
             expect(read.outcome).toBe("ok");
             expect(read.modelContent).toContain("existing evidence");
             expect((await tasks.get(owner.task.id))?.status).toBe("running");
-            const write = await executeToolResult("write_file", JSON.stringify({path: "new.txt", content: "never"}), ctx, "write");
-            expect(write.outcome).toBe("failed");
-            expect(write.modelContent).toContain(owner.task.id);
-            await expect(readFile(join(cwd, "new.txt"))).rejects.toThrow();
+            const write = await executeToolResult("write_file", JSON.stringify({path: "new.txt", content: "saved"}), ctx, "write");
+            expect(write.outcome).toBe("ok");
+            expect(await readFile(join(cwd, "new.txt"), "utf8")).toBe("saved");
         } finally {await resources.close();}
     });
 });
@@ -133,7 +123,7 @@ test("short ordinary Bash has inline output and no public task, notification or 
             const result = await executeToolResult("bash", '{"command":"printf short; exit 3"}', ctx, "short");
             expect(result.outcome).toBe("failed");
             expect(result.modelContent).toContain("short");
-            expect(result.modelContent).toContain("exit code 3");
+            expect(result.modelContent).toContain("Command exited with code 3");
             expect(result.runningTask).toBeUndefined();
             expect(result.completedTask).toBeUndefined();
             expect(await tasks.list()).toEqual([]);
@@ -191,23 +181,20 @@ test("waiting window includes Sandbox preparation and hands off the same pending
     });
 });
 
-test("handed-off finite Shell retains shared file coordination until completion", async () => {
+test("handed-off finite Shell does not block structured file commits", async () => {
     await withTempProject(async cwd => {
         const {resources, tasks, ctx} = fixture(cwd);
-        let acquired = false;
-        let commit: Promise<void> | undefined;
         try {
             const start = await executeToolResult("bash", '{"command":"sleep 0.4; printf complete","yield_time_ms":100}', ctx, "coordinated");
             expect(start.runningTask).toBeDefined();
-            await expect(resources.fileCommits.exclusive(ctx.signal, async () => {acquired = true;})).rejects.toThrow(`task_id: ${start.runningTask}`);
-            expect(acquired).toBe(false);
+            const edit = await executeToolResult("write_file", JSON.stringify({path: "during-test.txt", content: "ready"}), ctx, "during-test");
+            expect(edit.outcome).toBe("ok");
+            expect(await readFile(join(cwd, "during-test.txt"), "utf8")).toBe("ready");
             await executeToolResult("task", JSON.stringify({action: "wait", task_id: start.runningTask}), ctx, "wait");
-            commit = resources.fileCommits.exclusive(ctx.signal, async () => {acquired = true;});
-            await commit;
-            expect(acquired).toBe(true);
             await tasks.startShell({command: "sleep 30", cwd, toolCallId: "service"});
-            await resources.fileCommits.exclusive(ctx.signal, async () => {});
-        } finally {await resources.close(); await commit;}
+            const later = await executeToolResult("write_file", JSON.stringify({path: "during-service.txt", content: "ready"}), ctx, "during-service");
+            expect(later.outcome).toBe("ok");
+        } finally {await resources.close();}
     });
 });
 

@@ -169,7 +169,10 @@ function formatShellResult(result: ShellExecutionResult, noMatches?: "rg" | "gre
     const timeoutNotice = termination.kind === "timeout"
         ? "\nThe command and its child processes have terminated; they will not continue in the background. Check partial effects before retrying. For a finite install, build or test, set a longer timeout_ms (maximum 600000). Use run_in_background=true only for persistent services/watchers; in Ask mode background and yielded commands cannot request new network approval."
         : "";
-    return `Execution failed (${status}):\n${detail || "(no output)"}${timeoutNotice}`;
+    const heading = termination.kind === "exit" && !termination.signal
+        ? `Command exited with code ${termination.code}`
+        : `Execution failed (${status})`;
+    return `${heading}:\n${detail || "(no output)"}${timeoutNotice}`;
 }
 
 function shellOutcome(result: ShellExecutionResult): "ok" | "failed" | "interrupted" {
@@ -185,7 +188,8 @@ function formatShellStatus(result: ShellExecutionResult): string {
         return "Command succeeded (exit code 0).";
     }
     if (termination.kind === "exit") {
-        return `Command failed (${termination.signal ? `signal ${termination.signal}` : `exit code ${termination.code}`}).`;
+        return termination.signal ? `Command terminated by signal ${termination.signal}.`
+            : `Command exited with code ${termination.code}.`;
     }
     if (termination.kind === "timeout") {
         return `Command timed out (${termination.timeoutMs} ms); the command and its children terminated and will not continue in the background.`;
@@ -216,6 +220,8 @@ function formatObservedBackgroundTask(task: ShellTaskSnapshot, yielded = false):
         ? "Background command completed during the startup observation window."
         : task.status === "cancelled"
             ? "Background task was cancelled during the startup observation window."
+            : task.termination?.kind === "exit" && !task.outputIssue
+                ? "Background command exited during the startup observation window."
             : "Background task failed during the startup observation window.";
     return [
         formatTaskHeader(task),
@@ -461,9 +467,8 @@ export const bashTool: Tool<typeof inputSchema> = {
                     content: [
                         formatTaskHeader(task),
                         !run_in_background ? (task.phase === "running" ? "Command is still running and moved to the background (same process). This is not a successful command result." : "Command has not started; the existing task continues waiting. Do not resubmit it.") : "Background task registered.",
-                        `phase: ${task.phase}${task.phase === "queued" ? " (waiting for the file commit lock)" : ""}`,
+                        `phase: ${task.phase}`,
                         `Queued: ${task.timing.queuedMs} ms; running: ${task.timing.runningMs} ms`,
-                        ...(task.blockedByTaskId ? [`Blocked by task_id: ${task.blockedByTaskId}`] : []),
                         "Lifecycle: managed by the current HiCode Runtime; terminates when HiCode exits.",
                         `Cwd: ${displayToolPath(ctx.cwd, commandCwd) || "."}`,
                         ...(timeout_ms !== undefined && run_in_background
@@ -532,7 +537,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                 await ctx.toolResultStore.removeTemporaryFile(capturePath);
             }
         };
-        return readAccess ? execute() : ctx.fileCommits.exclusive(ctx.signal, execute);
+        return execute();
     },
 };
 

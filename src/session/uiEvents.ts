@@ -2,6 +2,7 @@ import type {FileReadReceipt} from "../tools/readFile/receipt.js";
 import type {AgentReceipt} from "../tools/agent/receipt.js";
 import type {FileChange} from "../fileChanges/types.js";
 import type {ToolOutcome} from "../toolResults/index.js";
+import type {TaskResultReceipt} from "../tasks/types.js";
 
 export interface PersistedFileChangeUIEvent {
     version: 1;
@@ -21,6 +22,7 @@ interface PersistedToolCallUIEvent {
     outcome: ToolOutcome;
     agentReceipt?: AgentReceipt;
     fileRead?: FileReadReceipt;
+    completedTask?: TaskResultReceipt;
 }
 
 export type PersistedUIEvent =

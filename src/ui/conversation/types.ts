@@ -18,6 +18,8 @@ export type UIThread =
         label: string;
         status: "completed" | "failed" | "cancelled" | "interrupted";
         summary: string;
+        shellTermination?: "exit" | "aborted" | "timeout" | "output_limit" | "spawn_error";
+        shellOutputIssue?: boolean;
         resultId?: string;
     }
     | {
@@ -32,6 +34,7 @@ export type UIThread =
         outcome?: ToolOutcome;
         result?: string;
         persisted?: PersistedToolResult;
+        completedTask?: import("../../tasks/types.js").TaskResultReceipt;
         subagentId?: string;
         subagentType?: AgentType;
         subagentName?: string;

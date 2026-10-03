@@ -170,6 +170,7 @@ const persistedUIEventSchema = z.discriminatedUnion("type", [
         outcome: z.enum(["ok", "failed", "denied", "interrupted"]),
         agentReceipt: agentReceiptSchema.optional(),
         fileRead: fileReadReceiptSchema.optional(),
+        completedTask: z.object({taskId: idSchema, notificationId: z.string().regex(/^[a-f0-9]{64}$/)}).strict().optional(),
     }).strict(),
     z.object({
         version: z.literal(1),

@@ -85,6 +85,8 @@ export function notificationFor(task: TaskSnapshot): TaskNotification {
         label,
         status: task.status as TaskNotification["status"],
         summary,
+        ...(task.kind === "shell" && task.termination ? {shellTermination: task.termination.kind} : {}),
+        ...(task.kind === "shell" && task.outputIssue ? {shellOutputIssue: true} : {}),
         ...(resultId ? {resultId} : {}),
         message: `${formatTaskHeader(task)}\n${compactLine(messageLabel)} is ${
             task.status === "completed"

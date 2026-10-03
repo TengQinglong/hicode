@@ -483,7 +483,7 @@ describe("bash tool contract", () => {
         }),
         createTestContext(cwd)
       );
-      expect(result).toContain("Execution failed (exit code 7)");
+      expect(result).toContain("Command exited with code 7");
       expect(result).toContain("stdout");
       expect(result).toContain("stderr");
     });
@@ -619,7 +619,7 @@ describe("bash tool contract", () => {
         );
 
         expect(result.outcome).toBe("failed");
-        expect(result.modelContent).toContain("failed during the startup observation window");
+        expect(result.modelContent).toContain("command exited during the startup observation window");
         expect(result.modelContent).toContain("status: failed");
         expect(result.modelContent).toContain("Termination: exit 1");
         expect(result.modelContent).toContain("listen EPERM");

@@ -165,8 +165,7 @@ export function createTestRuntimeResources(
     agentRuntime.createSubagentThread,
     storage.hicodeHome,
     subagents,
-    memory,
-    fileCommits
+    memory
   );
   const hooks = overrides.hooks ?? createDisabledTestHookRuntime();
   const toolRuntime = overrides.toolRuntime ?? createToolRuntime({hooks});

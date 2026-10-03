@@ -35,3 +35,18 @@ for (const level of [0, 1, 2, 3]) test(`status and diff remain readable at color
         expect(backgrounds.size).toBeGreaterThanOrEqual(3);
     }
 }, 10000);
+
+test("failed command colors only the failure markers, not the whole output", async () => {
+    const child = Bun.spawn([process.execPath, fileURLToPath(new URL("../fixtures/failedToolColors.tsx", import.meta.url))], {
+        env: {PATH: process.env.PATH ?? "/usr/bin:/bin", TERM: "xterm", FORCE_COLOR: "1"},
+        stdout: "pipe", stderr: "pipe",
+    });
+    const [code, output, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(0);
+    expect(stderr).toBe("");
+    const frame: unknown = JSON.parse(output);
+    if (typeof frame !== "string") throw new Error("Missing terminal frame");
+    expect(frame).toContain("\x1b[31m⎿\x1b[39m");
+    expect(frame).toContain("\x1b[31m●");
+    expect(frame).toContain("\x1b[90mFAILED example.py::test_case\x1b[39m");
+}, 10000);

@@ -85,6 +85,7 @@ export type AgentEvent =
         outcome?: "ok" | "failed" | "denied" | "interrupted";
         persisted?: PersistedToolResult;
         uiData?: ToolUIData;
+        completedTask?: import("../tasks/types.js").TaskResultReceipt;
     }
     | {
         type: "tool_result_persisted";

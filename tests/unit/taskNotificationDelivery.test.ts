@@ -1,10 +1,17 @@
 import {expect, test} from "bun:test";
-import {TaskNotificationCenter} from "../../src/tasks/notifications.js";
+import {TaskNotificationCenter, notificationFor} from "../../src/tasks/notifications.js";
 import type {TaskSnapshot} from "../../src/tasks/types.js";
 import {RuntimeMessageQueue} from "../../src/runtime/messageQueue.js";
 
 const task: TaskSnapshot = {id: "task", kind: "shell", phase: "finished", executionMode: "sandbox", timing: {queuedMs: 0, runningMs: 0}, owner: {sessionId: "session", toolCallId: "call"},
     command: "echo done", cwd: "/workspace", status: "completed", startedAt: "2026-09-05T00:00:00.000Z", output: "done"};
+
+test("Shell 通知保留结构化终止原因，供 UI 区分命令退出和任务故障", () => {
+    const exited = notificationFor({...task, status: "failed", termination: {kind: "exit", code: 1, signal: null}, output: "1 failed"});
+    expect(exited).toMatchObject({shellTermination: "exit", summary: "exit 1 · 1 failed"});
+    const broken = notificationFor({...task, status: "failed", termination: {kind: "spawn_error", error: new Error("spawn denied")}, output: ""});
+    expect(broken).toMatchObject({shellTermination: "spawn_error"});
+});
 
 test("读取待交付通知不能提前持久化 ACK", async () => {
     const center = new TaskNotificationCenter();

@@ -64,15 +64,17 @@ function ResultLine({
                         line,
                         marker = "⎿",
                         color = COLORS.toolResult,
+                        markerColor = COLORS.dim,
                     }: {
     line: string;
     marker?: string;
     color?: string;
+    markerColor?: string;
 }) {
     return (
         <Box>
             <Box width={2} flexShrink={0}>
-                <Text color={COLORS.dim}>{marker}</Text>
+                <Text color={markerColor}>{marker}</Text>
             </Box>
             <Box flexGrow={1}>
                 <Text color={color}>{line || " "}</Text>
@@ -109,9 +111,7 @@ function ToolResultLines({
         : thread.name === "skill" && thread.status === "done" && thread.outcome === "ok"
         ? ["Instructions loaded · ctrl+o to expand"]
         : summarizeToolResult(thread.name, thread.result);
-    const color = thread.outcome && thread.outcome !== "ok"
-        ? COLORS.error
-        : COLORS.toolResult;
+    const failed = thread.outcome && thread.outcome !== "ok";
     return (
         <Box marginLeft={2} flexDirection="column">
             {lines.map((line, index) => (
@@ -119,7 +119,7 @@ function ToolResultLines({
                     key={`${index}:${line.slice(0, 40)}`}
                     line={line}
                     marker={index === 0 ? "⎿" : ""}
-                    color={color}
+                    markerColor={index === 0 && failed ? COLORS.error : COLORS.dim}
                 />
             ))}
             {thread.persisted && (
@@ -144,6 +144,12 @@ function TaskNotificationView({
             ? "cancelled"
             : "failed";
     const kind = thread.kind === "agent" ? "Background Agent" : "Background task";
+    const commandExit = thread.kind === "shell" && thread.status === "failed" &&
+        thread.shellTermination === "exit" && !thread.shellOutputIssue;
+    const commandTimeout = thread.kind === "shell" && thread.status === "failed" &&
+        thread.shellTermination === "timeout" && !thread.shellOutputIssue;
+    const title = commandExit ? "Background command exited"
+        : commandTimeout ? "Background command timed out" : `${kind} ${state}`;
     const label = thread.kind === "shell"
         ? describeToolCall("bash", JSON.stringify({command: thread.label})).detail
         : thread.label;
@@ -154,12 +160,12 @@ function TaskNotificationView({
             <Box>
                 <Text color={color}>{SYMBOLS.assistantMark}</Text>
                 <Text color={COLORS.toolName} bold>
-                    {` ${kind} ${state}`}
+                    {` ${title}`}
                 </Text>
                 <Text color={COLORS.toolArgs}> · {label}</Text>
             </Box>
             <Box marginLeft={2} flexDirection="column">
-                <ResultLine line={thread.summary} color={color}/>
+                <ResultLine line={thread.summary}/>
                 {thread.resultId && (
                     <ResultLine
                         marker=""

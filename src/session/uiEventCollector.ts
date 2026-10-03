@@ -67,6 +67,7 @@ export class SessionUIEventCollector {
                 outcome: event.outcome ?? "ok",
                 ...(event.outcome === "ok" && event.uiData?.type === "file_read" ? {fileRead: event.uiData.receipt} : {}),
                 ...(event.outcome === "ok" && event.uiData?.type === "agent_receipt" ? {agentReceipt: event.uiData.receipt} : {}),
+                ...(event.completedTask ? {completedTask: event.completedTask} : {}),
             },
         ]);
     }

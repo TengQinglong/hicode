@@ -9,7 +9,6 @@ import type {CreateSubagentThread} from "../../src/subagents/types.js";
 import type {ShellRunnerLike} from "../../src/tools/bash/shellRunner.js";
 import {createHiCodeStorageLayout} from "../../src/persistence/index.js";
 import {join} from "node:path";
-import {FileCommitCoordinator} from "../../src/tools/shared/fileCommit.js";
 
 export function createTaskRuntimeForTest(
     cwd: string,
@@ -23,7 +22,6 @@ export function createTaskRuntimeForTest(
     hicodeHome = join(cwd, ".test-task-storage"),
     subagents: SubagentRegistry = BUILTIN_SUBAGENT_REGISTRY,
     memory:MemoryRuntimeLike = createTestMemoryRuntime(cwd,{enabled:false}),
-    fileCommits = new FileCommitCoordinator(),
     reviewTask: TaskReviewRunner = async () => {throw new Error("This fixture does not configure task reviews");}
 ): TaskRuntimeLike {
     const storage = createHiCodeStorageLayout({hicodeHome});
@@ -34,7 +32,6 @@ export function createTaskRuntimeForTest(
         createSubagentThread,
         subagents,
         memory,
-        fileCommits,
         reviewTask
     );
 }

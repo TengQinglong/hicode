@@ -45,6 +45,8 @@ export function createTaskNotificationThread(
         label: notification.label,
         status: notification.status,
         summary: notification.summary,
+        ...(notification.shellTermination ? {shellTermination: notification.shellTermination} : {}),
+        ...(notification.shellOutputIssue ? {shellOutputIssue: true} : {}),
         ...(notification.resultId ? {resultId: notification.resultId} : {}),
     };
 }
@@ -114,6 +116,7 @@ export function threadsFromHistory(
         if (!target || target.role !== "tool_call") continue;
         if (event.type === "tool_call") {
             target.outcome = event.outcome;
+            if (event.completedTask) target.completedTask = event.completedTask;
             if (event.fileRead && event.outcome === "ok") target.uiData = {type: "file_read", receipt: event.fileRead};
             if (event.agentReceipt && event.outcome === "ok") target.uiData = {type: "agent_receipt", receipt: event.agentReceipt};
             continue;
@@ -349,6 +352,7 @@ export function reduceThreads(
                             result: event.result,
                             turnId: event.turnId,
                             ...(event.uiData ? {uiData: event.uiData} : {}),
+                            ...(event.completedTask ? {completedTask: event.completedTask} : {}),
                             ...(changes.length > 0 && event.uiData?.type === "file_change" && t.name !== "bash"
                                 ? {hiddenByFileChange: true}
                                 : {}),
