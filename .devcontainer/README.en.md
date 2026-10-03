@@ -104,8 +104,6 @@ docker --context colima-hicode compose -f .devcontainer/compose.yaml --profile m
 
 Its address is `http://127.0.0.1:8787/mcp`; source lives in `tooling/examples/mcp/http-demo.ts`. Install Skills, browser dependencies, and your own MCP configuration as needed. Personal test data is not preinstalled.
 
-## Persistent evaluation machine
+## Evaluation engine
 
-`bash .devcontainer/linux.sh eval-start` starts the separate `hicode-eval-linux` container. Use `eval-shell` to enter, `eval-status` to inspect, and `eval-stop` to stop it. It uses the same Linux base approach but mounts only an evaluation volume, without your checkout, home directory, or Docker socket. The initial build installs tmux, Python 3.13, and pinned verifier dependencies; tasks do not repeat installation.
-
-`HICODE_EVAL_IMAGE` can select an existing compatible image. The service verifies tools and verifier dependencies before accepting work. Do not rebuild or stop the machine during a run. For supported public tasks, configuration, and commands, see [HiCode Eval](../hicode-eval/README.en.md).
+`bash .devcontainer/linux.sh engine-start` starts the Docker engine and loads the AppArmor policy without starting the development container or building evaluation images. [HiCode Eval](../hicode-eval/README.en.md) owns the clean base, dependency images and per-attempt containers.

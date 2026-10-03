@@ -66,7 +66,7 @@ description: 使用当前 hicode-eval 使用可复用镜像和独立 Linux 容�
 
 ## 分层环境与历史记录
 
-缓存机只用于准备；每次尝试使用独立 Docker 容器、私有网络和可写层，结果及台账保存完成后销毁。共用公共底座、依赖组合和可选特殊准备层，不为每题重新下载完整系统。默认 prepare-environments 只准备未通过/待测试，有题号无审定题包的任务仍是 unprepared。已通过可按需 --ids 准备；系统准备变化后才 --refresh-base。
+公共底座从审定 Dockerfile 和官方镜像摘要构建，不导入缓存机文件；每次尝试使用独立 Docker 容器、私有网络和可写层，结果及台账保存完成后销毁。共用公共底座、依赖组合和可选特殊准备层，不为每题重新下载完整系统。默认 prepare-environments 只准备未通过/待测试，有题号无审定题包的任务仍是 unprepared。已通过可按需 --ids 准备；SWE 新组合先补充 config/environment-recipes 下的包与解释器锁定声明；配方变化产生新镜像，缺配方保持未准备。旧 version 1 导出式镜像不能作为 version 2 干净环境复用。
 
 register-tasks --catalog FILE --tasks DIR 或 --swe-tasks DIR 登记题包，prepare-environments --catalog FILE --environments DIR 准备镜像；serve 使用 --catalog/--environments，不接受旧的服务级 --tasks/--swe-tasks。服务与登记命令互斥持有台账写锁，不能绕过锁编辑正在使用的台账。
 

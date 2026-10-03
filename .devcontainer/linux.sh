@@ -12,26 +12,6 @@ compose() {
     HICODE_DEV_UID="$task_uid" docker --context "$docker_context" compose \
         --project-directory "$task_dir" -f "$task_dir/compose.yaml" "$@"
 }
-eval_compose() {
-    docker --context "$docker_context" compose --project-directory "$task_dir" -f "$task_dir/eval.compose.yaml" "$@"
-}
-ensure_eval() {
-    ensure_engine
-    prepare_profile
-    if [[ -z "$(eval_compose ps --status running -q eval)" ]]; then
-        if [[ -n "$(eval_compose ps --all -q eval)" ]]; then
-            eval_compose start eval
-        else
-            if ! docker --context "$docker_context" image inspect "${HICODE_EVAL_IMAGE:-hicode-ubuntu:eval}" >/dev/null 2>&1; then
-                if ! docker --context "$docker_context" image inspect hicode-ubuntu:dev >/dev/null 2>&1; then
-                    build_image
-                fi
-                eval_compose build eval
-            fi
-            eval_compose up -d --no-build eval
-        fi
-    fi
-}
 build_image() {
     compose build "$@" dev
 }
@@ -78,18 +58,9 @@ enter_linux() {
 }
 
 case "${1:-enter}" in
-    eval-start)
-        ensure_eval
-        ;;
-    eval-shell)
-        ensure_eval
-        eval_compose exec eval bash -l
-        ;;
-    eval-stop)
-        eval_compose stop eval
-        ;;
-    eval-status)
-        eval_compose ps
+    engine-start)
+        ensure_engine
+        prepare_profile
         ;;
     enter|shell)
         enter_linux
@@ -128,7 +99,7 @@ case "${1:-enter}" in
         compose exec -T -w /workspaces/hicode dev bun install --frozen-lockfile
         ;;
     *)
-        echo "Usage: hicode-linux [enter|start|stop|status|rebuild|install-command|eval-start|eval-shell|eval-stop|eval-status]" >&2
+        echo "Usage: hicode-linux [enter|start|stop|status|rebuild|install-command|engine-start]" >&2
         exit 2
         ;;
 esac

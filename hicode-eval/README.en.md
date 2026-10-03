@@ -29,10 +29,10 @@ Run these commands from the **HiCode repository root**. The host needs Git, Bun 
 
 ```bash
 bun install --frozen-lockfile
-bash .devcontainer/linux.sh eval-start
+bash .devcontainer/linux.sh engine-start
 ```
 
-The first run builds the development base and a dedicated evaluation image with tmux, Python 3.13, pytest 8.4.1, and pytest-json-ctrf 0.3.5. Subsequent runs reuse the image and system tools; task-specific Python dependencies are installed into separate directories. The `hicode-eval-linux` container mounts only a dedicated data volume, without your checkout, home directory, or Docker socket. The development container does not need to be running.
+This starts only the Docker engine and loads the nested sandbox policy. Register bundles and build clean images, then create the preparation container using the steps below before starting the service. It mounts no host directories or old evaluation volumes. Task dependencies are installed only while building images.
 
 Download the dataset outside this repository and pin the reviewed revision:
 
@@ -61,7 +61,7 @@ A clean worktree is required by default. Add `--snapshot-worktree` to include un
 
 First register reviewed bundles with `register-tasks --catalog FILE --tasks DIR` (or `--swe-tasks DIR`), then run `prepare-environments --catalog FILE --environments DIR`. Preparation defaults to unpassed and untested tasks; use `--ids` or `--include-passed` for passed tasks. Missing reviewed sources remain unprepared.
 
-Images share a public base, dependency combinations and optional task preparation. Only attempts get disposable writable layers. Use `--refresh-base` after changing system prerequisites. Service defaults are isolated actor networking, 1 CPU and 4096 MiB per attempt; `--cpus` and `--memory-mb` override limits.
+Images share a public base, dependency combinations and optional task preparation. Only attempts get disposable writable layers. The base is built from `config/clean-base.Dockerfile`, digest-pinned upstream images and the HiCode lockfile. No live cache-machine filesystem is imported. Reviewed SWE package and interpreter locks live in `config/environment-recipes/`; missing recipes remain unprepared. Version 2 receipts record recipe hashes and immutable images, with each build context retained. OS packages and common grading transitive dependencies are recorded after resolution, so cross-date byte-for-byte rebuilds are not yet guaranteed. Service defaults are isolated actor networking, 1 CPU and 4096 MiB per attempt; `--cpus` and `--memory-mb` override limits.
 
 ```bash
 bash hicode-eval/eval.sh serve \
@@ -70,7 +70,7 @@ bash hicode-eval/eval.sh serve \
   --environments ../hicode-eval-data/environments \
   --payload ../hicode-eval-data/payload-v1 \
   --docker-context colima-hicode \
-  --machine hicode-eval-linux \
+  --machine hicode-eval-clean \
   --concurrency 3
 ```
 
@@ -147,17 +147,17 @@ Host <data-dir>/
     evidence/outcome.json     Execution/grading facts before cleanup
     evidence/result.json      Final receipt after confirmed cleanup
 
-Linux data volume: /eval/runs/<run-id>/
+Per-attempt container: /eval/runs/<run-id>/
 Linux source releases and dependencies: /opt/hicode/
 ```
 
-Events and screens stream back continuously and are persisted incrementally. Full evidence is exported at completion, outside the live event loop, so collection cannot block verifier handoff. Abrupt machine shutdown can lose evidence not yet exported; retain the volume for inspection. Logs may contain source code, prompts, and tool output. Redact them before sharing.
+Events and screens stream back continuously and are persisted incrementally. Full evidence is exported at completion, outside the live event loop, so collection cannot block verifier handoff. Abrupt machine shutdown can lose evidence not yet exported; retain the affected container for inspection. Logs may contain source code, prompts, and tool output. Redact them before sharing.
 
 Verifier handoff uses a dedicated request and atomic, run-scoped receipts: accepted, ready, or failed. The host acknowledges before uploading hidden tests. Acknowledgement has a 30-second deadline and the entire handoff has a 180-second deadline; cancellation ends the wait. Hidden tests are uploaded only after assignment processes have stopped.
 
 Evidence records symlink targets without following them. Final export remains required before completion. Confirmed execution and grading facts survive an export failure, but no reward is published. The execution and grading panel shows failure summaries and collection diagnostics.
 
-Closing the browser does not stop tasks. Ctrl+C in the service terminal cancels active tasks. `bash .devcontainer/linux.sh eval-stop` stops the evaluation machine while preserving its volume. Restarting the service does not resume or rerun attempted tasks. Unstarted tasks without execution evidence remain queued; other unfinished evidence blocks scheduling until inspected. After recovery, use `bash hicode-eval/eval.sh resume --batch BATCH_ID` to explicitly continue queued scheduling. This command does not clear errors or rerun completed tasks.
+Closing the browser does not stop tasks. Ctrl+C in the service terminal cancels active tasks. After the service exits, use `docker --context colima-hicode stop hicode-eval-clean` to stop the preparation container; attempts use separate containers. Restarting the service does not resume or rerun attempted tasks. Unstarted tasks without execution evidence remain queued; other unfinished evidence blocks scheduling until inspected. After recovery, use `bash hicode-eval/eval.sh resume --batch BATCH_ID` to explicitly continue queued scheduling. This command does not clear errors or rerun completed tasks.
 
 Cancel a batch with `bash hicode-eval/eval.sh cancel --batch BATCH_ID`. After completion, optionally ask Codex to inspect the logs. `report --batch BATCH_ID --file report.md` stores an external analysis only; it does not call a model or change grading.
 
@@ -189,7 +189,7 @@ The Python runner helpers use only the standard library; verifier dependencies l
 
 Evaluation assignments use `full-access` inside their own UID and outer read-only mount namespace, allowing workspace Git writes without interactive approvals. This does not change normal HiCode permissions. Control files are read-only, and assignment processes stop before original tests are uploaded and executed. The outer boundary continues to protect system paths and other assignments.
 
-Pre-download pinned Python wheels and their dependencies into `/opt/hicode-eval/wheels/<package>-<version>/` on the evaluation machine. When these directories exist, the runner installs offline with `--no-index` into the task directory; an incomplete cache fails without network fallback. Agent and verifier versions are installed separately.
+Terminal packages are preinstalled in separate `/opt/hicode-terminal/actor` and `verifier` image directories and copied into each attempt. There is no shared wheel installer or runtime download fallback.
 
 Prompt pasting and Enter are sent separately. Execution and the agent budget begin only after `model_stream_start`; a submission with no acknowledgment within 15 seconds fails as a startup error instead of idling through the task budget.
 
@@ -197,37 +197,22 @@ At the evaluation deadline, the runner sends SIGTERM to the identified HiCode CL
 
 ## Additional public datasets
 
-Terminal-Bench and SWE-bench Verified share scheduling, task budgets, the TUI, cancellation and evidence collection. Dataset-specific adapters prepare inputs and grade outputs. `Run.dataset` identifies the adapter; legacy runs remain Terminal tasks. Both datasets can appear in one batch.
+Terminal-Bench and SWE-bench Verified share scheduling, task budgets, the TUI, cancellation and evidence collection. Dataset-specific adapters prepare inputs and grade outputs. `Run.dataset` identifies the adapter. Both datasets can appear in one batch.
 
-Two new Terminal tasks are registered: `large-scale-text-editing` and `break-filter-js-from-html`. CSV generation/removal/reset follows the upstream task, while browser grading retains Chromium/driver and separate pinned actor/verifier packages. Prepare their shared tools and wheel caches once on an idle dedicated machine:
-
-```bash
-bash hicode-eval/eval.sh prepare-terminal --docker-context YOUR_CONTEXT --machine YOUR_EVAL_MACHINE
-```
-
-SWE preparation supports Django 3.2/Python 3.6, Django 4.0/Python 3.8, Django 4.1/4.2/Python 3.9, Django 5.0/Python 3.11, and SymPy 1.0, 1.1, 1.4-1.12/Python 3.9, Pytest 5.0-5.2/5.4/6.0/6.2/7.2/Python 3.9, and Xarray 0.12/2022.03/2022.06/2022.09/Python 3.10, and Sphinx 3.1-3.5/4.0-4.3/5.0-5.2/7.1/7.2/Python 3.9, selected with `--ids`. It verifies the fixed Verified revision, public/evaluator JSONL hashes, corresponding public fields, the official harness 4.1.0 wheel, and each supported environment recipe. Django requirements are checked against the original file; SymPy uses its original declared package list. Pytest and Xarray use reviewed official recipe hashes; Xarray also checks the original environment.yml hash and installs reviewed dependencies and declared build backends. Sphinx replays the reviewed upstream tox/dependency adjustments, caches test extras by public packaging declarations, and collects one original public test module during preflight without running hidden assertions. Preparation inputs and generated bundles stay outside this repository:
+Register Terminal tasks from the pinned upstream checkout. SWE input is an externally reviewed frozen bundle, validated by `src/host/sweTasks.ts`. This evaluator does not download raw SWE datasets or generate bundles. Supply the original baseline, public problem, host-only grading material, source-version receipts and file hashes before registration.
 
 ```bash
-bash hicode-eval/eval.sh prepare-swe \
-  --dataset /path/to/swe-bench-verified \
-  --prep /path/to/benchmark-prep/swe_verified \
-  --output /path/to/external/prepared-swe \
-  --docker-context YOUR_CONTEXT --machine YOUR_EVAL_MACHINE
+bash hicode-eval/eval.sh register-tasks --catalog CATALOG --swe-tasks PREPARED_SWE_DIR
+bash hicode-eval/eval.sh prepare-environments --catalog CATALOG --environments ENVIRONMENTS --ids TASK_ID
 ```
 
-Preparation requires an idle evaluation machine and network access. Python, the official harness and declared dependencies are cached per repository, version and environment group; each task receives its own copied environment, including mixed-version batches. Each task gets the source archive for its exact base commit and a local repository containing only that source tree and its installation baseline. No future Git history, remotes or hooks are retained. Resolved package versions are copied into `runs/ID/environment.json` when an attempt starts. Failed preparation retains caches; the output directory must be a new external directory.
-
-Register bundles with `register-tasks --catalog FILE --swe-tasks /path/to/external/prepared-swe`, then run `prepare-environments --catalog FILE --environments DIR`. Reuse the same dashboard and machine; do not start another service or prepare system dependencies during active attempts. Submit `config/swe-verified-pilot.json`, or mix the selected SWE and Terminal IDs in a batch.
-
-Both preparation commands accept `--ids ID1,ID2`. Django bundles pin development checkers from the source `.pre-commit-config.yaml`; SymPy uses the declared development packages. Separate caches preserve previous attempts. Preparation makes no model calls and does not establish a passing score.
+Dependencies come only from reviewed recipes and optional task preparation layers. Four SWE combinations currently have recipes; add and validate other combinations incrementally. A registered bundle or historical passing score does not imply a prepared image.
 
 The Actor receives only the public problem, original base code and public repository tests, with an independent writable Python environment at `/testbed`. Gold patches, hints, hidden test patches and scoring test lists are withheld. After completion/timeout, stop every Actor process, then export the actual tree against a protected prepared baseline using host-owned Git. This includes additions, deletions, binaries and executable modes without trusting Actor-controlled Git state or self-reported patches.
 
 Save the official prediction fields in `prediction.json` and identity/hash receipts in `patch-manifest.json`. Replay that patch against clean code, dependencies and Home; only then expose hidden test material. Use upstream harness 4.1.0 repository-specific commands, log parsing and both FAIL_TO_PASS/PASS_TO_PASS rules. Keep `logs/verifier/output.txt` and `report.json`; no synthetic CTRF reports are produced. Incomplete grading is `unavailable`; genuine test failures are `failed`. Recovery validates existing evidence without rerunning anything.
 
-This is **isolated-container development evaluation**, using venv instead of upstream Conda/instance images and recreating a Git baseline from the source archive. Environment activation and test-file reset commits are adapted accordingly; tests, assertions and grading rules stay upstream. These results are not official image/leaderboard reproductions. Supported repositories and versions are listed above and enforced by production validation. Each selected environment group still requires preparation and namespace preflight while the machine is idle; a task ID alone does not establish readiness.
-
-Preparation resolves original requirements from external `environment-groups.json` by repository, version and environment setup commit. Mixed selections prepare each group separately; caches include version, setup commit, dependency content and architecture. Development-tool pins come only from each base tree’s actual pre-commit declarations. Preparation requires no active evaluation tasks.
+This is **isolated-container development evaluation**, using venv instead of upstream Conda/instance images and recreating a Git baseline from the source archive. Environment activation and test-file reset commits are adapted accordingly; tests, assertions and grading rules stay upstream. These results are not official image/leaderboard reproductions. Bundle validation and available recipes determine support. Prepare and validate the selected images before running tasks.
 
 
 ### Task isolation and environment readiness
@@ -236,7 +221,7 @@ The Actor has a private filesystem root with explicit system/runtime mounts. Its
 
 HiCode `shutdown` is accepted as a saved cancellation reason while execution timeouts remain timeouts; event pairing, persistence and CLI exit checks still apply.
 
-Xarray preparation includes pinned CPU regression dependencies from the verified version declarations, genuine upstream SCM version metadata and per-task public regression preflight. Actor and grader reuse the same prepared environment. Tasks with missing, skipped or failing required public regressions are refused before a model starts. Old 0.12 source trees use compatible Pandas 1.3.5; unavailable CDAT dependencies remain a preparation blocker, never a passing skip. Only two verified non-strict ARM datetime XPASS results get faithful PASSED reporting; other XPASS and skipped results are unchanged. Historical scores are not rewritten. See the current [reference](../docs/reference/HICODE-EVAL.md) for boundaries and receipts.
+Xarray dependencies and compiler settings are declared in the recipe. Frozen bundles must contain genuine source-version and public-regression receipts, checked at registration; those input receipts do not prove a new image is valid. Actor and verifier environments are materialized separately. Only two verified non-strict ARM datetime XPASS results get faithful PASSED reporting; other XPASS and skipped results are unchanged.
 
 ### Recheck grading of an existing SWE prediction
 
@@ -263,3 +248,21 @@ Run a no-cost full-chain Docker smoke with `bun hicode-eval/tests/containerSmoke
 Click “重新运行” on a finished attempt, or use `bash hicode-eval/eval.sh retry --run RUN_ID`. This creates a linked single-task batch with a fresh container, keeping the original score and frozen task/model/payload/network/budget. Duplicate requests reuse the same child attempt, including after restart; rerun that child to create attempt 3.
 
 Running attempts cannot be rerun. Retained evidence must be recovered first; recovery does not call the model, while rerun does. A changed service model or payload is rejected. `containerSmoke.ts --retry` validates the chain using a local fake model only.
+
+
+## Create the preparation container
+
+After prepare-environments has built the base, create a container from its immutable image ID. It has no mounts or imported evaluation volume. Set HE_ENVIRONMENTS to the same receipt directory used by the service.
+
+```bash
+HE_BASE_IMAGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["imageId"])' "$HE_ENVIRONMENTS/base.json")
+docker --context colima-hicode create --name hicode-eval-clean --init --user root \
+  --memory 2g --cpus 1 --pids-limit 1024 \
+  --security-opt seccomp=unconfined --security-opt apparmor=hicode-development \
+  --security-opt systempaths=unconfined \
+  --label dev.hicode.role=eval --label dev.hicode.foundation=clean-v2 \
+  "$HE_BASE_IMAGE" sleep infinity
+docker --context colima-hicode start hicode-eval-clean
+```
+
+Check any existing container with the same name before creating one. Stop the service before switching the preparation container.

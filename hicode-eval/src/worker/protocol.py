@@ -8,21 +8,6 @@ import time
 from pathlib import Path
 
 
-def package_install_argv(packages, target, cache=Path('/opt/hicode-eval/wheels')):
-    if not packages or any(not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.+-]*', p) for p in packages):
-        raise ValueError('Expected pinned Python packages')
-    wheels = [cache / p.replace('==', '-') for p in packages]
-    # A prepared wheelhouse is resolved entirely offline, including dependencies.
-    offline = all(path.is_dir() for path in wheels)
-    args = ['/opt/python313/bin/python3.13', '-m', 'pip', 'install', '--no-input', '--disable-pip-version-check', '--only-binary=:all:', '--target', target]
-    if offline:
-        args += ['--no-index']
-        for path in wheels: args += ['--find-links', str(path)]
-    else:
-        args += ['--timeout', '15', '--retries', '1']
-    return args + packages, offline
-
-
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -8,13 +8,13 @@ import {TaskCatalog} from '../src/host/catalog.js';
 import {configSchema} from '../src/host/types.js';
 import {save,run} from '../src/host/store.js';
 import {RunContainers} from '../src/host/containers.js';
-const {values}=parseArgs({options:{catalog:{type:'string'},environments:{type:'string'},payload:{type:'string'},task:{type:'string'},cancel:{type:'boolean'},retry:{type:'boolean'}}});
+const {values}=parseArgs({options:{catalog:{type:'string'},environments:{type:'string'},payload:{type:'string'},task:{type:'string'},machine:{type:'string',default:'hicode-eval-clean'},cancel:{type:'boolean'},retry:{type:'boolean'}}});
 const required=(name:'catalog'|'environments'|'payload'|'task')=>{const value=values[name];if(!value)throw Error('Missing --'+name);return value;};
 const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-container-smoke-')));await mkdir(root,{recursive:true});
 const original=await TaskCatalog.open(required('catalog'));
 const task=original.get(required('task'));
 await save(join(root,'catalog.json'),{version:1,updatedAt:new Date().toISOString(),tasks:[{...task,status:'untested',results:[]}]});
-const config=configSchema.parse({version:4,data:root,catalog:join(root,'catalog.json'),environments:required('environments'),payload:required('payload'),context:'colima-hicode',machine:'hicode-eval-linux',concurrency:5,cpus:1,memoryMb:4096,budget:{agentSeconds:90},network:'isolated',model:{source:'qwen',model:'fixture',apiKeyEnv:'HICODE_SMOKE_KEY',baseUrl:'http://127.0.0.1:18991/v1'}});
+const config=configSchema.parse({version:4,data:root,catalog:join(root,'catalog.json'),environments:required('environments'),payload:required('payload'),context:'colima-hicode',machine:values.machine,concurrency:5,cpus:1,memoryMb:4096,budget:{agentSeconds:90},network:'isolated',model:{source:'qwen',model:'fixture',apiKeyEnv:'HICODE_SMOKE_KEY',baseUrl:'http://127.0.0.1:18991/v1'}});
 const fake=`import http.server,json,time
 class H(http.server.BaseHTTPRequestHandler):
  def log_message(self,*a):pass

@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from swe import git,restore_official_test_paths,controlled_eval_script,verification_validity,project_environment,namespace_eval_commands,verifier_log_directory
-from source_version import prepare_source_version
 from reviewed_test_deps import reviewed_test_dependencies
 
 class OfficialTestReplay(unittest.TestCase):
@@ -71,25 +70,24 @@ class OfficialTestReplay(unittest.TestCase):
         self.assertTrue(verification_validity(spec,{'target':'FAILED','regression':'PASSED'},True,1)[0])
         self.assertTrue(verification_validity(spec,{'target':'PASSED','regression':'PASSED'},True,0)[0])
     def test_pytest_scm_uses_original_base_ancestry_for_install_and_grading(self):
-        metadata=self.root/'metadata';metadata.mkdir()
-        with patch('source_version.subprocess.run',return_value=SimpleNamespace(returncode=0)),patch('source_version.subprocess.check_output',side_effect=['7.1.2-80-gaa55975\n','2022-07-01T00:00:00+00:00\n','7.1.3.dev80+gaa55975\n']) as execute:
-            receipt=prepare_source_version('pytest-dev/pytest',self.repo,'a'*40,'/python',metadata)
-        self.assertIn('describe',execute.call_args_list[0].args[0]);self.assertEqual(execute.call_args_list[0].args[0][-1],'a'*40)
+        receipt={'baseCommit':'a'*40,'describe':'7.1.2-80-gaa55975','version':'7.1.3.dev80+gaa55975'}
+        (self.repo/'.git/hicode-source-version.json').write_text(json.dumps(receipt))
         self.assertEqual(project_environment('pytest-dev/pytest',self.repo),{'SETUPTOOLS_SCM_PRETEND_VERSION':receipt['version']})
         self.assertEqual(namespace_eval_commands(['python -m pip install -e .'],'pytest-dev/pytest','7.2'),['python -m pip install --no-deps --no-build-isolation -e .'])
         from scm import read_source_version
         with self.assertRaises(ValueError):read_source_version(self.repo,'b'*40)
         with self.assertRaises(ValueError):project_environment('pytest-dev/pytest')
     def test_real_pytest_development_tags_are_accepted_without_replacing_their_version(self):
-        metadata=self.root/'metadata';metadata.mkdir()
-        with patch('source_version.subprocess.run',return_value=SimpleNamespace(returncode=0)),patch('source_version.subprocess.check_output',side_effect=['7.2.0.dev0-157-gaa55975c7','date','7.2.0.dev157+gaa55975c7']):
-            receipt=prepare_source_version('pytest-dev/pytest',self.repo,'aa55975c7'+'a'*31,'/python',metadata)
+        receipt={'baseCommit':'aa55975c7'+'a'*31,'describe':'7.2.0.dev0-157-gaa55975c7','version':'7.2.0.dev157+gaa55975c7'}
+        (self.repo/'.git/hicode-source-version.json').write_text(json.dumps(receipt))
+        from scm import read_source_version
+        receipt=read_source_version(self.repo,receipt['baseCommit'])
         self.assertEqual(receipt['describe'],'7.2.0.dev0-157-gaa55975c7')
         self.assertEqual(receipt['version'],'7.2.0.dev157+gaa55975c7')
-    def test_invalid_scm_output_is_not_saved_as_a_successful_build_version(self):
-        metadata=self.root/'metadata';metadata.mkdir()
-        with patch('source_version.subprocess.run',return_value=SimpleNamespace(returncode=0)),patch('source_version.subprocess.check_output',side_effect=['v7.1.2-80-gaa55975','date','999\nBAD=1']):
-            with self.assertRaises(ValueError):prepare_source_version('pytest-dev/pytest',self.repo,'a'*40,'/python',metadata)
+    def test_invalid_frozen_scm_version_is_rejected(self):
+        (self.repo/'.git/hicode-source-version.json').write_text(json.dumps({
+            'baseCommit':'a'*40,'describe':'v7.1.2-80-gaa55975','version':'999\nBAD=1'}))
+        with self.assertRaises(ValueError):project_environment('pytest-dev/pytest',self.repo)
 
     def test_reviewed_test_dependencies_come_from_frozen_public_declarations(self):
         (self.repo/'setup.py').write_text('install_requires=["wcwidth"]\n')

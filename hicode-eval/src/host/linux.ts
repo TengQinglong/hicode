@@ -34,7 +34,7 @@ export class LinuxMachine {
   private readonly environments:EnvironmentStore;
   constructor(private readonly config: Config) {
     this.containers=new RunContainers(config);
-    this.environments=new EnvironmentStore(config.environments,config.context,config.machine);
+    this.environments=new EnvironmentStore(config.environments,config.context);
   }
   async disposeRun(id:string):Promise<void>{
     await this.containers.remove(id);
@@ -52,7 +52,6 @@ export class LinuxMachine {
     await run(this.docker('exec',container,'mkdir','-p',`/eval/rechecks/${runId}`,'/testbed','/tests','/logs/verifier','/opt/hicode-swe/env'));
     await run(this.docker('exec',container,'mkdir',remote,remote+'/worker'));
     for(const name of ['regrade.py','swe.py','scm.py','venv_paths.py','protocol.py','xarray_report.py'])await run(this.docker('cp',join(EVAL_ROOT,'src/worker',name),container+':'+remote+'/worker/'+name));
-    await run(this.docker('cp',join(EVAL_ROOT,'src/datasets/source_version.py'),container+':'+remote+'/worker/source_version.py'));
     await run(this.docker('cp',join(EVAL_ROOT,'src/datasets/reviewed_test_deps.py'),container+':'+remote+'/worker/reviewed_test_deps.py'));
     await run(this.docker('cp',join(taskRoot,'repository'),container+':'+remote+'/baseline'),{timeout:60000});
     await run(this.docker('cp',join(taskRoot,'hidden'),container+':'+remote+'/tests'));

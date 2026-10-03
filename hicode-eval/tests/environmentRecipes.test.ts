@@ -1,0 +1,46 @@
+import {test,expect,spyOn} from 'bun:test';
+import {mkdtemp,readFile,rm,realpath} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {EnvironmentStore} from '../src/host/environments.js';
+import {dependencyRecipeSchema,baseImagesSchema} from '../src/host/environmentRecipes.js';
+import * as transport from '../src/host/store.js';
+
+test('clean base builds from explicit files and pinned images, never from a live machine',async()=>{
+  const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-clean-recipe-')));
+  const calls:string[][]=[];let key='',builds=0;
+  const id='sha256:'+'a'.repeat(64);
+  const fake=spyOn(transport,'run').mockImplementation(async argv=>{
+    calls.push(argv);
+    if(argv.includes('build')){
+      builds++;
+      const dockerfile=await readFile(join(argv.at(-1)!,'Dockerfile'),'utf8');
+      key=dockerfile.match(/dev.hicode.environment="([a-f0-9]+)"/)![1]!;
+      expect(dockerfile).toContain('COPY package.json bun.lock /opt/hicode/');
+      expect(dockerfile).not.toContain('environment.tar.gz');
+      expect(dockerfile).not.toContain('{{');
+      return 'built';
+    }
+    if(argv.includes('inspect'))return JSON.stringify([{Id:id,Config:{Labels:key?{'dev.hicode.environment':key}:{}}}]);
+    if(argv.includes('ls')&&argv.some(value=>value.startsWith('label=')))return key?id:'';
+    return '';
+  });
+  try{
+    const store=new EnvironmentStore(root,'offline');
+    const first=await store.prepareBase(),second=await store.prepareBase();
+    expect(first.version).toBe(2);expect(second).toEqual(first);expect(builds).toBe(1);
+    expect(calls.some(argv=>argv.includes('exec')||argv.includes('cp'))).toBe(false);
+  }finally{fake.mockRestore();await rm(root,{recursive:true,force:true});}
+});
+
+test('dependency recipe rejects unpinned dependencies, direct references and shell injection',()=>{
+  const recipe={version:1,python:'3.9.23',requirements:['pytest==8.4.2'],buildRequirements:[],buildEnvironment:{},buildGroups:[],systemPackages:['graphviz'],provenance:'reviewed'};
+  expect(dependencyRecipeSchema.safeParse(recipe).success).toBe(true);
+  for(const pin of ['pytest','pkg @ file:///tmp/answer','--index-url=https://other.invalid','pkg==1;id']){
+    expect(dependencyRecipeSchema.safeParse({...recipe,requirements:[pin]}).success).toBe(false);
+  }
+  expect(dependencyRecipeSchema.safeParse({...recipe,systemPackages:['gcc;id']}).success).toBe(false);
+  expect(dependencyRecipeSchema.safeParse({...recipe,requirements:['pkg==1','PKG==2']}).success).toBe(false);
+  expect(dependencyRecipeSchema.safeParse({...recipe,buildGroups:[{packages:['other==1'],requirements:[]}]}).success).toBe(false);
+  expect(baseImagesSchema.safeParse({system:'ubuntu:latest'}).success).toBe(false);
+});

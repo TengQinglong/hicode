@@ -18,9 +18,9 @@ await writeFile(join(source,'probe.c'),'#include <stdio.h>\nint main(void){puts(
 await writeFile(join(source,'prepare.sh'),'set -eu\nmkdir -p /opt/hicode-task/bin\ncc /opt/hicode-task/source/probe.c -o /opt/hicode-task/bin/probe\n');
 const original=(await TaskCatalog.open(values.catalog)).get(values.task);
 const task={...original,preparation:{directory:source,script:'prepare.sh',sha256:createHash('sha256').update(JSON.stringify(await tree(source))).digest('hex')}};
-const store=new EnvironmentStore(environments,'colima-hicode','hicode-eval-linux');
+const store=new EnvironmentStore(environments,'colima-hicode');
 const binding=await store.prepareTask(task);
-const config=configSchema.parse({version:4,data:root,catalog:values.catalog,environments,payload:root,context:'colima-hicode',machine:'hicode-eval-linux',concurrency:5,budget:{},model:{source:'qwen',model:'fixture',apiKeyEnv:'UNUSED',baseUrl:'http://127.0.0.1:1/v1'}});
+const config=configSchema.parse({version:4,data:root,catalog:values.catalog,environments,payload:root,context:'colima-hicode',machine:'hicode-eval-clean',concurrency:5,budget:{},model:{source:'qwen',model:'fixture',apiKeyEnv:'UNUSED',baseUrl:'http://127.0.0.1:1/v1'}});
 const containers=new RunContainers(config),ids=Array.from({length:5},()=>randomBytes(8).toString('hex'));
 const started=Date.now();
 try {

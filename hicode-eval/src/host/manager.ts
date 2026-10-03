@@ -77,7 +77,7 @@ export class Lab {
   async prepareMachine(): Promise<void> { this.machine = new LinuxMachine(this.config); await this.machine.prepare(); }
   async catalog() {
     const catalog=this.taskCatalog??await TaskCatalog.open(this.config.catalog);
-    const environments=new EnvironmentStore(this.config.environments,this.config.context,this.config.machine);
+    const environments=new EnvironmentStore(this.config.environments,this.config.context);
     return Promise.all(catalog.list().map(async task=>({id:task.id,category:task.dataset,seconds:1800,
       dataset:task.dataset,status:task.status,note:task.note,sourcePrepared:!!task.source,environmentPrepared:!!task.source&&await environments.ready(task)})));
   }

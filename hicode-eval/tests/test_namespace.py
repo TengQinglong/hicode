@@ -2,7 +2,7 @@ import unittest
 import tempfile
 from unittest.mock import patch
 from pathlib import Path
-from protocol import namespace_argv, package_install_argv, prepare_verifier_root
+from protocol import namespace_argv, prepare_verifier_root
 
 class NamespaceTest(unittest.TestCase):
     def test_task_keeps_app_path_and_does_not_mount_tests(self):
@@ -43,20 +43,6 @@ class NamespaceTest(unittest.TestCase):
             a=namespace_argv(['python'],'/p','/h','/l','/c','/t',root_overlay=True)
         self.assertNotIn('/server',a)
         self.assertIn('/etc',a);self.assertIn('/usr',a)
-
-    def test_cached_pins_install_without_network_and_validate_requirements(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache=Path(tmp)
-            (cache/'numpy-2.2.5').mkdir()
-            argv,offline=package_install_argv(['numpy==2.2.5'],'/app/.eval-python',cache)
-            self.assertTrue(offline)
-            self.assertIn('--no-index',argv)
-            self.assertIn(str(cache/'numpy-2.2.5'),argv)
-            argv,offline=package_install_argv(['numpy==2.3.1'],'/app/.eval-verifier-python',cache)
-            self.assertFalse(offline)
-            self.assertIn('--timeout',argv)
-            for invalid in ['numpy','../../outside==1','numpy==1/../../outside']:
-                with self.assertRaises(ValueError): package_install_argv([invalid],'/app/x',cache)
 
     def test_public_helpers_are_read_only_and_distinct_from_hidden_verifier(self):
         a=namespace_argv(['python'],'/p','/h','/l','/c',public_tests='/public')
