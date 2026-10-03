@@ -5,7 +5,8 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from swe import project_environment, editable_install_argv, export_patch, snapshot, relocate_environment, validate_swe_report
+from venv_paths import relocate_environment
+from swe import project_environment, editable_install_argv, export_patch, snapshot, validate_swe_report
 from protocol import namespace_argv
 
 class SweExportTests(unittest.TestCase):
@@ -43,7 +44,7 @@ class SweExportTests(unittest.TestCase):
     def test_pytest_uses_reviewed_local_build_backend_in_preflight_and_actor(self):
         self.assertEqual(editable_install_argv('/env/bin/python','/testbed','pytest-dev/pytest'),
                          ['/env/bin/python','-m','pip','install','--no-deps','--no-build-isolation','-e','/testbed'])
-        self.assertNotIn('--no-build-isolation',editable_install_argv('/env/bin/python','/testbed','django/django'))
+        self.assertIn('--no-build-isolation',editable_install_argv('/env/bin/python','/testbed','django/django'))
         from swe import namespace_eval_commands
         self.assertEqual(namespace_eval_commands(['python -m pip install -e .','pytest -rA xarray/tests/test_dataset.py'],
                                                 'pydata/xarray','0.12'),

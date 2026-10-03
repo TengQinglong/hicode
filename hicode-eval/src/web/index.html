@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HiCode Eval</title><link rel="stylesheet" href="/vendor/xterm.css"><link rel="stylesheet" href="/style.css"></head><body>
 <header><div><span class="brand">◆ HiCode Eval</span><span class="sub">公开题目 · 自主执行 · 自动判题</span></div><span id="connection">连接中</span></header>
-<main><aside><h2>评测批次</h2><p>由 CLI 提交，关闭网页不影响执行。</p><div id="batches"></div></aside>
+<main><aside><h2>评测批次</h2><p>CLI 提交批次，也可单题重新运行。</p><div id="batches"></div></aside>
 <article><div class="toolbar"><div><h1 id="batch-title">还没有评测批次</h1><p id="batch-detail">提交题目清单后，在这里查看执行过程和判题结果。</p></div></div><div id="summary" class="summary"></div>
-<section class="inspection"><h2 id="title">选择任务查看执行过程</h2><p id="detail"></p><div id="statuses" class="statuses"></div><p id="terminal-status" role="status"></p>
+<section class="inspection"><div class="task-heading"><h2 id="title">选择任务查看执行过程</h2><div class="task-actions"><button id="previous-attempt" hidden>查看上次尝试</button><button id="run-action" hidden>重新运行</button></div></div><p id="detail"></p><p id="action-message" role="status" hidden></p><div id="statuses" class="statuses"></div><p id="terminal-status" role="status"></p>
 <details id="preparation-panel"><summary id="preparation-title">执行阶段与日志</summary><pre id="preparation">尚未开始。</pre></details>
 <p id="terminal-empty" role="status">提交批次后，任务会依次运行并自动判题。</p><div id="terminal-shell" class="terminal-shell" hidden><div id="terminal"></div></div><footer>只读终端 · 保留完整历史 · 不自动回放</footer>
 <details><summary>证据目录</summary><pre id="attach"></pre></details></section>

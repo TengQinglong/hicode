@@ -2,7 +2,7 @@
 import hashlib,json,os,shutil,subprocess,sys,tarfile
 from pathlib import Path
 archive=Path(sys.argv[1]);release=Path('/opt/hicode/releases')/sys.argv[2]
-subprocess.run(['mkdir','-p','/app','/tests','/logs/verifier'],check=True)
+subprocess.run(['mkdir','-p','/app','/testbed','/tests','/logs/verifier','/opt/hicode-swe/env'],check=True)
 if release.exists():
     if not (release/'.ready').is_file():raise RuntimeError('Incomplete release; inspect before retrying')
     archive.unlink(missing_ok=True)

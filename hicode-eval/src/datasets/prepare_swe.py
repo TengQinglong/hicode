@@ -181,7 +181,7 @@ def main():
     run('cp',str(Path(__file__).with_name('xarray_setup.py')),args.machine+':'+remote+'/xarray_setup.py')
     run('cp',str(Path(__file__).with_name('source_version.py')),args.machine+':'+remote+'/source_version.py')
     run('cp',str(Path(__file__).with_name('reviewed_test_deps.py')),args.machine+':'+remote+'/reviewed_test_deps.py')
-    for filename in ['protocol.py','swe.py','scm.py','xarray_report.py']:
+    for filename in ['protocol.py','swe.py','scm.py','venv_paths.py','xarray_report.py']:
         run('cp',str(Path(__file__).resolve().parents[1]/'worker'/filename),args.machine+':'+remote+'/'+filename)
     run('exec',args.machine,'chmod','700',remote)
     run('cp',str(Path(__file__).with_name('swe_machine.py')),args.machine+':'+remote+'/prepare.py')

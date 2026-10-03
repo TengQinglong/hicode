@@ -1,3 +1,4 @@
+import {seedCatalog} from './helpers/catalog.js';
 import {expect,test} from 'bun:test';
 import {mkdtemp,mkdir,realpath,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -21,10 +22,11 @@ test('SWE bundles freeze original identity and split public code from private gr
   expect(()=>sweTaskSchema.parse({...descriptor,harnessVersion:'5.0.2'})).toThrow();
   const terminal=join(root,'terminal');await mkdir(terminal);
   const payload=join(root,'payload');await mkdir(payload);await save(join(payload,'manifest.json'),{});
-  const config=configSchema.parse({version:3,data:join(root,'data'),tasks:terminal,sweTasks:root,payload,context:'unused',machine:'eval',concurrency:2,budget:{},model:{source:'qwen',model:'fixture',apiKeyEnv:'TEST_KEY',baseUrl:'https://example.com'}});
+  const config=configSchema.parse({version:4,data:join(root,'data'),catalog:join(root,'catalog.json'),environments:join(root,'environments'),payload,context:'unused',machine:'eval',concurrency:2,budget:{},model:{source:'qwen',model:'fixture',apiKeyEnv:'TEST_KEY',baseUrl:'https://example.com'}});
   // root now also contains helper dirs; restrict catalog to its intended registry.
   const registry=join(root,'registry');await mkdir(registry);
-  const {rename,symlink}=await import('node:fs/promises');await rename(task,join(registry,id));config.sweTasks=registry;
+  const {rename,symlink}=await import('node:fs/promises');await rename(task,join(registry,id));
+  await seedCatalog(config,[{id,source:join(registry,id),dataset:'swe-bench-verified'}]);
   await symlink('/etc/passwd',join(registry,id,'repository/escape'));
   await expect(validateSweTask(id,join(registry,id))).rejects.toThrow('escapes');
   await rm(join(registry,id,'repository/escape'));
@@ -46,6 +48,7 @@ test('mixed submission under CLI umask preserves links and executable bits and r
  const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-mixed-submit-')));
  const prior=process.umask(0o077);
  const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined);
+ const dispose=spyOn(LinuxMachine.prototype,'disposeRun').mockResolvedValue(undefined);
  const validate=spyOn(adapters,'validatePublicTask').mockResolvedValue({hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPackages:[],verifierPrelude:'none',publicTestInputs:[],verifierChroot:false,verifierRootOverlay:false,commands:[],environment:{},verifierEnvironment:{}});
  let release=()=>{};const gate=new Promise<void>(resolve=>{release=resolve;});let active=0,peak=0;
  const execute=spyOn(LinuxMachine.prototype,'execute').mockImplementation(async()=>{
@@ -67,7 +70,8 @@ test('mixed submission under CLI umask preserves links and executable bits and r
   for(const id of ['regex-log','cancel-async-tasks']){
    await mkdir(join(terminal,id));await writeFile(join(terminal,id,'task.toml'),'[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=900\n');
   }
-  const config=configSchema.parse({version:3,data:join(root,'data'),tasks:terminal,sweTasks:registry,payload,context:'unused',machine:'fixture',concurrency:5,budget:{},model:{source:'qwen',model:'fixture',apiKeyEnv:'TEST_KEY',baseUrl:'https://example.com'}});
+  const config=configSchema.parse({version:4,data:join(root,'data'),catalog:join(root,'catalog.json'),environments:join(root,'environments'),payload,context:'unused',machine:'fixture',concurrency:5,budget:{},model:{source:'qwen',model:'fixture',apiKeyEnv:'TEST_KEY',baseUrl:'https://example.com'}});
+  await seedCatalog(config,[...ids.map(id=>({id,source:join(registry,id),dataset:'swe-bench-verified' as const})),...['regex-log','cancel-async-tasks'].map(id=>({id,source:join(terminal,id)}))]);
   lab=new Lab(config,'fixture');await lab.init();await lab.prepareMachine();
   const batch=await lab.submit({name:'mixed freeze',concurrency:5,tasks:['regex-log',...ids,'cancel-async-tasks'].map(id=>({id,agentSeconds:3600}))});
   for(let i=0;i<100&&execute.mock.calls.length<5;i++)await Bun.sleep(5);
@@ -78,7 +82,7 @@ test('mixed submission under CLI umask preserves links and executable bits and r
   for(let i=0;i<100&&batch.runIds.some(id=>lab!.runs.get(id)?.state!=='passed');i++)await Bun.sleep(5);
   expect(execute).toHaveBeenCalledTimes(6);expect(peak).toBe(5);
   expect(batch.runIds.every(id=>lab!.runs.get(id)?.state==='passed')).toBe(true);
- }finally{release();await lab?.close();process.umask(prior);prepare.mockRestore();validate.mockRestore();execute.mockRestore();await rm(root,{recursive:true,force:true});}
+ }finally{release();await lab?.close();process.umask(prior);prepare.mockRestore();dispose.mockRestore();validate.mockRestore();execute.mockRestore();await rm(root,{recursive:true,force:true});}
 });
 
 test('SWE version contract accepts only reviewed repository versions',()=>{

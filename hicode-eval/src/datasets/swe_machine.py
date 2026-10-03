@@ -178,7 +178,7 @@ def main():
         if not tooling_ready.exists():
             if task_cache.exists():raise ValueError('Incomplete development-tool cache; inspect before removing')
             shutil.copytree(cache,task_cache,symlinks=True)
-            from swe import relocate_environment
+            from venv_paths import relocate_environment
             relocate_environment(task_cache,str(cache));tooling_ready.unlink()
             if pins:run(install_argv(uv,task_cache,python,pins),env=env)
             packages=subprocess.check_output(freeze_argv(uv,task_cache,python),env=env,text=True)
@@ -265,7 +265,7 @@ def main():
         print('Prepared public base tree: '+id,flush=True)
     # One real namespace/import probe for this shared environment group, no tests/answers.
     from protocol import namespace_argv
-    from swe import relocate_environment
+    from venv_paths import relocate_environment
     account=pwd.getpwnam('node')
     with tempfile.TemporaryDirectory(prefix='swe-preflight-',dir='/eval') as tmp:
         probe=Path(tmp);project=probe/'project';home=probe/'home';logs=probe/'logs';control=probe/'control';local_env=probe/'env'

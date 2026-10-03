@@ -8,6 +8,7 @@ import os
 from pathlib import Path, PosixPath
 import runpy
 import subprocess
+import shutil
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -49,6 +50,7 @@ class RunnerFailureTest(unittest.TestCase):
             (root/'actor-events/events.jsonl').write_text(''.join(json.dumps({
                 'version': 1, 'sequence': i, 'sessionId': 'fixture', **event}) + '\n'
                 for i, event in enumerate(events, 1)))
+            prepared=base/'prepared-verifier';prepared.mkdir();(prepared/'toml.py').write_text('# offline package fixture')
             calls = []
             def terminate(fd,drain):
                 calls.append('shutdown')
@@ -86,6 +88,13 @@ class RunnerFailureTest(unittest.TestCase):
                 calls.append('verify')
                 return 'failed', 'Original verifier: missing output'
 
+            actual_copytree=shutil.copytree
+            def copytree(source,target,**kwargs):
+                if str(source)=='/opt/hicode-terminal/verifier':
+                    self.assertIn('stop',calls);self.assertIn('handoff',calls);calls.append('install-verifier')
+                    return actual_copytree(prepared,target,**kwargs)
+                return actual_copytree(source,target,**kwargs)
+
             output = io.StringIO()
             actual_open = builtins.open
             actual_import = builtins.__import__
@@ -99,6 +108,7 @@ class RunnerFailureTest(unittest.TestCase):
                 stack.enter_context(patch.dict(os.environ, {'EVAL_FIXTURE_KEY': 'offline-fixture'}))
                 stack.enter_context(patch('pwd.getpwnam', side_effect=[KeyError(), SimpleNamespace(pw_gid=20001)]))
                 stack.enter_context(patch('pwd.getpwuid', side_effect=KeyError()))
+                stack.enter_context(patch('shutil.copytree',side_effect=copytree))
                 stack.enter_context(patch('os.chown'))
                 stack.enter_context(patch('os.close'))
                 stack.enter_context(patch('signal.signal'))

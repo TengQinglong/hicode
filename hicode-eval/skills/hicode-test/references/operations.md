@@ -4,9 +4,9 @@
 
 ## 路径与复用
 
-在当前工具调用中显式填写 `HE_ROOT`（checkout）、`HE_DATA`（仓库外数据根）、`HE_TASKS`（固定数据集）、`HE_PAYLOAD`（固定源码包）、`HE_PORT` 和 `HE_BATCH_FILE`。变量不会自动跨工具调用保存。通用配置在 `hicode-eval/config/`；临时提交文件放在外部数据目录的 `batch-configs/`，不要存回源码目录。固定回归题组可以复用 `config/regression15.json`，不要误将示例题目当作用户选题。
+在当前工具调用中显式填写 `HE_ROOT`（checkout）、`HE_DATA`（仓库外数据根）、`HE_CATALOG`（成绩台账）、`HE_ENVIRONMENTS`（镜像回执）、`HE_PAYLOAD`（固定源码包）、`HE_PORT` 和 `HE_BATCH_FILE`。变量不会自动跨工具调用保存。通用配置在 `hicode-eval/config/`；临时提交文件放在外部数据目录的 `batch-configs/`，不要存回源码目录。固定回归题组可以复用 `config/regression15.json`，不要误将示例题目当作用户选题。
 
-现有数据根的 `config.json` 记录真实 tasks/payload/model/concurrency；`.service.lock/owner.json` 记录 PID/启动身份。结合监听进程和 status 核对，不能只凭旧 owner 文件杀进程。模型凭据不打印、不复制到任务文件。
+现有数据根的 `config.json` 记录真实 catalog/environments/payload/model/concurrency；`.service.lock/owner.json` 记录 PID/启动身份。结合监听进程和 status 核对，不能只凭旧 owner 文件杀进程。模型凭据不打印、不复制到任务文件。
 
 服务和 batch 都限制并发，实际运行受两者共同约束。只读核对后能复用就直接提交，不再次运行 prepare/安装依赖/全量测试。payload 的 manifest 记录 commit、overlay 和归档 hash；仅必要时冻结新版本，不能默认把未提交源码装进被测版本。
 
@@ -25,13 +25,13 @@ status/wait 输出含完整任务清单，接收后只打印批次 state/counts�
 
 先用 `bash hicode-eval/eval.sh --help` 确认入口；路径变更后的离线检查用 `bun test hicode-eval/tests`，Python 用 `PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker python3 -B -m unittest discover -s hicode-eval/tests`。正常启动已有环境不重复运行这些开发验证。
 
-批次 JSON 只有 `name`、`tasks`（`{id, agentSeconds}` 对象数组）与 `concurrency`（1–5）。`agentSeconds` 是每题时限，范围 30–7200 秒，省略使用服务默认 1800 秒；没有批次级 budget 参数。同一轮的不同预算放进同一个批次，不再按时间分组。配置示例：`{"name":"本轮","tasks":[{"id":"polyglot-c-py","agentSeconds":900},{"id":"modernize-scientific-stack","agentSeconds":600}],"concurrency":3}`。以已保存的用户约定为准，不直接运行示例文件中的题目。
+批次 JSON 包含可选 `network`、`name`、`tasks`（`{id, agentSeconds}` 对象数组）与 `concurrency`（1–5）。`agentSeconds` 是每题时限，范围 30–7200 秒，省略使用服务默认 1800 秒；没有批次级 budget 参数。同一轮的不同预算放进同一个批次，不再按时间分组。配置示例：`{"name":"本轮","tasks":[{"id":"polyglot-c-py","agentSeconds":900},{"id":"modernize-scientific-stack","agentSeconds":600}],"concurrency":3}`。以已保存的用户约定为准，不直接运行示例文件中的题目。
 
 只有服务不存在或已空闲且配置确需更新时启动/重启；任务运行中不能使用这条命令另开同机服务：
 
 ```bash
 bash hicode-eval/eval.sh serve \
-  --data-dir "$HE_DATA" --tasks "$HE_TASKS" --payload "$HE_PAYLOAD" \
+  --data-dir "$HE_DATA" --catalog "$HE_CATALOG" --environments "$HE_ENVIRONMENTS" --payload "$HE_PAYLOAD" \
   --docker-context "$HE_CONTEXT" --machine "$HE_MACHINE" \
   --concurrency "$HE_CONCURRENCY" --port "$HE_PORT"
 ```
@@ -68,8 +68,13 @@ recover 用于 needs_recovery，证据不足会拒绝；resume 只恢复既有�
 
 周期收集失败见 `collection-error.txt`，不能仅据此判断 Agent 执行失败。快照中的符号链接只记录目标文本，不应解引用读取宿主文件。FEAL 编译只使用封存后的独立测试副本；Headless 临时根只用于判题。判题依赖准备失败是 unavailable，不能计作模型答错。
 
-准备新题可用 prepare-terminal/prepare-swe 的 `--ids ID1,ID2`，批量核对必需命令、输入与固定依赖。Django 的开发检查器随原仓库 pre-commit 版本缓存，SymPy 使用原环境声明的开发依赖；不升级旧尝试环境。公开自测 helper 与隐藏 verifier 使用不同视图；判题的私有 chroot 根不向 Agent 开放。源码正在调整时先保存批次配置和准备证据，待最新源码验证并冻结后再提交；不能复用旧 payload 声称测试了新框架。
+准备新题先用 prepare-terminal/prepare-swe，之后 register-tasks 和 prepare-environments；这些准备命令支持 `--ids ID1,ID2`，批量核对必需命令、输入与固定依赖。Django 的开发检查器随原仓库 pre-commit 版本缓存，SymPy 使用原环境声明的开发依赖；不升级旧尝试环境。公开自测 helper 与隐藏 verifier 使用不同视图；判题的私有 chroot 根不向 Agent 开放。源码正在调整时先保存批次配置和准备证据，待最新源码验证并冻结后再提交；不能复用旧 payload 声称测试了新框架。
 
 ## 已完成 SWE 的仅验收复核
 
 仅在用户明确要求复验时使用 `bun hicode-eval/src/cli.ts regrade --data-dir "$HE_DATA" --run RUN_ID`。它先核对历史原题包、`prediction.json` 和原 `model.patch` 哈希，再在单独目录执行原判题；不会运行 Agent、调用模型或重交任务。结果位于 `runs/RUN_ID/rechecks/REVIEW_ID/`，含 `result.json`、`logs/verifier/validity.json`、原目标与回归测试状态；首次 run 的状态与分数不回写。验收环境、补丁或原测试节点无法完成时记录 `unavailable`，不是模型代码失败。复验成功也只是这次补丁判题结论，不改变首次执行事实。
+
+
+成绩台账与清理独立：`catalog.json` 保留累计通过和尝试摘要，`run-archive/` 保留精简补丁和判题依据。`environment.json` 是该次实际镜像层身份，`environments/preparation-report.json` 区分已准备、失败和缺题包。`catalog` 的 environmentPrepared 表示已有回执，运行前还会验证源内容和镜像。
+
+用户主动要求单题重跑时：`bash hicode-eval/eval.sh retry --run "$HE_RUN" --port "$HE_PORT"`。返回关联原 run 的新单题 batch；原批次统计不改变。重复调用相同原 run 返回同一后继。模型/payload 不匹配时需恢复原服务配置；不要通过改写原状态绕过限制。

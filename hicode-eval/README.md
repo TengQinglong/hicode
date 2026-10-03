@@ -2,11 +2,11 @@
 
 [English](README.en.md)
 
-在一台长期运行的 Linux 容器中，批量测试 HiCode 完成公开编程任务的能力。CLI 提交任务，网页查看完整 TUI 和进度，结束后自动运行原题测试并保存日志。每题独立尝试一次，不追加纠错提示、不自动重跑。
+使用可复用环境镜像，每次尝试启动独立 Linux 容器，批量测试 HiCode 完成公开编程任务的能力。CLI 提交任务，网页查看完整 TUI 和进度，结束后自动运行原题测试并保存日志。每题独立尝试一次，不追加纠错提示、不自动重跑。
 
-已适配题目见 [题目清单](config/terminal-bench.json)。此工具用于研发回归；共享系统、ARM64 环境和可调时限与官方环境存在差异，结果不等同于官方榜单成绩。
+已适配题目见 [题目清单](config/terminal-bench.json)。此工具用于研发回归；审定依赖配方、ARM64 环境和可调时限与官方环境存在差异，结果不等同于官方榜单成绩。
 
-批次执行状态与成绩由 CLI `status` 查询。个人题目复盘和环境准备记录保存在仓库外。
+批次执行状态与累计成绩由 CLI `status` 查询。持久 `catalog.json` 保留已通过、未通过、待测试；正在运行从当前任务派生。删除历史工作区不会删除台账。
 
 ## 目录与记录
 
@@ -32,7 +32,7 @@ bun install --frozen-lockfile
 bash .devcontainer/linux.sh eval-start
 ```
 
-首次会构建开发基础镜像及独立评测镜像，安装 tmux、Python 3.13、pytest 8.4.1 和 pytest-json-ctrf 0.3.5。之后复用镜像和系统工具；题目专属 Python 依赖按清单安装到独立目录。评测机名为 `hicode-eval-linux`，只挂独立数据卷，不挂宿主源码、Home 或 Docker socket；开发容器不必同时运行。
+首次会构建开发基础镜像及独立评测镜像，安装 tmux、Python 3.13、pytest 8.4.1 和 pytest-json-ctrf 0.3.5。这台机器只用于环境准备与缓存，实际做题使用一次性容器。之后复用镜像和系统工具；题目专属 Python 依赖在准备阶段按清单冻结。评测机名为 `hicode-eval-linux`，只挂独立数据卷，不挂宿主源码、Home 或 Docker socket；开发容器不必同时运行。
 
 将上游题目下载到仓库外，并固定为已审核版本：
 
@@ -57,12 +57,27 @@ bash hicode-eval/eval.sh prepare --payload ../hicode-eval-data/payload-v1
 
 默认要求工作区干净。测试未提交代码时追加 `--snapshot-worktree`，仅纳入 `src/`、`package.json`、`bun.lock` 和 `tsconfig.json` 的修改。payload 只包含这些运行输入，记录提交号、覆盖文件及归档哈希；每个新版本使用新的输出目录。
 
-## 3. 启动与提交
+## 3. 登记、准备与提交
+
+准备好原题输入及缓存后，登记到持久台账，再准备可复用环境：
+
+```bash
+bash hicode-eval/eval.sh register-tasks \
+  --catalog ../hicode-eval-data/catalog/catalog.json --tasks ../terminal-bench-2
+bash hicode-eval/eval.sh prepare-environments \
+  --catalog ../hicode-eval-data/catalog/catalog.json \
+  --environments ../hicode-eval-data/environments
+```
+
+环境分为公共底座、依赖组合、可选题目特殊准备；每次运行只新建容器的可写层。默认准备未通过与待测试，有题包但缺依赖的任务报告 blocked；没有审定题包的任务仍待适配。已通过的任务可之后用 `--ids ID` 准备。系统缓存发生变化才用 `--refresh-base` 重新冻结底座。
+
+服务默认每题 1 CPU、4096 MiB，支持 `--cpus`、`--memory-mb`；最多并发 5，默认网络 isolated。
 
 ```bash
 bash hicode-eval/eval.sh serve \
   --data-dir ../hicode-eval-data/runs \
-  --tasks ../terminal-bench-2 \
+  --catalog ../hicode-eval-data/catalog/catalog.json \
+  --environments ../hicode-eval-data/environments \
   --payload ../hicode-eval-data/payload-v1 \
   --docker-context colima-hicode \
   --machine hicode-eval-linux \
@@ -172,7 +187,7 @@ bash hicode-eval/eval.sh recover --run RUN_ID
 
 新增题目需审核原始初始化、依赖、路径和判题脚本，补齐 runner 适配与离线测试，再登记完整哈希。不要仅添加题目 ID 或删除原测试来获得通过结果。
 
-任务各有独立 UID、Home 和 `/app` 挂载，但共享系统、网络和端口；这是可信的本地研发环境，不是面向陌生用户的安全隔离服务。任务清单可声明固定版本的 Python 包，runner 只装进该题的 `/app/.eval-python`；增加依赖会改变该题环境，诊断分数须与原始环境分开记录。当前不接要求修改系统配置、全局安装依赖或特殊硬件的题。
+每次尝试使用独立容器、网络、Home 和 `/app` 挂载；这是可信的本地研发环境，不是面向陌生用户的安全隔离服务。任务清单可声明固定版本的 Python 包，构建阶段预装，runner 只复制到该题的 `/app/.eval-python`；增加依赖会改变该题环境，诊断分数须与原始环境分开记录。当前不接要求修改系统配置、全局安装依赖或特殊硬件的题。
 
 ```bash
 bun test hicode-eval/tests
@@ -212,7 +227,7 @@ bash hicode-eval/eval.sh prepare-swe \
 
 准备需要空闲的专用评测机和网络。首次按仓库、版本和环境组准备 Python、官方 harness 及原声明依赖；不同题目的运行环境分别复制，不因同批混用版本。后续缓存复用。输出目录必须是新的仓库外目录，失败缓存保留供检查。每题下载指定 base commit 的 GitHub 源码归档，建立仅含原始树和安装基线的本地 Git 仓库，不保留远端、未来历史或 hook。环境实际解析版本记录在机器缓存的 `.ready.json`，运行时复制到宿主 `runs/ID/environment.json`。
 
-服务启动时在原有参数上增加 `--swe-tasks /path/to/external/prepared-swe`。复用同一个看板和专用机器；活动任务运行时不要另起服务或重新准备系统依赖。四题可用 `config/swe-verified-pilot.json` 提交，也可在同一批次加入 Terminal 题。
+先用 `register-tasks --catalog FILE --swe-tasks /path/to/external/prepared-swe` 登记，再用 `prepare-environments` 准备镜像。复用同一个看板和专用机器；活动任务运行时不要另起服务或重新准备系统依赖。四题可用 `config/swe-verified-pilot.json` 提交，也可在同一批次加入 Terminal 题。
 
 两种准备命令都支持 `--ids ID1,ID2`。Django 输入的开发检查器从基线 `.pre-commit-config.yaml` 读取固定版本并使用独立缓存；SymPy 使用原环境声明中的开发依赖。不就地更新旧环境。准备不调用模型，不代表题目已通过。
 
@@ -224,7 +239,7 @@ SWE 的隔离与评分契约：
 - 在干净代码、独立依赖和新 Home 中重放补丁，原 hidden test patch 仅此时进入判题视图。使用官方 4.1.0 的对应仓库测试命令、日志解析和 FAIL_TO_PASS/PASS_TO_PASS 评分；保存原始 `logs/verifier/output.txt` 和 `report.json`，不转换成虚构的 CTRF。
 - 无完整测试输出、初始化失败或判题超时记为 `unavailable`，不误判模型错误；官方回归测试未通过记为 `failed`。恢复只核验已有报告和补丁哈希，不重跑 Agent 或判题。
 
-这是 **共享 Linux 研发评测**：使用 venv 替代官方 Conda/实例镜像、从源码归档重建 Git 基线，官方脚本的环境激活及测试文件 reset commit 随之适配，测试、断言和评分规则不变。不能把这些结果表述为官方镜像下的榜单复现。支持范围以本节列出的仓库/版本和生产校验为准；每个选定环境组仍须在评测机空闲时完成准备及隔离预检，不能仅凭题号登记为已就绪。
+这是 **独立容器研发评测**：使用 venv 替代官方 Conda/实例镜像、从源码归档重建 Git 基线，官方脚本的环境激活及测试文件 reset commit 随之适配，测试、断言和评分规则不变。不能把这些结果表述为官方镜像下的榜单复现。支持范围以本节列出的仓库/版本和生产校验为准；每个选定环境组仍须在评测机空闲时完成准备及隔离预检，不能仅凭题号登记为已就绪。
 
 准备器从外部 `environment-groups.json` 按 repo、version、environmentSetupCommit 选取并校验原始 requirements；混合版本按组准备，缓存按版本、环境提交、依赖内容及架构隔离。工具版本只读取各题基线实际声明的 pre-commit 配置，不借用新版配置。准备期间必须无活动评测任务。
 
@@ -246,3 +261,34 @@ bun hicode-eval/src/cli.ts regrade --data-dir ../hicode-eval-data/runs --run RUN
 ```
 
 这个命令校验原 `model.patch` 哈希和冻结题包，重新运行原判题，结果保存在 `runs/RUN_ID/rechecks/REVIEW_ID/`。它不再提交任务或调用模型，也不会覆盖第一次的分数和日志。验收未启动或原目标测试没有实际执行时返回 `unavailable`；需要查看 `logs/verifier/validity.json` 和 `output.txt`。历史复验补齐的依赖及其来源单独写在 `dependency-conditions.json`。
+
+
+## 环境存档与历史清理
+
+`catalog.json` 独立于运行目录，后续失败不抹去历史通过；取消且尚未开始的题仍待测试。`environments/tasks/` 是题目到镜像的绑定，`layers/` 保存构建依据；特殊原生依赖可通过台账的 `preparation` 配方预编译，详情见 [架构文档](../docs/reference/HICODE-EVAL.md)。禁止把隐藏测试、参考补丁或凭据放进环境配方。
+
+完成结果、台账与证据落盘后自动移除容器和私有网络。采集失败保留现场并进入 needs_recovery，`recover` 只核对证据和清理，不再调用模型。
+
+```bash
+# 服务空闲且已停止时，先预览，再明确执行。
+bash hicode-eval/eval.sh archive-runs --catalog CATALOG --data-dir RUN_DATA
+bash hicode-eval/eval.sh archive-runs --catalog CATALOG --data-dir RUN_DATA --apply
+```
+
+精简存档在台账旁的 `run-archive/`，包含成绩、最终补丁、判题报告、哈希与日志尾部。清理中断可重复 --apply；未完成时服务拒绝启动。题包、镜像及缓存不在该命令删除范围。
+
+无费用 Docker 集成验证（使用独立临时台账，真实题包、本地假模型）：
+
+```bash
+bun hicode-eval/tests/containerSmoke.ts --catalog CATALOG --environments ENVIRONMENTS --payload PAYLOAD --task SWE_TASK_ID
+# 取消路径：追加 --cancel
+```
+
+假模型不修题，预期执行 completed、判题 failed、收集 complete、容器已移除；它验证运行链路，不代表模型通过率。
+
+
+## 单题重新运行
+
+在已结束题目右侧点“重新运行”，或执行 `bash hicode-eval/eval.sh retry --run RUN_ID`。创建关联原记录的单题新批次，保留原分数，沿用原题快照、模型、源码版本、网络与预算。重复点击打开同一新尝试；需要再跑一次时，从新尝试的结束记录发起。
+
+“恢复结果”用于 needs_recovery，只核验证据和清理；重新运行则会调用模型。运行中的题不能重跑。当前服务模型或源码 payload 与原记录不同会明确拒绝。可用 `containerSmoke.ts --retry` 验证完整重跑链路，测试仅使用本地假模型。

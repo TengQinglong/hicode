@@ -74,7 +74,8 @@ def preflight_bundle(row, target, environment):
     import shutil
     import tempfile
     from protocol import namespace_argv, atomic_json
-    from swe import relocate_environment,project_environment,editable_install_argv
+    from venv_paths import relocate_environment
+    from swe import project_environment,editable_install_argv
     account=pwd.getpwnam('node')
     receipt={'sourceCommit':row['base_commit'],'environment':str(environment),'passed':False,'checked':0}
     with tempfile.TemporaryDirectory(prefix='xarray-public-',dir='/eval') as tmp:

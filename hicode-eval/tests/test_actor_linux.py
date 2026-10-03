@@ -16,7 +16,7 @@ class ActorBoundaryTest(unittest.TestCase):
     def test_terminal_and_swe_views_keep_own_storage_without_host_evidence(self):
         release=os.environ['HICODE_EVAL_ACTOR_RELEASE']
         env_cache=os.environ['HICODE_EVAL_ACTOR_SWE_CACHE']
-        from swe import relocate_environment
+        from venv_paths import relocate_environment
         for workspace in ['/app','/testbed']:
             with self.subTest(workspace=workspace),tempfile.TemporaryDirectory(prefix='actor-boundary-',dir='/eval') as tmp:
                 root=Path(tmp);root.chmod(0o755)

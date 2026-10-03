@@ -1,7 +1,7 @@
-"""One assignment, one Linux user, one tmux session. No installs or per-task containers."""
+"""Execute one assignment inside its disposable container and prepared environment."""
 import base64,fcntl,json,os,pwd,signal,subprocess,sys,time,shutil
 from pathlib import Path
-from protocol import assignment_prompt,public_test_entries,Events,atomic_json,namespace_argv,package_install_argv,prepare_verifier_root,wait_verifier_handoff
+from protocol import assignment_prompt,public_test_entries,Events,atomic_json,namespace_argv,prepare_verifier_root,wait_verifier_handoff
 from verifier import verify,verifier_environment
 from terminal import capture,settle,submit_prompt
 from cleanup import stop_task_processes,finalize_task,open_task_cli,terminate_task_cli
@@ -15,7 +15,7 @@ config=json.loads((root/'job.json').read_text())
 network=config.get('network','open')
 if network not in {'open','isolated'}:raise ValueError('Invalid evaluation network mode')
 is_swe=config.get('dataset')=='swe-bench-verified'
-swe_environment=Path('/eval/swe-envs')/run_id if is_swe else None
+swe_environment=Path('/opt/hicode-swe/actor') if is_swe else None
 project=root/'project';home=root/'home';logs=root/'logs';actor_events=root/'actor-events';event_path=actor_events/'events.jsonl';control=Path('/run/hicode-eval')/run_id
 name='eval-'+run_id
 cancelled=False
@@ -34,10 +34,10 @@ with open('/eval/users.lock','a') as lock:
     try:pwd.getpwnam(name)
     except KeyError:pass
     else:raise ValueError('Run user already exists; attempts cannot be resumed')
-    uid=20000+int(run_id[:8],16)%1000000
-    while True:
-        try:pwd.getpwuid(uid);uid+=1
-        except KeyError:break
+    uid=20000
+    try:pwd.getpwuid(uid)
+    except KeyError:pass
+    else:raise ValueError('A fresh run container is required')
     subprocess.run(['useradd','--uid',str(uid),'--user-group','--no-create-home','--shell','/bin/bash',name],check=True)
     account=pwd.getpwnam(name)
 for p in [root,project,home,logs,actor_events,control]:p.mkdir(parents=True,exist_ok=True)
@@ -117,26 +117,22 @@ try:
     # Approval is granted for this disposable assignment, inside the outer namespace.
     config['permissionMode']='full-access'
     atomic_json(root/'job.json',config)
-    emit('phase',phase='Deploying task on shared Linux')
+    emit('phase',phase='Deploying task in its isolated container')
     settings={'sources':{model['source']:{'baseUrl':model['baseUrl'],'apiKeyEnv':model['apiKeyEnv'],'models':[{'id':model['model'],'label':model['model'],'imageInput':model.get('imageInput',False)}]}},'models':{'primary':{'source':model['source'],'model':model['model']}},'memory':{'enabled':False},'permissions':{'defaultMode':config['permissionMode'],'deny':[f'{t}({p}/**)' for t in ['write_file','edit_file'] for p in [str(logs),str(actor_events),str(control)]]},'sandbox':{'network':{'mode':'open'},'filesystem':{'denyWrite':[str(logs),str(actor_events),str(control)]}}}
     if network=='isolated':settings['permissions']['deny'].append('web_fetch')
     conf=home/'.hicode';conf.mkdir(exist_ok=True);atomic_json(conf/'settings.json',settings)
     subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(home)],check=True)
     extra={'HICODE_EVAL_SOURCE':release,'HICODE_EVAL_HOME':str(conf)}
     if is_swe:
-        if swe_environment.exists():raise ValueError('SWE attempt environment already exists')
-        shutil.copytree(config['swe']['environment'],swe_environment,symlinks=True)
-        from swe import editable_install_argv, relocate_environment
-        relocate_environment(swe_environment,config['swe']['environment'])
-        subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(swe_environment)],check=True)
+        if not (swe_environment/'.ready.json').is_file():raise ValueError('Prepared actor environment is missing')
+        from swe import editable_install_argv
         command(namespace(editable_install_argv('/opt/hicode-swe/env/bin/python','/testbed',config['swe']['repo'])),timeout=60,output_path=logs/'repo-install.txt')
     for required in config.get('commands',[]):
         if not shutil.which(required):raise RuntimeError('Task environment missing command: '+required)
     packages=config.get('packages',[])
     if packages:
-        argv,offline=package_install_argv(packages,'/app/.eval-python')
-        emit('phase',phase='Installing task packages from local wheels' if offline else 'Downloading pinned task packages')
-        command(namespace(argv),timeout=300,output_path=logs/'package-install.txt')
+        shutil.copytree('/opt/hicode-terminal/actor',project/'.eval-python',symlinks=True)
+        subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(project/'.eval-python')],check=True)
     initializer=config['initializer']
     if initializer:
         script=project/initializer['file']
@@ -231,9 +227,8 @@ try:
                 if verifier_packages:
                     target=project/'.eval-verifier-python'
                     if target.exists() or target.is_symlink():raise ValueError('Reserved verifier dependency path already exists in the submitted workspace')
-                    argv,offline=package_install_argv(verifier_packages,'/app/.eval-verifier-python')
-                    emit('phase',phase='Installing verifier packages from local wheels' if offline else 'Downloading pinned verifier packages')
-                    command(namespace(argv,verifier=True),timeout=300,output_path=logs/'verifier-package-install.txt')
+                    shutil.copytree('/opt/hicode-terminal/verifier',target,symlinks=True)
+                    subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(target)],check=True)
                 if config.get('verifierChroot'):
                     verifier_root=root/'verifier-root'
                     prepare_verifier_root(project,verifier_root)
@@ -287,8 +282,5 @@ finally:
         try:finalize_task(root,result)
         finally:
             if gateway:gateway.close()
-            if is_swe:
-                for env_root in ['/eval/swe-envs','/eval/swe-grader-envs']:
-                    shutil.rmtree(Path(env_root)/run_id,ignore_errors=True)
             if cli_fd is not None:os.close(cli_fd)
     emit('result',**result)

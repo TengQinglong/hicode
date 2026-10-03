@@ -2,9 +2,9 @@
 
 [简体中文](README.md)
 
-Run public programming tasks through HiCode on a persistent Linux container. Submit batches from the CLI, watch the full TUI in a browser, and automatically collect test results and logs. Each task gets one independent attempt, with no corrective follow-up prompts or automatic retries.
+Run public programming tasks through HiCode in a fresh disposable Linux container for each attempt. Submit batches from the CLI, watch the full TUI in a browser, and automatically collect test results and logs. Each task gets one independent attempt, with no corrective follow-up prompts or automatic retries.
 
-Reviewed tasks are listed in the [catalog](config/terminal-bench.json). This is a development regression tool: the shared system, ARM64 environment, and configurable time limits differ from official benchmark conditions. Results are not official leaderboard scores.
+Reviewed tasks are listed in the [catalog](config/terminal-bench.json). This is a development regression tool: the reviewed dependency recipes, ARM64 environment, and configurable time limits differ from official benchmark conditions. Results are not official leaderboard scores.
 
 Query batch execution and scores with the CLI `status` command. Keep personal task reviews and environment preparation records outside the checkout.
 
@@ -57,12 +57,17 @@ bash hicode-eval/eval.sh prepare --payload ../hicode-eval-data/payload-v1
 
 A clean worktree is required by default. Add `--snapshot-worktree` to include uncommitted changes under `src/` and to `package.json`, `bun.lock`, and `tsconfig.json`. The payload contains only those runtime inputs and records the commit, overlaid files, and archive hash. Use a new output directory for each version.
 
-## 3. Start the service and submit a batch
+## 3. Register, prepare, and submit
+
+First register reviewed bundles with `register-tasks --catalog FILE --tasks DIR` (or `--swe-tasks DIR`), then run `prepare-environments --catalog FILE --environments DIR`. Preparation defaults to unpassed and untested tasks; use `--ids` or `--include-passed` for passed tasks. Missing reviewed sources remain unprepared.
+
+Images share a public base, dependency combinations and optional task preparation. Only attempts get disposable writable layers. Use `--refresh-base` after changing system prerequisites. Service defaults are isolated actor networking, 1 CPU and 4096 MiB per attempt; `--cpus` and `--memory-mb` override limits.
 
 ```bash
 bash hicode-eval/eval.sh serve \
   --data-dir ../hicode-eval-data/runs \
-  --tasks ../terminal-bench-2 \
+  --catalog ../hicode-eval-data/catalog/catalog.json \
+  --environments ../hicode-eval-data/environments \
   --payload ../hicode-eval-data/payload-v1 \
   --docker-context colima-hicode \
   --machine hicode-eval-linux \
@@ -172,7 +177,7 @@ Others can reuse the CLI, TUI monitoring, automated grading, and evidence collec
 
 Before adding a task, review its initialization, dependencies, paths, and verifier, implement the adapter and offline tests, then register full file hashes. Do not merely add a task ID or remove original tests to obtain a passing result.
 
-Each task has its own UID, home directory, and `/app` mount, but shares the system, network, and ports. This is a trusted local development environment, not a hosted isolation service for untrusted users. An adapter may declare pinned Python packages, which the runner installs only under that task’s `/app/.eval-python`; adding dependencies changes the task environment, so diagnostic scores must be kept separate from the upstream environment. Tasks requiring system configuration changes, global package installation, or special hardware are not currently supported.
+Each attempt has a separate container, network, home directory, and `/app` mount. This is a trusted local development environment, not a hosted isolation service for untrusted users. An adapter may declare pinned Python packages, which preparation installs in the image and the runner copies into that task’s `/app/.eval-python`; adding dependencies changes the task environment, so diagnostic scores must be kept separate from the upstream environment. Tasks requiring system configuration changes, global package installation, or special hardware are not currently supported.
 
 ```bash
 bun test hicode-eval/tests
@@ -212,7 +217,7 @@ bash hicode-eval/eval.sh prepare-swe \
 
 Preparation requires an idle evaluation machine and network access. Python, the official harness and declared dependencies are cached per repository, version and environment group; each task receives its own copied environment, including mixed-version batches. Each task gets the source archive for its exact base commit and a local repository containing only that source tree and its installation baseline. No future Git history, remotes or hooks are retained. Resolved package versions are copied into `runs/ID/environment.json` when an attempt starts. Failed preparation retains caches; the output directory must be a new external directory.
 
-Add `--swe-tasks /path/to/external/prepared-swe` to the normal service command. Reuse the same dashboard and machine; do not start another service or prepare system dependencies during active attempts. Submit `config/swe-verified-pilot.json`, or mix the selected SWE and Terminal IDs in a batch.
+Register bundles with `register-tasks --catalog FILE --swe-tasks /path/to/external/prepared-swe`, then run `prepare-environments --catalog FILE --environments DIR`. Reuse the same dashboard and machine; do not start another service or prepare system dependencies during active attempts. Submit `config/swe-verified-pilot.json`, or mix the selected SWE and Terminal IDs in a batch.
 
 Both preparation commands accept `--ids ID1,ID2`. Django bundles pin development checkers from the source `.pre-commit-config.yaml`; SymPy uses the declared development packages. Separate caches preserve previous attempts. Preparation makes no model calls and does not establish a passing score.
 
@@ -220,7 +225,7 @@ The Actor receives only the public problem, original base code and public reposi
 
 Save the official prediction fields in `prediction.json` and identity/hash receipts in `patch-manifest.json`. Replay that patch against clean code, dependencies and Home; only then expose hidden test material. Use upstream harness 4.1.0 repository-specific commands, log parsing and both FAIL_TO_PASS/PASS_TO_PASS rules. Keep `logs/verifier/output.txt` and `report.json`; no synthetic CTRF reports are produced. Incomplete grading is `unavailable`; genuine test failures are `failed`. Recovery validates existing evidence without rerunning anything.
 
-This is **shared Linux development evaluation**, using venv instead of upstream Conda/instance images and recreating a Git baseline from the source archive. Environment activation and test-file reset commits are adapted accordingly; tests, assertions and grading rules stay upstream. These results are not official image/leaderboard reproductions. Supported repositories and versions are listed above and enforced by production validation. Each selected environment group still requires preparation and namespace preflight while the machine is idle; a task ID alone does not establish readiness.
+This is **isolated-container development evaluation**, using venv instead of upstream Conda/instance images and recreating a Git baseline from the source archive. Environment activation and test-file reset commits are adapted accordingly; tests, assertions and grading rules stay upstream. These results are not official image/leaderboard reproductions. Supported repositories and versions are listed above and enforced by production validation. Each selected environment group still requires preparation and namespace preflight while the machine is idle; a task ID alone does not establish readiness.
 
 Preparation resolves original requirements from external `environment-groups.json` by repository, version and environment setup commit. Mixed selections prepare each group separately; caches include version, setup commit, dependency content and architecture. Development-tool pins come only from each base tree’s actual pre-commit declarations. Preparation requires no active evaluation tasks.
 
@@ -242,3 +247,19 @@ bun hicode-eval/src/cli.ts regrade --data-dir ../hicode-eval-data/runs --run RUN
 ```
 
 This verifies the archived model patch and frozen task identity, then runs the original verifier in a separate grading copy. It neither submits an Agent task nor calls a model. Results and test-validity evidence are stored under `runs/RUN_ID/rechecks/REVIEW_ID/`; the first score and logs remain intact. Missing or unexecuted original target tests produce `unavailable`, with details in `logs/verifier/validity.json`.
+
+
+## Durable results and cleanup
+
+The external `catalog.json` preserves passed/unpassed/untested results across run cleanup; running status is derived from live attempts. Results, evidence and catalog writes finish before container/network deletion. Collection failures retain the container for `recover`, without another model call.
+
+`archive-runs --catalog FILE --data-dir DIR` previews finished batches; `--apply` preserves compact result/patch/grading evidence and hashes beside the catalog in `run-archive/`, then removes old workspaces and large logs. An interrupted cleanup can resume with the same command. Active or unresolved runs, input bundles and environment images are not removed.
+
+Run a no-cost full-chain Docker smoke with `bun hicode-eval/tests/containerSmoke.ts --catalog FILE --environments DIR --payload DIR --task SWE_TASK_ID`. It uses a local fake model and an independent temporary catalog. Expected outcome: completed execution, failed grading (no repair), complete evidence, and removed container. Add `--cancel` to verify cancellation.
+
+
+## Rerun one task
+
+Click “重新运行” on a finished attempt, or use `bash hicode-eval/eval.sh retry --run RUN_ID`. This creates a linked single-task batch with a fresh container, keeping the original score and frozen task/model/payload/network/budget. Duplicate requests reuse the same child attempt, including after restart; rerun that child to create attempt 3.
+
+Running attempts cannot be rerun. Retained evidence must be recovered first; recovery does not call the model, while rerun does. A changed service model or payload is rejected. `containerSmoke.ts --retry` validates the chain using a local fake model only.

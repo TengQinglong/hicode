@@ -1,3 +1,6 @@
+import {seedCatalog,environmentFixture} from './helpers/catalog.js';
+import {EnvironmentStore} from '../src/host/environments.js';
+import {RunContainers} from '../src/host/containers.js';
 import {test, expect, spyOn} from 'bun:test';
 import {mkdtemp, writeFile, symlink, rm, readFile, mkdir, chmod, realpath} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -48,11 +51,19 @@ test -f '${join(tools,'handoff-done')}' || exit 1
 printf '%s\n' '{"type":"result","execution":"completed","grading":"${uploadFailure?'unavailable':'passed'}","uid":20001}'
 `);
   await chmod(join(tools,'docker'),0o700);
-  const config=configSchema.parse({version:3,data:root,tasks:join(root,'tasks'),payload,context:'fixture',machine:'fixture-machine',concurrency:1,budget:{},model:{source:'qwen',model:'fixture',apiKeyEnv:'FIXTURE_KEY',baseUrl:'http://127.0.0.1:1'}});
+  const config=configSchema.parse({version:4,data:root,catalog:join(root,'catalog.json'),environments:join(root,'environments'),payload,context:'fixture',machine:'fixture-machine',concurrency:1,budget:{},model:{source:'qwen',model:'fixture',apiKeyEnv:'FIXTURE_KEY',baseUrl:'http://127.0.0.1:1'}});
+  await seedCatalog(config,[{id:'fixture',source:join(path,'task','fixture')}]);
+  const resolve=spyOn(EnvironmentStore.prototype,'resolve').mockResolvedValue(environmentFixture('fixture'));
+  let attemptCreated=false,workerDirectoryReady=false;
+  const create=spyOn(RunContainers.prototype,'create').mockImplementation(async()=>{attemptCreated=true;return 'fixture-machine';});
+  const name=spyOn(RunContainers.prototype,'name').mockReturnValue('fixture-machine');
   const state=runSchema.parse({version:2,id:'0123456789abcdef',batchId:'fedcba9876543210',task:'fixture',state:'preparing',createdAt:1,updatedAt:1,model:'fixture',budget:{}});
   const calls:string[][]=[];let copies=0;const acknowledgements:string[]=[];
   const run=spyOn(transport,'run').mockImplementation(async command => {
     calls.push(command);
+    if(attemptCreated&&command.includes('exec')&&command.includes('mkdir')&&command.includes('/opt/hicode-eval'))workerDirectoryReady=true;
+    if(attemptCreated&&command.includes('cp')&&command.at(-1)?.startsWith('fixture-machine:/opt/hicode-eval/'))
+      expect(workerDirectoryReady).toBe(true);
     if(command.includes('inspect'))return JSON.stringify([{State:{Running:true},Config:{Labels:{'dev.hicode.role':'eval'}}}]);
     if(command.includes('/opt/hicode-eval/bootstrap.py'))return '/opt/hicode/releases/'+hash;
     if(command.includes('/eval/runs/'+state.id+'/verification.json')){
@@ -102,6 +113,6 @@ printf '%s\n' '{"type":"result","execution":"completed","grading":"${uploadFailu
     expect(calls.some(command=>command.some(arg=>arg.includes('/cancel')))).toBe(false);
   }finally{
     if(oldPath===undefined)delete process.env.PATH;else process.env.PATH=oldPath;
-    time.mockRestore();run.mockRestore();validate.mockRestore();await rm(root,{recursive:true,force:true});
+    time.mockRestore();run.mockRestore();validate.mockRestore();resolve.mockRestore();create.mockRestore();name.mockRestore();await rm(root,{recursive:true,force:true});
   }
 });

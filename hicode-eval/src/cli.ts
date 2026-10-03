@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util';
-import { resolve, join } from 'node:path';
-import { realpath } from 'node:fs/promises';
+import { resolve, join, dirname } from 'node:path';
+import { realpath, readdir } from 'node:fs/promises';
 import { parse } from 'dotenv';
 import { z } from 'zod';
 import { Lab } from './host/manager.js';
@@ -12,16 +12,60 @@ import { directory, readJson, run, save, exists } from './host/store.js';
 import { lease } from './host/lease.js';
 import { serve } from './host/server.js';
 import {regradeRun} from './host/regrade.js';
+import {TaskCatalog} from './host/catalog.js';
+import {EnvironmentStore} from './host/environments.js';
+import {archiveRuns} from './host/archive.js';
+import {sweCatalog,validateSweTask} from './host/sweTasks.js';
+import {validatePublicTask,profiles} from './host/publicTasks.js';
 async function main() {
   process.umask(0o077);
   const { positionals, values: v } = parseArgs({ allowPositionals: true, options: {
-    network: {type:'string', default:'open'}, dataset: {type:'string'}, prep: {type:'string'}, output: {type:'string'}, ids: {type:'string'}, 'data-dir': { type: 'string' }, tasks: { type: 'string' }, 'swe-tasks': { type: 'string' }, payload: { type: 'string' }, 'docker-context': { type: 'string', default: 'colima-hicode' }, machine: { type: 'string', default: 'hicode-eval-linux' }, concurrency: { type: 'string', default: '2' }, port: { type: 'string', default: '8878' }, file: { type: 'string' }, run: { type: 'string' }, batch: { type: 'string' }, 'wait-seconds': { type: 'string', default: '30' }, source: { type: 'string' }, model: { type: 'string' }, 'model-config': { type: 'string' }, 'snapshot-worktree': { type: 'boolean' }, help: { type: 'boolean' }
+    'refresh-base':{type:'boolean'},apply:{type:'boolean'},catalog:{type:'string'},environments:{type:'string'},'include-passed':{type:'boolean'},cpus:{type:'string',default:'1'},'memory-mb':{type:'string',default:'4096'},network: {type:'string', default:'isolated'}, dataset: {type:'string'}, prep: {type:'string'}, output: {type:'string'}, ids: {type:'string'}, 'data-dir': { type: 'string' }, tasks: { type: 'string' }, 'swe-tasks': { type: 'string' }, payload: { type: 'string' }, 'docker-context': { type: 'string', default: 'colima-hicode' }, machine: { type: 'string', default: 'hicode-eval-linux' }, concurrency: { type: 'string', default: '2' }, port: { type: 'string', default: '8878' }, file: { type: 'string' }, run: { type: 'string' }, batch: { type: 'string' }, 'wait-seconds': { type: 'string', default: '30' }, source: { type: 'string' }, model: { type: 'string' }, 'model-config': { type: 'string' }, 'snapshot-worktree': { type: 'boolean' }, help: { type: 'boolean' }
   } });
   const command = positionals[0];
-  if (v.help || !command) { console.log('HiCode Eval · persistent Linux\n  serve --data-dir DIR --payload DIR --tasks DIR [--machine hicode-eval-linux] [--swe-tasks PREPARED_DIR] [--network open|isolated]\n  prepare --payload DIR [--snapshot-worktree]\n  prepare-terminal [--machine NAME] [--ids ID1,ID2]\n  prepare-swe --dataset VERIFIED_DIR --prep SWE_PREP_DIR --output EXTERNAL_DIR [--ids ID1,ID2]\n  catalog | submit --file batch.json | status [--batch ID]\n  wait --batch ID [--wait-seconds 30] | cancel --batch ID | resume --batch ID | recover --run ID | report --batch ID --file report.md\n  regrade --data-dir DIR --run ID  # frozen SWE patch only; no Agent/model'); return; }
-  if (positionals.length !== 1 || !['serve','prepare','prepare-terminal','prepare-swe','catalog','submit','status','wait','cancel','resume','recover','report','regrade'].includes(command)) throw Error('Unknown command');
+  if (v.help || !command) { console.log('HiCode Eval · isolated containers\n  serve --data-dir DIR --payload DIR --catalog FILE --environments DIR [--machine hicode-eval-linux] [--network open|isolated]\n  prepare --payload DIR [--snapshot-worktree]\n  prepare-terminal [--machine NAME] [--ids ID1,ID2]\n  prepare-swe --dataset VERIFIED_DIR --prep SWE_PREP_DIR --output EXTERNAL_DIR [--ids ID1,ID2]\n  register-tasks --catalog FILE [--tasks DIR] [--swe-tasks DIR]\n  archive-runs --catalog FILE --data-dir DIR [--apply]\n  prepare-environments --catalog FILE --environments DIR [--ids ID1,ID2] [--include-passed] [--refresh-base]\n  catalog | submit --file batch.json | status [--batch ID]\n  wait --batch ID [--wait-seconds 30] | cancel --batch ID | resume --batch ID | recover --run ID | retry --run ID | report --batch ID --file report.md\n  regrade --data-dir DIR --run ID  # frozen SWE patch only; no Agent/model'); return; }
+  if (positionals.length !== 1 || !['serve','prepare','prepare-terminal','prepare-swe','catalog','submit','status','wait','cancel','resume','recover','retry','report','regrade','prepare-environments','register-tasks','archive-runs'].includes(command)) throw Error('Unknown command');
   const required = (key: keyof typeof v) => { const value = v[key]; if (typeof value !== 'string' || !value) throw Error('Missing --' + key); return value; };
   const port = z.number().int().min(1024).max(65535).parse(Number(v.port));
+  if(command==='archive-runs'){
+    console.log(JSON.stringify(await archiveRuns(await directory(required('data-dir')),resolve(required('catalog')),v.apply??false),null,2));return;
+  }
+  if(command==='register-tasks'){
+    const path=resolve(required('catalog')),release=await lease(await directory(dirname(path)),'catalog');
+    try {
+      if(!await exists(path))await save(path,{version:1,updatedAt:new Date().toISOString(),tasks:[]});
+      const catalog=await TaskCatalog.open(path);
+      const entries: {id:string;dataset:'swe-bench-verified'|'terminal-bench';source:string}[]=[];
+      if(v['swe-tasks'])for(const task of await sweCatalog(await realpath(resolve(v['swe-tasks'])))){
+        const source=join(await realpath(resolve(v['swe-tasks'])),task.id);await validateSweTask(task.id,source);entries.push({id:task.id,dataset:'swe-bench-verified',source});
+      }
+      if(v.tasks){const root=await realpath(resolve(v.tasks)),supported=await profiles();
+        for(const entry of await readdir(root,{withFileTypes:true}))if(entry.isDirectory()&&!entry.isSymbolicLink()&&supported[entry.name]){
+          const source=join(root,entry.name);await validatePublicTask(entry.name,source);entries.push({id:entry.name,dataset:'terminal-bench',source});
+        }
+      }
+      if(!entries.length)throw Error('No reviewed task sources selected');
+      await catalog.register(entries);console.log(JSON.stringify({registered:entries.length,catalog:path}));
+    }finally{await release();}return;
+  }
+  if(command==='prepare-environments'){
+    const catalog=await TaskCatalog.open(resolve(required('catalog')));
+    const root=await directory(required('environments'));
+    const store=new EnvironmentStore(root,v['docker-context']!,v.machine!);
+    const selected=v.ids?new Set(v.ids.split(',')):undefined;
+    if(selected&&[...selected].some(id=>!catalog.list().some(task=>task.id===id)))throw Error('Unknown task ID');
+    console.log('Checking public base runtime…');await store.prepareBase(v['refresh-base']??false);
+    const prepared:string[]=[],failed:{id:string;error:string}[]=[],unprepared:string[]=[];
+    for(const task of catalog.list()){
+      if(selected?!selected.has(task.id):task.status==='passed'&&!v['include-passed'])continue;
+      if(!task.source){unprepared.push(task.id);continue;}
+      try{await store.prepareTask(task);prepared.push(task.id);console.log('Ready: '+task.id);}
+      catch(error){failed.push({id:task.id,error:error instanceof Error?error.message:String(error)});console.error('Blocked: '+task.id+': '+(error instanceof Error?error.message:String(error)).slice(0,240));}
+    }
+    const report={at:new Date().toISOString(),prepared,failed,unprepared};await save(join(root,'preparation-report.json'),report);
+    console.log(JSON.stringify({prepared:prepared.length,failed,unprepared:unprepared.length}));
+    if(failed.length)process.exitCode=1;return;
+  }
   if(command==='regrade'){
     console.log(JSON.stringify(await regradeRun(await directory(required('data-dir')),idSchema.parse(required('run'))),null,2));
     return;
@@ -45,6 +89,7 @@ async function main() {
     let result: unknown;
     if (command === 'catalog') result = (await client.status()).tasks;
     else if (command === 'submit') result = await client.request('submit', await readJson(await realpath(resolve(required('file'))), submissionSchema));
+    else if (command === 'retry') result = await client.request('retry-run',{run:idSchema.parse(required('run'))});
     else if (command === 'recover') result = await client.request('recover-run',{run:idSchema.parse(required('run'))});
     else if (command === 'status') result = await client.status(batch);
     else {
@@ -64,20 +109,21 @@ async function main() {
     console.log(JSON.stringify(result,null,2));return;
   }
   const data=await directory(required('data-dir')),release=await lease(data,'service');
-  let lab: Lab|undefined,server:ReturnType<typeof serve>|undefined;
+  let lab: Lab|undefined,server:ReturnType<typeof serve>|undefined,catalogLease:(()=>Promise<void>)|undefined;
   try {
+    catalogLease=await lease(dirname(resolve(required('catalog'))),'catalog');
     if(!!v.source!==!!v.model)throw Error('Supply both --source and --model');
     const model=v['model-config']?await readJson(resolve(v['model-config']),modelSchema):modelSchema.parse(JSON.parse(await run(['bun',join(EVAL_ROOT,'src/host/resolve-model.mjs'),REPOSITORY_ROOT,REPOSITORY_ROOT,join(process.env.HOME??'','.hicode'),...(v.source&&v.model?[v.source,v.model]:[])])));
     let credential=process.env[model.apiKeyEnv];
     for(const path of [join(REPOSITORY_ROOT,'.env'),join(process.env.HOME??'','.hicode/.env')])if(!credential&&await exists(path))credential=parse(await Bun.file(path).text())[model.apiKeyEnv];
     if(!credential)throw Error('Missing provider credential');
-    const config=configSchema.parse({version:3,network:v.network,data,tasks:resolve(required('tasks')),...(v['swe-tasks']?{sweTasks:resolve(v['swe-tasks'])}:{}),payload:resolve(required('payload')),context:v['docker-context'],machine:v.machine,concurrency:Number(v.concurrency),budget:{},model});
+    const config=configSchema.parse({version:4,network:v.network,data,catalog:resolve(required('catalog')),environments:resolve(required('environments')),cpus:Number(v.cpus),memoryMb:Number(v['memory-mb']),payload:resolve(required('payload')),context:v['docker-context'],machine:v.machine,concurrency:Number(v.concurrency),budget:{},model});
     lab=new Lab(config,credential);await lab.init();
-    console.log('Checking persistent Linux machine and fixed release…');await lab.prepareMachine();
+    console.log('Checking cache machine and fixed source release…');await lab.prepareMachine();
     server=serve(lab,port);await save(join(data,'config.json'),config);
-    let closing=false;const shutdown=async()=>{if(closing)return;closing=true;server?.stop();await lab?.close();await release();process.exit(0);};
+    let closing=false;const shutdown=async()=>{if(closing)return;closing=true;server?.stop();await lab?.close();await catalogLease?.();await release();process.exit(0);};
     process.on('SIGTERM',()=>{void shutdown();});process.on('SIGINT',()=>{void shutdown();});
-    console.log(`HiCode Eval: http://127.0.0.1:${port}\nMachine: ${config.machine} · Concurrency: ${config.concurrency} · Network default: ${config.network} · Task-local dependencies only`);
-  } catch(error){server?.stop();await lab?.close();await release();throw error;}
+    console.log(`HiCode Eval: http://127.0.0.1:${port}\nMachine: ${config.machine} · Concurrency: ${config.concurrency} · Network default: ${config.network} · Disposable container per attempt`);
+  } catch(error){server?.stop();await lab?.close();await catalogLease?.();await release();throw error;}
 }
 main().catch(error=>{console.error(error instanceof Error?error.message:'Evaluation failed');process.exitCode=1;});

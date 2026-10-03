@@ -18,7 +18,7 @@ async function fixture(){
  const state={version:2,id:run,batchId:'b'.repeat(16),task:id,dataset:'swe-bench-verified',state:'failed',createdAt:1,updatedAt:2,model:'fixture',budget:{agentSeconds:2700},execution:'completed',grading:'failed',collection:'complete'};
  await save(join(original,'state.json'),state);
  const model={source:'qwen',model:'fixture',apiKeyEnv:'UNREAD_KEY',baseUrl:'https://offline.invalid/v1'};
- await save(join(data,'config.json'),{version:3,data,tasks:join(data,'tasks'),payload:join(data,'payload'),context:'fixture',machine:'fixture',concurrency:5,budget:{agentSeconds:2700},model});
+ await save(join(data,'config.json'),{version:4,data,catalog:join(data,'catalog.json'),environments:join(data,'environments'),payload:join(data,'payload'),context:'fixture',machine:'fixture',concurrency:5,budget:{agentSeconds:2700},model});
  const patch='sealed model patch\n',sha256=createHash('sha256').update(patch).digest('hex');await writeFile(join(evidence,'tests/model.patch'),patch);
  await save(join(evidence,'patch-manifest.json'),{sha256,baseCommit:descriptor.baseCommit,baselineCommit:descriptor.baselineCommit,revision:descriptor.revision,method:'host-owned-tree-diff'});
  await save(join(evidence,'prediction.json'),{instance_id:id,model_name_or_path:'fixture',model_patch:patch});

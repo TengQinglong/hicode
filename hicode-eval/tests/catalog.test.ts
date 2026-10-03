@@ -1,0 +1,95 @@
+import {test,expect} from 'bun:test';
+import {mkdtemp,realpath,rm,mkdir,readFile,writeFile,symlink} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {TaskCatalog} from '../src/host/catalog.js';
+import {archiveRuns} from '../src/host/archive.js';
+import {runSchema,batchSchema} from '../src/host/types.js';
+import {save,exists} from '../src/host/store.js';
+
+async function fixture(){
+  const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-catalog-'))),data=join(root,'runs-data'),catalogPath=join(root,'catalog.json');
+  await mkdir(join(data,'runs'),{recursive:true});await mkdir(join(data,'batches'));
+  await save(catalogPath,{version:1,updatedAt:'2026-10-02T00:00:00.000Z',tasks:[{id:'task',dataset:'terminal-bench',status:'untested',results:[]}]});
+  const catalog=await TaskCatalog.open(catalogPath);
+  const run=runSchema.parse({version:2,id:'a'.repeat(16),batchId:'b'.repeat(16),task:'task',dataset:'terminal-bench',state:'passed',network:'isolated',createdAt:1,updatedAt:2,startedAt:1,finishedAt:2,model:'fake',budget:{},execution:'completed',grading:'passed',collection:'complete'});
+  return {root,data,catalogPath,catalog,run,cleanup:()=>rm(root,{recursive:true,force:true})};
+}
+
+test('task results survive run cleanup; queue-only cancellation is still untested',async()=>{
+  const f=await fixture();
+  try {
+    await f.catalog.record({...f.run,state:'cancelled',execution:'cancelled',grading:'pending',startedAt:undefined});
+    expect(f.catalog.get('task').status).toBe('untested');
+    await f.catalog.record(f.run);
+    await f.catalog.record({...f.run,id:'c'.repeat(16),state:'failed',grading:'failed'});
+    expect(f.catalog.get('task').status).toBe('passed');
+    expect((await TaskCatalog.open(f.catalogPath)).get('task').results).toHaveLength(2);
+  }finally{await f.cleanup();}
+});
+
+test('accepted recheck is preserved when the original failed run is recorded again',async()=>{
+  const f=await fixture();
+  try {
+    await f.catalog.record(f.run);
+    await f.catalog.record({...f.run,state:'failed',grading:'failed'});
+    expect(f.catalog.get('task').results[0]).toMatchObject({grading:'failed',accepted:true});
+    expect(f.catalog.get('task').status).toBe('passed');
+  }finally{await f.cleanup();}
+});
+
+async function persist(f:Awaited<ReturnType<typeof fixture>>){
+  await f.catalog.record(f.run);
+  await save(join(f.data,'runs',f.run.id,'state.json'),f.run);
+  await save(join(f.data,'batches',f.run.batchId+'.json'),batchSchema.parse({version:1,id:f.run.batchId,name:'fixture',network:'isolated',tasks:['task'],runIds:[f.run.id],budget:{},concurrency:1,createdAt:1,model:{source:'qwen',model:'fake',apiKeyEnv:'UNUSED_KEY',baseUrl:'https://offline.invalid/v1'},payload:{}}));
+}
+
+test('archive keeps final patch and grading evidence before deleting the finished batch',async()=>{
+  const f=await fixture();
+  try {
+    await persist(f);
+    const path=join(f.data,'runs',f.run.id);
+    await save(join(path,'evidence/prediction.json'),{model_patch:'preserved patch'});
+    await writeFile(join(path,'large-disposable-log'),'transient output');
+    expect(await archiveRuns(f.data,f.catalogPath,false)).toMatchObject({runs:1,batches:1,applied:false});
+    expect(await exists(path)).toBe(true);
+    const result=await archiveRuns(f.data,f.catalogPath,true);
+    expect(await exists(path)).toBe(false);
+    expect(JSON.parse(await readFile(join(result.archive,f.run.id,'evidence/prediction.json'),'utf8')).model_patch).toBe('preserved patch');
+    expect((await TaskCatalog.open(f.catalogPath)).counts()).toMatchObject({passed:1});
+    expect(await exists(join(f.data,'batches',f.run.batchId+'.json'))).toBe(false);
+  }finally{await f.cleanup();}
+});
+
+test('active batches and redirected evidence cannot be purged',async()=>{
+  const f=await fixture();
+  try {
+    await persist(f);const path=join(f.data,'runs',f.run.id);
+    await save(join(path,'state.json'),{...f.run,state:'running'});
+    expect(await archiveRuns(f.data,f.catalogPath,true)).toMatchObject({runs:0});
+    expect(await exists(path)).toBe(true);
+    await save(join(path,'state.json'),f.run);
+    await mkdir(join(path,'evidence'));await writeFile(join(f.root,'private'),'private');
+    await symlink(join(f.root,'private'),join(path,'evidence/prediction.json'));
+    await expect(archiveRuns(f.data,f.catalogPath,true)).rejects.toThrow();
+    expect(await exists(path)).toBe(true);
+    expect(await readFile(join(f.root,'private'),'utf8')).toBe('private');
+  }finally{await f.cleanup();}
+});
+
+test('interrupted deletion resumes only after revalidating the compact archive',async()=>{
+  const f=await fixture();
+  try {
+    await persist(f);const result=await archiveRuns(f.data,f.catalogPath,true);
+    const path=join(f.data,'runs',f.run.id);await mkdir(path);await writeFile(join(path,'leftover'),'unfinished deletion');
+    await save(join(f.data,'.archive-cleanup.json'),{version:1,catalog:f.catalogPath,runs:[f.run.id],batches:[f.run.batchId]});
+    const archived=join(result.archive,f.run.id,'state.json'),original=await readFile(archived);
+    await writeFile(archived,'changed');
+    await expect(archiveRuns(f.data,f.catalogPath,true)).rejects.toThrow('Archived evidence changed');
+    expect(await exists(path)).toBe(true);
+    await writeFile(archived,original);
+    expect(await archiveRuns(f.data,f.catalogPath,true)).toMatchObject({runs:1,applied:true});
+    expect(await exists(path)).toBe(false);
+    expect(await exists(join(f.data,'.archive-cleanup.json'))).toBe(false);
+  }finally{await f.cleanup();}
+});

@@ -1,9 +1,11 @@
-import { test, expect, spyOn } from 'bun:test';
+import { test, expect, spyOn, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, rm, mkdir, readFile, writeFile, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPOSITORY_ROOT } from '../src/paths.js';
+import {seedCatalog} from './helpers/catalog.js';
+import {TaskCatalog} from '../src/host/catalog.js';
 import { classify, Lab } from '../src/host/manager.js';
 import { run, save, tree } from '../src/host/store.js';
 import { runSchema, configSchema, batchSchema, submissionSchema } from '../src/host/types.js';
@@ -11,11 +13,16 @@ import * as taskAdapters from '../src/host/publicTasks.js';
 import { serve } from '../src/host/server.js';
 import { EvidenceCollectionError, LinuxMachine } from '../src/host/linux.js';
 
+let dispose:ReturnType<typeof spyOn>;
+beforeEach(()=>{dispose=spyOn(LinuxMachine.prototype,'disposeRun').mockResolvedValue(undefined);});
+afterEach(()=>dispose.mockRestore());
+
 async function fixture() {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'hicode-eval-')));
   await mkdir(join(dir, 'tasks')); await mkdir(join(dir, 'runs'));
-  const config = configSchema.parse({ version: 3, data: dir, tasks: join(dir, 'tasks'), payload: join(dir, 'payload'), context: 'test', machine: 'test-machine', concurrency: 2, budget: {}, model: { source: 'qwen', model: 'fixture', apiKeyEnv: 'FIXTURE_KEY', baseUrl: 'http://127.0.0.1:1' } });
-  return { dir, config, cleanup: () => rm(dir, { recursive: true, force: true }) };
+  const config = configSchema.parse({ version: 4, data: dir, catalog:join(dir,'catalog.json'),environments:join(dir,'environments'), payload: join(dir, 'payload'), context: 'test', machine: 'test-machine', concurrency: 2, budget: {}, model: { source: 'qwen', model: 'fixture', apiKeyEnv: 'FIXTURE_KEY', baseUrl: 'http://127.0.0.1:1' } });
+  await seedCatalog(config,['alpha','cancel-async-tasks','regex-log','sqlite-db-truncate'].map(id=>({id,source:join(dir,'tasks',id)})));
+  return { dir, config, tasks:join(dir,'tasks'), cleanup: () => rm(dir, { recursive: true, force: true }) };
 }
 function finished(id = '0123456789abcdef') {
   return runSchema.parse({ version: 2, id, batchId: 'fedcba9876543210', task: 'alpha', state: 'passed', createdAt: 1, updatedAt: 1, model: 'fixture', budget: {}, execution: 'completed', grading: 'passed', collection: 'complete' });
@@ -30,6 +37,20 @@ test('timeout and grade remain independent', () => {
   expect(classify('timeout', { reward: 1 })).toEqual({ execution: 'timeout', grading: 'passed', state: 'error' });
   expect(classify(undefined, null)).toEqual({ execution: 'completed', grading: 'unavailable', state: 'error' });
   expect(classify(undefined, {reward: 0}).state).toBe('failed');
+});
+test('restart repairs the durable ledger and requires cleanup confirmation without rerunning a completed attempt',async()=>{
+  const f=await fixture();
+  try {
+    const state=finished();await persist(f,state);
+    await save(join(f.dir,'runs',state.id,'container.json'),{session:state.id,id:'owned-container',attach:'fixture'});
+    const lab=new Lab(f.config,'fixture');await lab.init();
+    expect(lab.runs.get(state.id)?.state).toBe('needs_recovery');
+    expect((await TaskCatalog.open(f.config.catalog)).get('alpha').status).toBe('passed');
+    await save(join(f.dir,'runs',state.id,'state.json'),state);
+    await save(join(f.dir,'runs',state.id,'container-disposed.json'),{version:1,runId:state.id,at:new Date().toISOString()});
+    const restored=new Lab(f.config,'fixture');await restored.init();
+    expect(restored.runs.get(state.id)?.state).toBe('passed');
+  }finally{await f.cleanup();}
 });
 test('host command timeout reports its deadline instead of an ambiguous SIGKILL exit', async () => {
   await expect(run(['bun','-e','await Bun.sleep(1000)'],{timeout:80})).rejects.toThrow('bun timed out after 80ms');
@@ -109,7 +130,8 @@ test('catalog exposes only public tasks with an explicit reviewed adapter', asyn
       await writeFile(join(f.dir,'tasks',name,'task.toml'),'[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=900\n');
     }
     const lab=new Lab(f.config,'fake');
-    expect((await lab.catalog()).map(t=>t.id)).toEqual(['cancel-async-tasks']);
+    expect((await lab.catalog()).map(t=>t.id)).toContain('cancel-async-tasks');
+    expect((await lab.catalog()).map(t=>t.id)).not.toContain('unsupported');
   } finally { await f.cleanup(); }
 });
 
@@ -179,8 +201,8 @@ test('one batch executes and restores independently resolved task limits', async
   const execute = spyOn(LinuxMachine.prototype, 'execute').mockResolvedValue({type:'result',execution:'completed',grading:'passed',uid:20001});
   try {
     for (const id of ['cancel-async-tasks','regex-log','sqlite-db-truncate']) {
-      await mkdir(join(f.config.tasks,id));
-      await writeFile(join(f.config.tasks,id,'task.toml'),'[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=900\n');
+      await mkdir(join(f.tasks,id));
+      await writeFile(join(f.tasks,id,'task.toml'),'[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=900\n');
     }
     await save(join(f.config.payload,'manifest.json'),{});
     await lab.init(); await lab.prepareMachine();
@@ -286,8 +308,8 @@ test('verified cancellation after Docker handoff failure releases queued work wi
   const recover=spyOn(LinuxMachine.prototype,'recover').mockResolvedValue({type:'result',execution:'cancelled',grading:'unavailable',uid:20001,note:'verified durable receipt'});
   try {
     for(const name of ['cancel-async-tasks','regex-log']) {
-      await mkdir(join(f.config.tasks,name));
-      await writeFile(join(f.config.tasks,name,'task.toml'),'[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=900\n');
+      await mkdir(join(f.tasks,name));
+      await writeFile(join(f.tasks,name,'task.toml'),'[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=900\n');
     }
     await mkdir(f.config.payload);await save(join(f.config.payload,'manifest.json'),{});
     await lab.init();await lab.prepareMachine();
@@ -311,8 +333,8 @@ test('final export failure preserves sealed execution and grading without publis
     throw new EvidenceCollectionError({type:'result',execution:'completed',grading:'passed',uid:20001},'disk unavailable');
   });
   try {
-    await mkdir(join(f.config.tasks,'cancel-async-tasks'));
-    await writeFile(join(f.config.tasks,'cancel-async-tasks','task.toml'),'[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=900\n');
+    await mkdir(join(f.tasks,'cancel-async-tasks'));
+    await writeFile(join(f.tasks,'cancel-async-tasks','task.toml'),'[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=900\n');
     await save(join(f.config.payload,'manifest.json'),{});
     await lab.init();await lab.prepareMachine();
     const batch=await lab.submit({name:'export failure',concurrency:1,tasks:[{id:'cancel-async-tasks'}]});
@@ -326,10 +348,10 @@ test('final export failure preserves sealed execution and grading without publis
   }finally{await lab.close();validate.mockRestore();prepare.mockRestore();execute.mockRestore();await f.cleanup();}
 });
 
-test('network mode defaults to open and invalid values fail before submission', async () => {
+test('network mode defaults to isolated and invalid values fail before submission', async () => {
   const f=await fixture();
   try {
-    expect(f.config.network).toBe('open');
+    expect(f.config.network).toBe('isolated');
     expect(configSchema.parse({...f.config,network:'isolated'}).network).toBe('isolated');
     expect(()=>configSchema.parse({...f.config,network:'disabled-ish'})).toThrow();
     expect(()=>submissionSchema.parse({name:'bad',tasks:[{id:'x'}],network:'proxy'})).toThrow();

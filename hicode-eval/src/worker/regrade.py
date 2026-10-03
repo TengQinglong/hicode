@@ -34,10 +34,8 @@ def regrade(root):
     grade, reason = 'unavailable', None
     try:
         if task['repo'] in {'pytest-dev/pytest', 'pydata/xarray'}:
-            from source_version import prepare_source_version
-            version = prepare_source_version(task['repo'], root/'baseline', task['baseCommit'],
-                                             Path(task['environment'])/'bin/python',
-                                             Path('/opt/hicode-swe/upstream-metadata')/(task['repo'].split('/')[-1]+'.git'))
+            from scm import read_source_version
+            version = read_source_version(root/'baseline',task['baseCommit'])
             atomic_json(root/'source-version.json', version)
         grade, reason = grade_swe_patch(root, config, account.pw_uid, account.pw_gid,
                                        lambda: cancelled, patch.decode('utf-8', errors='strict'))
@@ -46,8 +44,7 @@ def regrade(root):
     finally:
         # Ephemeral clones have no Actor-owned data. Preserve the sealed input
         # and verifier evidence; never remove anything from the original run.
-        for path in [root/'grading-project', root/'grading-home', root/'baseline',
-                     Path('/eval/swe-grader-envs')/root.name]:
+        for path in [root/'grading-project', root/'grading-home', root/'baseline']:
             if path.is_dir() and not path.is_symlink(): shutil.rmtree(path)
     result = {'version': 1, 'runId': receipt['runId'], 'instanceId': task['instanceId'],
               'patchSha256': receipt['patchSha256'], 'grading': grade, 'reason': reason,

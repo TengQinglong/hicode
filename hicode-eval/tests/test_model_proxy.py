@@ -59,8 +59,12 @@ class ModelProxyTest(unittest.TestCase):
     def request(self, path='/v1/chat/completions', body=None):
         client=UnixHTTP(self.path)
         try:
-            client.request('POST',path,body=self.body() if body is None else body,
-                           headers={'Content-Type':'application/json','Authorization':'Bearer actor-placeholder'})
+            try:
+                client.request('POST',path,body=self.body() if body is None else body,
+                               headers={'Content-Type':'application/json','Authorization':'Bearer actor-placeholder'})
+            except BrokenPipeError:
+                # A rejected URL can receive its HTTP response before the body is sent.
+                pass
             response=client.getresponse()
             return response.status,response.read()
         finally:client.close()

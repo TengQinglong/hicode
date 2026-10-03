@@ -4,7 +4,7 @@ import {join,dirname,resolve} from 'node:path';
 import {createHash, randomBytes} from 'node:crypto';
 import {z} from 'zod';
 import {LinuxMachine} from './linux.js';
-import {configSchema, runSchema, done,idSchema} from './types.js';
+import {configSchema, runSchema, done,idSchema,regradeResultSchema} from './types.js';
 import type {Run} from './types.js';
 import {validateFrozenSweTask} from './sweTasks.js';
 import {readJson, save} from './store.js';
@@ -59,7 +59,8 @@ export async function regradeRun(data: string, runId: string) {
     await save(join(output,'input.json'),input);
     const machine = new LinuxMachine(config);
     await machine.regrade(runId,reviewId,taskRoot,patchPath,task,input,output);
-    const result = await readJson(join(output,'result.json'),z.object({version:z.literal(1),runId:z.literal(runId),instanceId:z.literal(task.instanceId),patchSha256:z.literal(sha256),grading:z.enum(['passed','failed','unavailable']),reason:z.string().nullable(),originalExecution:z.literal(state.execution),modelCalls:z.literal(0)}).strict());
+    const result = await readJson(join(output,'result.json'),regradeResultSchema);
+    if(result.runId!==runId||result.instanceId!==task.instanceId||result.patchSha256!==sha256||result.originalExecution!==state.execution)throw Error('Regrade result identity mismatch');
     return {...result,reviewId,evidencePath:output};
   } finally {await release();}
 }

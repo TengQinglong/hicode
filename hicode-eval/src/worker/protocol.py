@@ -190,7 +190,7 @@ def actor_readonly_mounts(release, environment):
     for name in ['/etc/passwd','/etc/group','/etc/nsswitch.conf','/etc/hosts','/etc/hostname',
                  '/etc/resolv.conf','/etc/localtime','/etc/locale.alias','/etc/ld.so.cache',
                  '/etc/alternatives','/etc/ssl/certs','/etc/ssl/openssl.cnf',
-                 '/etc/fonts','/etc/ImageMagick-6','/etc/R','/etc/python3.11', '/opt/python313']:
+                 '/etc/fonts','/etc/ImageMagick-6','/etc/R','/etc/python3.11', '/opt/python313','/opt/hicode-task']:
         path=Path(name)
         if path.exists():paths.append(path)
     dependencies=(release/'node_modules').resolve(strict=True)

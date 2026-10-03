@@ -14,11 +14,10 @@ import re
 import ast
 from protocol import atomic_json, namespace_argv
 
-ENV_MOUNT = '/opt/hicode-swe/env'
+from venv_paths import ENV_MOUNT
 
 def editable_install_argv(python, project, repo):
-    args = [str(python), '-m', 'pip', 'install', '--no-deps']
-    if repo in ('pytest-dev/pytest', 'sphinx-doc/sphinx', 'pydata/xarray'): args.append('--no-build-isolation')
+    args = [str(python), '-m', 'pip', 'install', '--no-deps', '--no-build-isolation']
     return [*args, '-e', str(project) + ('[test]' if repo == 'sphinx-doc/sphinx' else '')]
 
 
@@ -101,20 +100,8 @@ def export_patch(baseline, final):
         return git(['diff', '--cached', '--binary', '--full-index', '--no-ext-diff', '--no-textconv', 'HEAD', '--'], trusted).decode('utf-8', errors='strict')
 
 
-def relocate_environment(path, original):
-    for script in (Path(path)/'bin').iterdir():
-        if script.is_symlink() or not script.is_file(): continue
-        data=script.read_bytes()
-        if script.name in {'activate','activate.csh','activate.fish','Activate.ps1'}:
-            script.write_bytes(data.replace(os.fsencode(original),ENV_MOUNT.encode()))
-        elif data.startswith(b'#!'):
-            first, separator, rest=data.partition(b'\n')
-            prefix=b'#!'+os.fsencode(original) + b'/bin/'
-            if first.startswith(prefix):script.write_bytes(b'#!'+ENV_MOUNT.encode()+b'/bin/'+first[len(prefix):]+separator+rest)
-
-
-def complete_reviewed_test_dependencies(repo, version, project, grade_env, logs):
-    """Repair only this disposable grader env using the same reviewed prep pins."""
+def verify_reviewed_test_dependencies(repo, version, project, grade_env, logs):
+    """Validate prepared dependencies; grading never repairs the environment."""
     from reviewed_test_deps import reviewed_test_dependencies
     pins = reviewed_test_dependencies(repo, version, project)
     if not pins: return
@@ -133,14 +120,9 @@ print(json.dumps({name:version(name) for name in sys.argv[1:]}))'''
     for pin in pins:
         name,version_pin = pin.split('==')
         if installed.get(name) != version_pin:needed.append(pin)
-    if needed:
-        uv = Path('/opt/hicode-swe/uv')
-        command = [str(uv),'pip','install','--python',str(grade_env/'bin/python'),'--no-deps',*needed]
-        with (logs/'dependency-install.txt').open('w') as output:
-            subprocess.run(command,check=True,timeout=120,stdout=output,stderr=subprocess.STDOUT,
-                           env={**os.environ,'UV_CACHE_DIR':'/opt/hicode-swe/uv-cache'})
     atomic_json(logs/'dependency-conditions.json',{'source':'frozen public project declarations',
-                'originalEnvironment':str(project),'required':pins,'installedIntoDisposableGrader':needed})
+                'originalEnvironment':str(project),'required':pins,'missing':needed})
+    if needed:raise ValueError('Prepared verifier dependencies differ from the reviewed recipe: '+', '.join(needed))
 
 
 def supervise(argv, *, output, timeout, env, cwd, demote, cancelled):
@@ -335,10 +317,9 @@ def grade_swe_patch(root, config, uid, gid, cancelled, patch):
         raise ValueError('SWE grading identity mismatch or gold material present')
     work = root / 'grading-project'
     shutil.copytree(root / 'baseline', work, symlinks=True)
-    grade_env = Path('/eval/swe-grader-envs') / root.name
-    shutil.copytree(config['swe']['environment'], grade_env, symlinks=True)
-    relocate_environment(grade_env,config['swe']['environment'])
-    complete_reviewed_test_dependencies(config['swe']['repo'],row['version'],root/'baseline',grade_env,logs)
+    grade_env = Path('/opt/hicode-swe/verifier')
+    if not (grade_env/'.ready.json').is_file():raise ValueError('Prepared verifier environment is missing')
+    verify_reviewed_test_dependencies(config['swe']['repo'],row['version'],root/'baseline',grade_env,logs)
     grade_home = root / 'grading-home'; grade_home.mkdir()
     subprocess.run(['chown', '-R', f'{uid}:{gid}', str(work), str(grade_env), str(grade_home), str(root/'tests')], check=True)
     def demote(): os.setgroups([]); os.setgid(gid); os.setuid(uid)

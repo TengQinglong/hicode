@@ -1,6 +1,6 @@
 ---
 name: hicode-test
-description: 使用当前 hicode-eval 在持久 Linux 评测机上批量运行公开题，复用环境、管理并发与预算、核查结果并归档。适用于启动评测或分析已有批次；普通问答、Git 保存和框架开发不触发此技能。
+description: 使用当前 hicode-eval 使用可复用镜像和独立 Linux 容器批量运行公开题，复用环境、管理并发与预算、核查结果并归档。适用于启动评测或分析已有批次；普通问答、Git 保存和框架开发不触发此技能。
 ---
 
 # HiCode 批量评测
@@ -33,9 +33,9 @@ description: 使用当前 hicode-eval 在持久 Linux 评测机上批量运行�
 
 ## 评测网络模式
 
-服务用 `serve --network open|isolated` 设置默认值（默认 open），批次 JSON 的 `network` 可逐批覆盖。不重启服务也能提交不同模式的新批次；已运行任务不能热切换。模式被冻结到 batch/run/manifest/job，Linux 回执另存 network.json。
+服务用 `serve --network open|isolated` 设置默认值（默认 isolated），批次 JSON 的 `network` 可逐批覆盖。不重启服务也能提交不同模式的新批次；已运行任务不能热切换。模式被冻结到 batch/run/manifest/job，Linux 回执另存 network.json。
 
-独立评测建议显式选择 isolated：准备依赖与判题正常联网，做题进程进入独立 Linux 网络空间，只能通过每题的 Unix socket 模型代理访问固定 chat-completions 接口。curl、pip、web_fetch 的任意外网连接不可用；真实 Provider Key 不传入 actor。缺包优先本地 wheel 缓存；不要因安装失败偷偷降级 open。需要联网完成的题明确选 open，并记录其评测条件。
+独立评测建议显式选择 isolated：依赖在准备阶段冻结，判题复用独立预制环境，做题进程进入独立 Linux 网络空间，只能通过每题的 Unix socket 模型代理访问固定 chat-completions 接口。curl、pip、web_fetch 的任意外网连接不可用；真实 Provider Key 不传入 actor。缺包在准备阶段补入镜像，不在模型或判题阶段临时修环境；不要因安装失败偷偷降级 open。需要联网完成的题明确选 open，并记录其评测条件。
 
 网络隔离不等于已经清理共享文件里的所有参考资料。普通依赖缓存不能夹带目标项目修复版本/答案，归档仍需核查独立性。无法创建网络空间时准备失败，不开始消耗模型 Token。
 
@@ -57,8 +57,19 @@ description: 使用当前 hicode-eval 在持久 Linux 评测机上批量运行�
 
 ## 结果归档
 
-在外部数据目录复用一份题目状态清单，分为已通过、未通过、待测试；未通过项另标模型未达标、框架/环境阻塞或超时。取消且未执行的题仍待测试，失败后通过保留两次尝试，不能覆盖历史分数。
+在外部 catalog.json 持久维护题目状态清单，分为已通过、未通过、待测试；未通过项另标模型未达标、框架/环境阻塞或超时。取消且未执行的题仍待测试，失败后通过保留两次尝试，不能覆盖历史分数。
 
 通过要求 execution=completed、grading=passed、证据已收集。超时但判题通过单独标注，不能算完整通过。正常通过项写结果即可；异常项读对应 TUI/events、判题输出和必要请求片段，归属不清就保留不确定性。
 
 交付包含本批计数、题目结果、主要异常、实际预算和日志位置。复盘优先回答框架哪里受阻、模型哪里答错；不重新遍历已审完的正常日志，不自动 commit/push。
+
+
+## 分层环境与历史记录
+
+缓存机只用于准备；每次尝试使用独立 Docker 容器、私有网络和可写层，结果及台账保存完成后销毁。共用公共底座、依赖组合和可选特殊准备层，不为每题重新下载完整系统。默认 prepare-environments 只准备未通过/待测试，有题号无审定题包的任务仍是 unprepared。已通过可按需 --ids 准备；系统准备变化后才 --refresh-base。
+
+register-tasks --catalog FILE --tasks DIR 或 --swe-tasks DIR 登记题包，prepare-environments --catalog FILE --environments DIR 准备镜像；serve 使用 --catalog/--environments，不接受旧的服务级 --tasks/--swe-tasks。服务与登记命令互斥持有台账写锁，不能绕过锁编辑正在使用的台账。
+
+用户授权清理时用 archive-runs 先预览，再 --apply；保留成绩、补丁和判题依据于台账旁 run-archive，之后删除大工作区。活动和 needs_recovery 不清理，题包/镜像/缓存不在删除范围。中断清理续用同一命令；不要手工删除 .archive-cleanup.json。
+
+用户明确要求重新执行已结束的单题时，可以使用 retry --run ID 或网页“重新运行”。沿用原题快照和执行配置，产生关联原记录的新批次；不改旧分数、不自动重试。needs_recovery 先恢复结果，运行中的尝试禁止重跑。重复请求返回已有后继，重跑第三次应针对第二次记录。

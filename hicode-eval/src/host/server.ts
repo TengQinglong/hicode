@@ -54,6 +54,7 @@ hostname: '127.0.0.1', port, maxRequestBodySize: 256 * 1024, async fetch(request
           if (url.pathname === '/api/cancel-batch') { const args = z.object({ batch: idSchema }).strict().parse(body); await lab.cancelBatch(args.batch); return json({ ok: true }); }
           if (url.pathname === '/api/resume-batch') { const args = z.object({ batch: idSchema }).strict().parse(body); await lab.resume(args.batch); return json({ ok: true }); }
           if (url.pathname === '/api/recover-run') { const args = z.object({ run: idSchema }).strict().parse(body); return json({run: await lab.recover(args.run)}); }
+          if (url.pathname === '/api/retry-run') { const args = z.object({ run: idSchema }).strict().parse(body); return json({batch:await lab.retry(args.run)}); }
           if (url.pathname === '/api/report') { const args = z.object({ batch: idSchema, text: z.string().trim().min(1).max(200000) }).strict().parse(body); await lab.report(args.batch, args.text); return json({ ok: true }); }
           if (url.pathname === '/api/cancel') { const args = z.object({ run: z.string() }).strict().parse(body); await lab.cancel(args.run); return json({ ok: true }); }
         }
