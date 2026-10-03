@@ -22,3 +22,30 @@ test("显式前台维护在禁后台 Host 仍可等待完成，停止后不会�
  const memory=createTestMemoryRuntime(cwd);await queueMemory(cwd,"brief","简洁");const tasks=createTaskRuntimeForTest(cwd,createShellRunner(createDisabledSandboxRuntime(),testChildEnvironment),undefined,join(cwd,"tasks"),undefined,memory);const session=tasks.forSession({sessionId:"owner",toolResultStore:createTestToolResultStore(cwd,"owner"),allowBackgroundTasks:false});
  const job=await session.startMemory({turnId:"turn",signal:memoryOwner().signal,background:false});expect(job?.status).toBe("completed");expect((await memory.status()).published).toBe(1);expect(await session.pendingNotifications()).toHaveLength(0);await expect(session.followup(job!.id,"继续")).rejects.toThrow("is not an Agent");await tasks.close();await memory.close();
 }));
+
+test("Session close waits for Memory preparation and prevents a late maintenance start", async () => withTempProject(async cwd => {
+    let calls = 0;
+    const entered = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const memory = createTestMemoryRuntime(cwd, {consolidator: {async consolidate() {calls++; throw new Error("must not start");}}});
+    await queueMemory(cwd, "brief", "concise");
+    const status = memory.status.bind(memory);
+    memory.status = async () => {entered.resolve(); await gate.promise; return status();};
+    const tasks = createTaskRuntimeForTest(cwd, createShellRunner(createDisabledSandboxRuntime(), testChildEnvironment), undefined,
+        join(cwd, "tasks"), undefined, memory);
+    const session = tasks.forSession({sessionId: "owner", toolResultStore: createTestToolResultStore(cwd, "owner")});
+    const starting = session.startMemory({turnId: "turn", signal: memoryOwner().signal, background: true});
+    const outcome = starting.then(() => "started", () => "cancelled");
+    try {
+        await entered.promise;
+        let closed = false;
+        const closing = session.close().then(() => {closed = true;});
+        await new Promise(resolve => setTimeout(resolve, 20));
+        expect(closed).toBe(false);
+        gate.resolve();
+        await closing;
+        expect(await outcome).toBe("cancelled");
+        expect(calls).toBe(0);
+        expect(tasks.hasRunning()).toBe(false);
+    } finally {gate.resolve(); await tasks.close(); await memory.close();}
+}));

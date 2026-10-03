@@ -24,7 +24,7 @@ test("followup has a strict standalone tool, respects ownership and never relaun
     await withTempProject(async cwd => {
         const parent = createTestContext(cwd, {canUseTool: async () => {throw new Error("No additional approval needed");}});
         let runs = 0;
-        const runtime = createTaskRuntimeForTest(cwd, parent.shellRunner, options => ({agentId: options.agentId, async run() {
+        const runtime = createTaskRuntimeForTest(cwd, parent.shellRunner, options => ({agentId: options.agentId, async close() {}, async run() {
             runs++;
             return {agentId: options.agentId, agentType: "Worker", description: "Board logic", reply: "done", reason: "completed", iterations: 1, toolUseCount: 0, durationMs: 0};
         }}));
@@ -72,7 +72,7 @@ test("per-run time excludes idle gaps, queued work keeps the clock, and journal 
         const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>(), Promise.withResolvers<void>()];
         const entered = gates.map(() => Promise.withResolvers<void>());
         let runs = 0;
-        const runtime = createTaskRuntimeForTest(cwd, parent.shellRunner, options => ({agentId: options.agentId, async run() {
+        const runtime = createTaskRuntimeForTest(cwd, parent.shellRunner, options => ({agentId: options.agentId, async close() {}, async run() {
             const index = runs++;
             entered[index]!.resolve();
             await gates[index]!.promise;
@@ -154,7 +154,7 @@ test("concurrent followups reserve one run and queue the other without overlappi
         let active = 0, maximum = 0, runs = 0;
         const entered = Promise.withResolvers<void>();
         const release = Promise.withResolvers<void>();
-        const runtime = createTaskRuntimeForTest(cwd, parent.shellRunner, options => ({agentId: options.agentId, async run() {
+        const runtime = createTaskRuntimeForTest(cwd, parent.shellRunner, options => ({agentId: options.agentId, async close() {}, async run() {
             const current = ++runs;
             maximum = Math.max(maximum, ++active);
             if (current === 2) {entered.resolve(); await release.promise;}

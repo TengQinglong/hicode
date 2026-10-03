@@ -116,7 +116,7 @@ test("task 默认停止自有 Agent，已删除的 discard 在 Schema 边界拒�
         }});
         const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, (options, request) => ({
             agentId: options.agentId,
-            async run(input) {
+            async close() {}, async run(input) {
                 await new Promise<void>(resolve => {
                     if (input.signal.aborted) resolve();
                     else input.signal.addEventListener("abort", () => resolve(), {once: true});

@@ -76,25 +76,28 @@ export async function executeToolCallBatch({
             entries: budgetEntries,
             store: ctx.toolResultStore,
         });
-        for (const [index, entry] of budgetEntries.entries()) {
-            const content = history[entry.messageIndex]?.content;
-            const outcome = outcomes.find(item => item.toolCallId === entry.toolCallId);
-            if (outcome) {
-                if (typeof content === "string") outcome.result = content;
-                outcome.persisted = replacements.find(item => item.toolCallId === entry.toolCallId)?.persisted ?? entry.persisted;
-            }
-            if (typeof content === "string" && typeof before[index] === "string" && content !== before[index]) {
-                ctx.fileState.bindOutput(entry.toolCallId, before[index]!, {modelContent: content,
-                    persisted: replacements.find(item => item.toolCallId === entry.toolCallId)?.persisted});
-            }
-        }
+        const updates = new Map(replacements.map(update => [update.toolCallId, update]));
+        // Clear the pending batch before event callbacks: failures must not repeat delivery.
+        const entries = budgetEntries;
         budgetEntries = [];
-        for (const replacement of replacements) {
-            await notify({
-                type: "tool_result_persisted",
-                toolCallId: replacement.toolCallId,
-                persisted: replacement.persisted,
-            });
+        for (const [index, entry] of entries.entries()) {
+            const message = history[entry.messageIndex];
+            const update = updates.get(entry.toolCallId);
+            const outcome = outcomes.find(item => item.toolCallId === entry.toolCallId);
+            const persisted = update?.status === "saved" ? update.persisted : entry.persisted;
+            if (outcome && message?.role === "tool") {
+                outcome.result = contentText(message.content);
+                outcome.persisted = persisted;
+                if (update?.status === "failed" && outcome.outcome === "ok") outcome.outcome = "output_failed";
+            }
+            const previous = before[index];
+            if (message?.role === "tool" && previous !== undefined && message.content !== previous) {
+                ctx.fileState.bindOutput(entry.toolCallId, contentText(previous), {modelContent: message.content, persisted});
+            }
+            if (update?.status === "saved") await notify({type: "tool_result_delivery", toolCallId: entry.toolCallId,
+                status: "saved", persisted: update.persisted});
+            else if (update?.status === "failed" && outcome) await notify({type: "tool_result_delivery", toolCallId: entry.toolCallId,
+                status: "failed", outcome: outcome.outcome, result: update.message});
         }
     };
 

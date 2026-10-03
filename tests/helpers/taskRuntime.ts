@@ -15,7 +15,7 @@ export function createTaskRuntimeForTest(
     shellRunner: ShellRunnerLike,
     createSubagentThread: CreateSubagentThread = () => ({
         agentId: "unconfigured",
-        async run() {
+        async close() {}, async run() {
             throw new Error("本用例没有配置 Agent Task runner");
         },
     }),

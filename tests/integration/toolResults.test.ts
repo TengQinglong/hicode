@@ -138,7 +138,7 @@ describe("large tool result integration", () => {
         }
       );
       expect(result.reply).toBe("batch complete");
-      expect(events.map((event) => event.type)).toContain("tool_result_persisted");
+      expect(events.map((event) => event.type)).toContain("tool_result_delivery");
     });
   });
 });

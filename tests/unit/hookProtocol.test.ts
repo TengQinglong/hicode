@@ -176,3 +176,23 @@ test("Prompt Control 超过完整输入预算时不调用 evaluator", async () =
         expect(result.error).toContain("65536");
     });
 });
+
+
+test("control decisions expire during diagnostic persistence before completion is published", async () => {
+    await withTempProject(async (cwd, storage) => {
+        let hookSignal: AbortSignal | undefined;
+        const runtime = await createHookRuntimeFactory({getTrust: async () => "allow", executeCommand: async input => {
+            hookSignal = input.signal; return ok(JSON.stringify({decision: "pass", additionalContext: "must not deliver"}));
+        }})({cwd, storage, childEnvironment: testChildEnvironment,
+            hooks: resolvedHooks("UserPromptSubmit", [{type: "command", purpose: "control", command: "fixture"}], 100)});
+        const store = createToolResultStore(storage, cwd, "session");
+        const persist = store.persistText.bind(store);
+        store.persistText = async input => {await new Promise(resolve => setTimeout(resolve, 150)); return persist(input);};
+        const events: HookLifecycleEvent[] = [];
+        const result = await runtime.execute(prompt, new AbortController().signal, {store, onEvent: event => {events.push(event);}});
+        expect(hookSignal?.aborted).toBe(true);
+        expect(result.error).toContain("timed out");
+        expect(result.additionalContexts).toHaveLength(0);
+        expect(events.at(-1)).toMatchObject({type: "hook_completed", execution: {outcome: "error"}});
+    });
+});

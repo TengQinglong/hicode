@@ -11,7 +11,7 @@ test("task 跨 Session 不停止 Agent、不确认通知，恢复后仍隔离", 
         const gate = new Promise<void>(resolve => { finish = resolve; });
         const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, (options, request) => ({
             agentId: options.agentId,
-            async run(input) {
+            async close() {}, async run(input) {
                 await Promise.race([gate, new Promise<void>(resolve => {
                     if (input.signal.aborted) resolve();
                     else input.signal.addEventListener("abort", () => resolve(), {once: true});

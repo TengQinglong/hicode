@@ -216,15 +216,20 @@ export class SDKEventAdapter {
                 }
                 break;
             }
-            case "tool_result_persisted": {
+            case "tool_result_delivery": {
                 const current = this.tools.get(event.toolCallId);
                 if (!current) break;
                 const item: ToolCallItem = {
                     ...current,
-                    resultId: event.persisted.resultId,
-                    resultPath: event.persisted.path,
-                    resultByteLength: event.persisted.byteLength,
-                    resultComplete: event.persisted.complete,
+                    ...(event.status === "saved" ? {
+                        resultId: event.persisted.resultId,
+                        resultPath: event.persisted.path,
+                        resultByteLength: event.persisted.byteLength,
+                        resultComplete: event.persisted.complete,
+                    } : {
+                        outcome: event.outcome,
+                        resultPreview: boundedText(event.result),
+                    }),
                 };
                 this.tools.set(event.toolCallId, item);
                 await this.emitItem("item.updated", item);

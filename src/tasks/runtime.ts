@@ -1,4 +1,4 @@
-import type {ChildTaskAccess} from "./childAccess.js";
+import type {ChildShellSession} from "./childAccess.js";
 import {runReviewTask, type TaskReviewRunner} from "./review.js";
 import {runMemoryTask} from "./memoryTask.js";
 import type {StartTaskReviewInput, TaskReviewSnapshot} from "./types.js";
@@ -65,17 +65,20 @@ async function observeShellStartup(completion: Promise<void>, waitMs = SHELL_STA
     }
 }
 
+type ScopedTaskBinding = TaskSessionBinding & {signal: AbortSignal};
+
 class TaskSession implements TaskSessionLike {
+    private readonly binding: ScopedTaskBinding;
     readonly sessionId: string;
     readonly messaging?: AgentMessaging;
     private readonly ready: Promise<void>;
     private readonly children = new Set<TaskSession>();
-    private readonly shellStarts = new Set<Promise<unknown>>();
+    private readonly starts = new Set<Promise<unknown>>();
     private readonly controller = createTurnAbortController();
     private closePromise?: Promise<void>;
 
     private assertOpen(): void {
-        if (this.closePromise) throw new Error("Task Session is closed");
+        if (this.controller.signal.aborted) throw new Error("Task Session is closed");
     }
 
     close(): Promise<void> {
@@ -85,23 +88,24 @@ class TaskSession implements TaskSessionLike {
             const stopped = await Promise.allSettled((await this.list())
                 .filter(task => task.status === "running" || task.kind === "agent")
                 .map(task => this.stop(task.id)));
-            await Promise.allSettled([...this.shellStarts]);
+            await Promise.allSettled([...this.starts]);
             const children = await Promise.allSettled([...this.children].map(child => child.close()));
             const failures = [...stopped, ...children].flatMap(result => result.status === "rejected" ? [result.reason] : []);
             if (failures.length) throw new AggregateError(failures, "Task Session cleanup failed");
         })();
     }
 
-    private trackShellStart<T>(operation: () => Promise<T>): Promise<T> {
+    private trackStart<T>(operation: () => Promise<T>): Promise<T> {
         const pending = operation();
-        this.shellStarts.add(pending);
-        return pending.finally(() => this.shellStarts.delete(pending));
+        this.starts.add(pending);
+        return pending.finally(() => this.starts.delete(pending));
     }
 
     constructor(
         private readonly runtime: TaskRuntime,
-        private readonly binding: TaskSessionBinding
+        binding: TaskSessionBinding
     ) {
+        this.binding = {...binding, signal: this.controller.signal};
         this.sessionId = binding.sessionId;
         this.ready = runtime.ensureSession(binding.sessionId);
         if (binding.messageQueue) this.messaging = {
@@ -113,7 +117,7 @@ class TaskSession implements TaskSessionLike {
         };
     }
 
-    createChildShellSession(store: TaskSessionBinding["toolResultStore"]): ChildTaskAccess {
+    createChildShellSession(store: TaskSessionBinding["toolResultStore"]): ChildShellSession {
         this.assertOpen();
         if (store.sessionId === this.sessionId) throw new Error("Child Shell requires an independent Session");
         const child = new TaskSession(this.runtime, {
@@ -122,7 +126,7 @@ class TaskSession implements TaskSessionLike {
             shellContinuation: this.binding.shellContinuation,
         });
         this.children.add(child);
-        return {
+        return {close: async () => {try {await child.close();} finally {this.children.delete(child);}}, tasks: {
             sessionId: child.sessionId,
             get shellContinuation() {return child.shellContinuation;},
             startShell: input => child.startShell(input),
@@ -132,7 +136,7 @@ class TaskSession implements TaskSessionLike {
             stop: id => child.stop(id),
             subscribe: listener => child.subscribe(listener),
             acknowledgeNotification: notification => child.acknowledgeNotification(notification),
-        };
+        }};
     }
 
     initialize(): Promise<void> {
@@ -146,7 +150,7 @@ class TaskSession implements TaskSessionLike {
         }
         await this.ready;
         this.assertOpen();
-        return this.trackShellStart(async () => {
+        return this.trackStart(async () => {
             const task = await this.runtime.startShell(this.binding, input);
             if (this.controller.signal.aborted) {
                 await this.runtime.stop(this.sessionId, task.id);
@@ -160,7 +164,7 @@ class TaskSession implements TaskSessionLike {
         if (!this.shellContinuation) throw new Error("This execution mode requires one-shot Shell execution");
         await this.ready;
         this.assertOpen();
-        return this.trackShellStart(() => this.runtime.runShell(this.binding,
+        return this.trackStart(() => this.runtime.runShell(this.binding,
             {...input, signal: AbortSignal.any([input.signal, this.controller.signal])}));
     }
 
@@ -170,18 +174,18 @@ class TaskSession implements TaskSessionLike {
         }
         await this.ready;
         this.assertOpen();
-        return this.runtime.startAgent(this.binding, input);
+        return this.trackStart(() => this.runtime.startAgent(this.binding, input));
     }
 
     async startMemory(input:StartMemoryTaskInput):Promise<MemoryTaskSnapshot|undefined> {
         if(input.background&&this.binding.allowBackgroundTasks===false)return undefined;
-        await this.ready;this.assertOpen();return this.runtime.startMemory(this.binding,input);
+        await this.ready;this.assertOpen();return this.trackStart(() => this.runtime.startMemory(this.binding, input));
     }
 
     async startReview(input: StartTaskReviewInput): Promise<TaskReviewSnapshot> {
         await this.ready;
         this.assertOpen();
-        return this.runtime.startReview(this.binding, input);
+        return this.trackStart(() => this.runtime.startReview(this.binding, {...input, signal: AbortSignal.any([input.signal, this.controller.signal])}));
     }
 
     async get(id: string): Promise<TaskSnapshot | undefined> {
@@ -202,7 +206,7 @@ class TaskSession implements TaskSessionLike {
     async followup(id: string, message: string): Promise<AgentFollowupResult> {
         await this.ready;
         this.assertOpen();
-        return this.runtime.followupAgent(this.binding, id, message);
+        return this.trackStart(() => this.runtime.followupAgent(this.binding, id, message));
     }
 
     async interrupt(id: string): Promise<AgentTaskSnapshot> {
@@ -286,27 +290,28 @@ class TaskRuntime implements TaskRuntimeLike {
         return started.finally(() => this.starts.delete(started));
     }
 
-    startMemory(binding: TaskSessionBinding, input: StartMemoryTaskInput): Promise<MemoryTaskSnapshot | undefined> {
+    startMemory(binding: ScopedTaskBinding, input: StartMemoryTaskInput): Promise<MemoryTaskSnapshot | undefined> {
         return this.trackStart(() => this.startMemoryOwned(binding, input));
     }
-    startShell(binding: TaskSessionBinding, input: StartShellTaskInput): Promise<ShellTaskSnapshot> {
+    startShell(binding: ScopedTaskBinding, input: StartShellTaskInput): Promise<ShellTaskSnapshot> {
         return this.trackStart(async () => {
             const result = await this.startShellOwned(binding, input);
             if (result.kind !== "task") throw new Error("Background Shell did not create a Task");
             return result.task;
         });
     }
-    runShell(binding: TaskSessionBinding, input: RunShellTaskInput): Promise<RunShellTaskResult> {
+    runShell(binding: ScopedTaskBinding, input: RunShellTaskInput): Promise<RunShellTaskResult> {
         return this.trackStart(() => this.startShellOwned(binding, input, input));
     }
-    startAgent(binding: TaskSessionBinding, input: StartAgentTaskInput): Promise<AgentTaskSnapshot> {
+    startAgent(binding: ScopedTaskBinding, input: StartAgentTaskInput): Promise<AgentTaskSnapshot> {
         return this.trackStart(() => this.startAgentOwned(binding, input));
     }
 
-    startReview(binding: TaskSessionBinding, input: StartTaskReviewInput): Promise<TaskReviewSnapshot> {
+    startReview(binding: ScopedTaskBinding, input: StartTaskReviewInput): Promise<TaskReviewSnapshot> {
         const evidence = Object.freeze({...input.evidence});
         return this.trackStart(async () => {
             this.assertOpen();
+            binding.signal.throwIfAborted();
             const {parentContext} = input;
             if (parentContext.sessionId !== binding.sessionId || input.signal.aborted || parentContext.signal.aborted) {
                 throw new Error("Task review owner is unavailable");
@@ -346,13 +351,15 @@ class TaskRuntime implements TaskRuntimeLike {
         });
     }
 
-    private async startMemoryOwned(binding:TaskSessionBinding,input:StartMemoryTaskInput):Promise<MemoryTaskSnapshot|undefined> {
+    private async startMemoryOwned(binding:ScopedTaskBinding,input:StartMemoryTaskInput):Promise<MemoryTaskSnapshot|undefined> {
         this.assertOpen();
+        binding.signal.throwIfAborted();
         if(!this.memory.enabled)return undefined;
-        if(input.baseline)await this.memory.captureSource(binding.sessionId,input.baseline,input.signal);
+        if(input.baseline)await this.memory.captureSource(binding.sessionId,input.baseline,AbortSignal.any([binding.signal,input.signal]));
         if([...this.tasks.values()].some(task=>isMemoryTask(task)&&task.status==="running"))return undefined;
         if((await this.memory.status()).pending===0)return undefined;
         this.assertOpen();
+        binding.signal.throwIfAborted();
         if([...this.tasks.values()].some(task=>isMemoryTask(task)&&task.status==="running"))return undefined;
         const release=this.reserveTaskSlot();
         try{
@@ -361,12 +368,12 @@ class TaskRuntime implements TaskRuntimeLike {
             this.tasks.set(task.id,task);
             try{await this.publish("task_started",task,true);}catch(error){this.tasks.delete(task.id);throw error;}
             if (this.closed) task.controller.abort("shutdown");
-            const signal=input.background?task.controller.signal:AbortSignal.any([task.controller.signal,input.signal]);
+            const signal=AbortSignal.any([task.controller.signal,binding.signal,...(input.background?[]:[input.signal])]);
             task.completion = runMemoryTask(task, this.memory, signal,
                 finished => this.publish("task_finished", finished));
             // All failures stay attached to this owned Task, including a terminal journal failure.
             void task.completion.catch(()=>{});
-            if(!input.background){
+            if(!input.background || binding.signal.aborted){
                 await task.completion;
                 await this.markNotificationClaimed(binding.sessionId,task.id,taskNotificationId(task.id,1));
             }
@@ -375,18 +382,19 @@ class TaskRuntime implements TaskRuntimeLike {
     }
 
     private async startShellOwned(
-        binding: TaskSessionBinding,
+        binding: ScopedTaskBinding,
         input: StartShellTaskInput,
         continuation?: RunShellTaskInput
     ): Promise<RunShellTaskResult> {
         this.assertOpen();
+        binding.signal.throwIfAborted();
         if (continuation && (!Number.isInteger(continuation.waitMs) || continuation.waitMs < 100 || continuation.waitMs > 30_000)) throw new Error("Wait time must be 100–30000ms");
         if (continuation?.timeoutMs !== undefined && (!Number.isInteger(continuation.timeoutMs) || continuation.timeoutMs < 100 || continuation.timeoutMs > 600_000)) throw new Error("Execution timeout must be 100–600000ms");
         continuation?.signal.throwIfAborted();
         const releaseSlot = this.reserveTaskSlot();
         try {
             const task = await createShellTask(this.allocateId(), binding, input);
-            if (this.closed) {
+            if (this.closed || binding.signal.aborted) {
                 await task.store.removeTemporaryFile(task.outputPath);
                 throw new Error("Task Runtime is closed");
             }
@@ -468,10 +476,11 @@ class TaskRuntime implements TaskRuntimeLike {
     }
 
     private async startAgentOwned(
-        binding: TaskSessionBinding,
+        binding: ScopedTaskBinding,
         input: StartAgentTaskInput
     ): Promise<AgentTaskSnapshot> {
         this.assertOpen();
+        binding.signal.throwIfAborted();
         validateAgentTaskInput(input, this.subagents);
         const releaseTaskSlot = this.reserveTaskSlot(true);
         let releaseAgentSlot: (() => void) | undefined;
@@ -494,7 +503,7 @@ class TaskRuntime implements TaskRuntimeLike {
                 finished => this.publish("task_finished", finished)));
             void task.completion.catch(() => {});
             try {await started;}
-            catch (error) {this.tasks.delete(id); throw error;}
+            catch (error) {this.tasks.delete(id); await task.thread.close(); throw error;}
             return snapshotAgent(task);
         } finally {
             releaseAgentSlot?.();
@@ -512,13 +521,14 @@ class TaskRuntime implements TaskRuntimeLike {
         return {messageId: queued.id};
     }
 
-    async followupAgent(binding: TaskSessionBinding, id: string, message: string): Promise<AgentFollowupResult> {
+    async followupAgent(binding: ScopedTaskBinding, id: string, message: string): Promise<AgentFollowupResult> {
         this.assertOpen();
         const task = this.ownedTask(binding.sessionId, id);
         if (!task) throw new Error(`Live-session Agent not found: ${id}; persisted state cannot continue in this process`);
         if (!isAgentTask(task)) throw new Error(`Task ${id} is not an Agent`);
         const assertAvailable = () => {
             this.assertOpen();
+            binding.signal.throwIfAborted();
             if (task.stopRequested || task.status === "cancelled") throw new Error("A cancelled Agent cannot continue; start a new Agent");
         };
         const enqueue = async (): Promise<AgentFollowupResult> => {
@@ -605,11 +615,15 @@ class TaskRuntime implements TaskRuntimeLike {
         if (isAgentTask(task)) task.stopRequested = true;
         const shouldAcknowledge =
             task.status === "running" || task.notificationPending;
-        if (task.status === "running") {
-            task.suppressTerminalNotification = true;
-            if (isAgentTask(task)) task.interruptRequested = false;
-            task.controller.abort("user-cancel");
-            await task.completion;
+        try {
+            if (task.status === "running") {
+                task.suppressTerminalNotification = true;
+                if (isAgentTask(task)) task.interruptRequested = false;
+                task.controller.abort("user-cancel");
+                await task.completion;
+            }
+        } finally {
+            if (isAgentTask(task)) await task.thread.close();
         }
         if (isAgentTask(task) && task.status !== "cancelled") {
             task.interruptRequested = false;
@@ -702,6 +716,7 @@ class TaskRuntime implements TaskRuntimeLike {
             // Starts own allocation/publication too; a Task may still hold its placeholder completion.
             await Promise.allSettled([...this.starts]);
             await Promise.allSettled([...this.tasks.values()].map(task => task.completion));
+            await Promise.allSettled([...this.tasks.values()].filter(isAgentTask).map(task => task.thread.close()));
         })();
         return this.closePromise;
     }

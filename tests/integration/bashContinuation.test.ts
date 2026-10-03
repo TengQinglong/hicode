@@ -300,7 +300,7 @@ test("SDK finite continuation is available while services stay disabled; Thread.
 test("child default continuation cannot wait for or stop parent Shells", async () => {
     await withTempProject(async cwd => {
         const {resources, tasks, ctx} = fixture(cwd);
-        const child = tasks.createChildShellSession(createTestToolResultStore(cwd, "child"));
+        const child = tasks.createChildShellSession(createTestToolResultStore(cwd, "child")).tasks;
         try {
             const parent = await tasks.startShell({command: "sleep 30", cwd, toolCallId: "parent"});
             const own = await child.runShell({command: "sleep 0.3; printf child", cwd, toolCallId: "child", waitMs: 100,

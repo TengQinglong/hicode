@@ -12,7 +12,7 @@ test("ordinary Agent progress is live-only while start, finish and notification 
         const home = join(cwd, "task-home");
         const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, (options, request) => ({
             agentId: options.agentId,
-            async run() {
+            async close() {}, async run() {
                 for (let current = 1; current <= 5; current++) {
                     await options.onChildEvent?.({type: "iteration", current, max: 5});
                     await options.onChildEvent?.({type: "token_update", tokenCount: current * 500, percentUsed: 0.1, warning: false, status: "actual"});

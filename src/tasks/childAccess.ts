@@ -6,3 +6,6 @@ export type ChildTaskAccess = Pick<TaskSessionLike, "sessionId" | "shellContinua
 export function isParentTaskSession(tasks: TaskSessionLike | ChildTaskAccess): tasks is TaskSessionLike {
     return "startAgent" in tasks;
 }
+
+/** The creator owns disposal; tools receive only the narrowed tasks capability. */
+export interface ChildShellSession {tasks: ChildTaskAccess; close(): Promise<void>;}

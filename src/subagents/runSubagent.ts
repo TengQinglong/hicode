@@ -153,13 +153,16 @@ export function createSubagentFactories(
         const hookSession = createHookSessionRuntime();
         let childTodos: Todo[] = [];
         let running = false;
+        let closed = false;
         let runCount = 0;
         let childCwd: string | undefined;
         let instructions = parentContext.instructions;
 
         const thread: SubagentThread = {
             agentId,
+            async close() {closed = true; await childTasks?.close();},
             async run(input) {
+                if (closed) throw new Error("Agent Thread is closed");
                 if (running) {
                     throw new Error(`Agent Thread is running: ${agentId}`);
                 }
@@ -210,7 +213,7 @@ export function createSubagentFactories(
                             storage: parentContext.storage, shellRunner: parentContext.shellRunner, readOnlyTools: !writable,
                             cwd, workspaceBoundary: cwd, instructions, toolNames: runtime.toolNames, availableTools: runtime.getTools(),
                             skills: childSkills,
-                            tasks: childTasks,
+                            tasks: childTasks?.tasks,
                             fileCommits: parentContext.fileCommits,
                             agentMessaging: canMessageParent ? options.agentMessaging : undefined,
                             // Children gain edit authority only from their own actual reads.

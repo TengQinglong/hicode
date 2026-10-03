@@ -86,12 +86,16 @@ export interface BatchToolResultEntry {
     persisted?: PersistedToolResult;
 }
 
+type BatchToolResultUpdate = {toolCallId: string} & (
+    {status: "saved"; persisted: PersistedToolResult} | {status: "failed"; message: string}
+);
+
 export async function applyBatchToolResultBudget(input: {
     history: Message[];
     entries: BatchToolResultEntry[];
     store: ToolResultStore;
     maxChars?: number;
-}): Promise<Array<{ toolCallId: string; persisted: PersistedToolResult }>> {
+}): Promise<BatchToolResultUpdate[]> {
     const maxChars = input.maxChars ?? MAX_TOOL_RESULTS_PER_BATCH_CHARS;
     const candidates = input.entries.flatMap((entry) => {
         const message = input.history[entry.messageIndex];
@@ -104,7 +108,7 @@ export async function applyBatchToolResultBudget(input: {
     }, 0);
     if (total <= maxChars) return [];
 
-    const replacements: Array<{ toolCallId: string; persisted: PersistedToolResult }> = [];
+    const replacements: BatchToolResultUpdate[] = [];
     for (const candidate of [...candidates].sort((a, b) => b.content.length - a.content.length)) {
         if (total <= maxChars) break;
         // A persisted reference includes a preview and metadata. Very small blocks
@@ -124,13 +128,14 @@ export async function applyBatchToolResultBudget(input: {
                 continue;
             }
             total += replacement.length - contentText(message.content).length;
-            message.content = replaceContentText(message.content, replacement);
-            replacements.push({toolCallId: candidate.toolCallId, persisted});
+            input.history[candidate.messageIndex] = {...message, content: replaceContentText(message.content, replacement)};
+            replacements.push({toolCallId: candidate.toolCallId, status: "saved", persisted});
         } catch (error) {
             const preview = createPreview(candidate.content, input.store.previewChars);
             const replacement = buildPersistFailureMessage(candidate.toolName, preview, error);
             total += replacement.length - contentText(message.content).length;
-            message.content = replaceContentText(message.content, replacement);
+            input.history[candidate.messageIndex] = {...message, content: replaceContentText(message.content, replacement)};
+            replacements.push({toolCallId: candidate.toolCallId, status: "failed", message: replacement});
         }
     }
     return replacements;

@@ -83,7 +83,7 @@ function createTaskSession(
     shellRunner,
     () => ({
       agentId: "unused",
-      async run() {
+      async close() {}, async run() {
         throw new Error("Bash contract 不启动 Agent Task");
       },
     })

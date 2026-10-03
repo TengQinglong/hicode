@@ -397,10 +397,11 @@ export function reduceThreads(
                 ...updated.slice(toolIndex + 1),
             ];
         }
-        case "tool_result_persisted":
+        case "tool_result_delivery":
             return threads.map((t) =>
                 t.role === "tool_call" && t.toolCallId === event.toolCallId
-                    ? {...t, persisted: event.persisted}
+                    ? event.status === "saved" ? {...t, persisted: event.persisted}
+                        : {...t, outcome: event.outcome, result: event.result, hiddenByFileChange: false}
                     : t
             );
     }

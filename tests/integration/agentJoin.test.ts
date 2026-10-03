@@ -52,7 +52,7 @@ test("two authorized delegates join before final answer without UI delivery or a
         const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, (options, request) => {
             const index = childIndex++;
             expect(request.workspaceWriteApproved).toBe(true);
-            return {agentId: options.agentId, async run() {
+            return {agentId: options.agentId, async close() {}, async run() {
                 await gates[index]!.promise;
                 return {agentId: options.agentId, agentType: request.agentType, description: request.description,
                     reply: `finished-${index}`, reason: "completed", iterations: 1, toolUseCount: 0, durationMs: 1};
@@ -94,7 +94,7 @@ test.each(["user", "cancel"] as const)("waiting parent responds to %s without wa
     await withTempProject(async cwd => {
         const gate = latch();
         const base = createTestContext(cwd);
-        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, (options, request) => ({agentId: options.agentId, async run() {
+        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, (options, request) => ({agentId: options.agentId, async close() {}, async run() {
             await gate.promise;
             return {agentId: options.agentId, agentType: request.agentType, description: request.description,
                 reply: "late result", reason: "completed", iterations: 1, toolUseCount: 0, durationMs: 1};
@@ -125,7 +125,7 @@ test.each(["user", "cancel"] as const)("waiting parent responds to %s without wa
 test("wait sees an already completed failed task and deduplicates its run, but shell tasks cannot be joined", async () => {
     await withTempProject(async cwd => {
         const base = createTestContext(cwd);
-        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, (options, request) => ({agentId: options.agentId, async run() {
+        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, (options, request) => ({agentId: options.agentId, async close() {}, async run() {
             return {agentId: options.agentId, agentType: request.agentType, description: request.description,
                 reply: "could not finish", reason: "incomplete", iterations: 1, toolUseCount: 0, durationMs: 1};
         }}));
@@ -149,7 +149,7 @@ test("wait sees an already completed failed task and deduplicates its run, but s
 test("headless joins acknowledge notifications only after paired History is persisted", async () => {
     await withTempProject(async cwd => {
         const resources = createTestRuntimeResources(cwd);
-        const runtime = createTaskRuntimeForTest(cwd, resources.shellRunner, (options, request) => ({agentId: options.agentId, async run() {
+        const runtime = createTaskRuntimeForTest(cwd, resources.shellRunner, (options, request) => ({agentId: options.agentId, async close() {}, async run() {
             return {agentId: options.agentId, agentType: request.agentType, description: request.description,
                 reply: "persisted child evidence", reason: "completed", iterations: 1, toolUseCount: 0, durationMs: 1};
         }}));
@@ -187,7 +187,7 @@ test("explicit wait includes sibling delegates and leaves unfinished work pendin
         const base = createTestContext(cwd);
         const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, (options, request) => {
             const gate = gates[index++]!;
-            return {agentId: options.agentId, async run() {
+            return {agentId: options.agentId, async close() {}, async run() {
                 await gate.promise;
                 return {agentId: options.agentId, agentType: request.agentType, description: request.description,
                     reply: request.description, reason: "completed", iterations: 1, toolUseCount: 0, durationMs: 1};
@@ -222,7 +222,7 @@ test.each(["user", "agent", "cancel"] as const)("task wait wakes on %s and prese
         const base = createTestContext(cwd);
         const queue = new RuntimeMessageQueue();
         const controller = createTurnAbortController();
-        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, (options, request) => ({agentId: options.agentId, async run() {
+        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, (options, request) => ({agentId: options.agentId, async close() {}, async run() {
             await gate.promise;
             return {agentId: options.agentId, agentType: request.agentType, description: request.description,
                 reply: "done", reason: "completed", iterations: 1, toolUseCount: 0, durationMs: 1};
@@ -259,7 +259,7 @@ test("one explicit wait spans child progress without another model call and pair
         const base = createTestContext(cwd);
         const progress = latch();
         const progressed = latch();
-        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, (options, request) => ({agentId: options.agentId, async run() {
+        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, (options, request) => ({agentId: options.agentId, async close() {}, async run() {
             await progress.promise;
             await options.onChildEvent?.({type: "iteration", current: 2});
             progressed.resolve();

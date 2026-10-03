@@ -167,7 +167,7 @@ test.each(["stop", "shutdown"] as const)("%s wins over an in-flight interrupt an
         let calls = 0;
         const runtime = createTaskRuntimeForTest(cwd, parent.shellRunner, options => ({
             agentId: options.agentId,
-            async run(input) {
+            async close() {}, async run(input) {
                 calls++;
                 startedRun();
                 if (!input.signal.aborted) await new Promise<void>(resolve => input.signal.addEventListener("abort", () => resolve(), {once: true}));
@@ -203,7 +203,7 @@ test("followup arriving during interruption waits for the run to settle before r
         let calls = 0, active = 0, maxActive = 0;
         const runtime = createTaskRuntimeForTest(cwd, parent.shellRunner, options => ({
             agentId: options.agentId,
-            async run(input) {
+            async close() {}, async run(input) {
                 const run = ++calls;
                 maxActive = Math.max(maxActive, ++active);
                 if (run === 1) {

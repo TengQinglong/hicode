@@ -9,8 +9,10 @@ export async function runMemoryTask(
     publishFinished: (task: ManagedMemoryTask) => Promise<void>,
 ): Promise<void> {
     try {
+        signal.throwIfAborted();
         const result = await memory.maintain({sessionId: task.owner.sessionId, signal});
         const {pending} = await memory.status();
+        signal.throwIfAborted();
         task.status = "completed";
         task.resultPreview = result.status === "published" ? `Memory published ${result.topics} topics` :
             result.status === "busy" ? "Another process is consolidating" : "Sources in this batch already processed";

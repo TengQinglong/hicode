@@ -64,7 +64,7 @@ test("closing a parent Session closes descendant Shells without closing the shar
         const ctx = createTestContext(cwd);
         const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner);
         const parent = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
-        const child = parent.createChildShellSession(createTestToolResultStore(cwd, "child"));
+        const child = parent.createChildShellSession(createTestToolResultStore(cwd, "child")).tasks;
         const other = runtime.forSession({sessionId: "other", toolResultStore: createTestToolResultStore(cwd, "other")});
         try {
             const task = await child.startShell({command: "sleep 30", cwd, toolCallId: "service"});
@@ -85,7 +85,7 @@ test("Session close waits for a Shell still allocating its output capture and re
         const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner);
         const parent = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
         const store = createTestToolResultStore(cwd, "child");
-        const child = parent.createChildShellSession(store);
+        const child = parent.createChildShellSession(store).tasks;
         let entered!: () => void, release!: () => void;
         const allocating = new Promise<void>(resolve => {entered = resolve;});
         const gate = new Promise<void>(resolve => {release = resolve;});
@@ -109,7 +109,7 @@ test("parent task cleanup errors do not skip descendant Shell cleanup", async ()
         const ctx = createTestContext(cwd);
         const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner);
         const parent = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
-        const child = parent.createChildShellSession(createTestToolResultStore(cwd, "child"));
+        const child = parent.createChildShellSession(createTestToolResultStore(cwd, "child")).tasks;
         try {
             await parent.startShell({command: "sleep 30", cwd, toolCallId: "parent"});
             const own = await child.startShell({command: "sleep 30", cwd, toolCallId: "child"});
@@ -121,3 +121,39 @@ test("parent task cleanup errors do not skip descendant Shell cleanup", async ()
         } finally {await runtime.close();}
     });
 });
+
+test("interrupt preserves child services for followup; permanent Agent stop closes their scope", async () => withTempProject(async cwd => {
+    const parent = createTestContext(cwd);
+    const entered = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    let runs = 0;
+    let childTasks: import("../../src/tasks/childAccess.js").ChildTaskAccess | undefined;
+    let serviceId = "";
+    const runner: AgentRunner = async (_input, _history, _onEvent, ctx) => {
+        if (!ctx.tasks) throw new Error("Missing child tasks");
+        childTasks = ctx.tasks;
+        if (!serviceId) serviceId = (await ctx.tasks.startShell({command: "sleep 30", cwd, toolCallId: "service"})).id;
+        const index = runs++;
+        entered[index]!.resolve();
+        if (!ctx.signal.aborted) await new Promise<void>(resolve => ctx.signal.addEventListener("abort", () => resolve(), {once: true}));
+        return {reply: "interrupted", reason: "interrupted", iterations: 1};
+    };
+    const factories = createSubagentFactories({primaryRunAgent: runner, fastRunAgent: runner,
+        registry: BUILTIN_SUBAGENT_REGISTRY, createToolResultStore: (ownerCwd, id) => createTestToolResultStore(ownerCwd, id)});
+    const runtime = createTaskRuntimeForTest(cwd, parent.shellRunner, factories.createSubagentThread);
+    const tasks = runtime.forSession({sessionId: parent.sessionId, toolResultStore: parent.toolResultStore});
+    parent.tasks = tasks;
+    try {
+        const agent = await tasks.startAgent({parentContext: parent, request: {
+            agentType: "Worker", name: "worker", description: "fixture", prompt: "fixture", parentToolCallId: "spawn"}});
+        await entered[0]!.promise;
+        await tasks.interrupt(agent.id);
+        expect((await childTasks!.get(serviceId))?.status).toBe("running");
+        await tasks.followup(agent.id, "continue");
+        await entered[1]!.promise;
+        await tasks.stop(agent.id);
+        expect((await childTasks!.get(serviceId))?.status).toBe("cancelled");
+        expect(runtime.hasRunning()).toBe(false);
+        await expect(childTasks!.startShell({command: "true", cwd, toolCallId: "late"})).rejects.toThrow("closed");
+        await expect(tasks.followup(agent.id, "late")).rejects.toThrow("cancelled");
+    } finally {await runtime.close();}
+}));

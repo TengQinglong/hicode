@@ -83,7 +83,7 @@ function createFakeAgentRuntime(
         reviewTask: async () => {throw new Error("This fixture does not configure task reviews");},
         createSubagentThread: (options) => ({
             agentId: options.agentId,
-            async run() {
+            async close() {}, async run() {
                 throw new Error("SDK 测试未配置子 Agent");
             },
         }),

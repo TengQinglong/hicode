@@ -59,7 +59,7 @@ describe("TaskRuntime", () => {
                     created += 1;
                     return {
                         agentId: options.agentId,
-                        async run(input) {
+                        async close() {}, async run(input) {
                             await new Promise<void>((resolve) => {
                                 input.signal.addEventListener("abort", () => resolve(), {
                                     once: true,
@@ -445,7 +445,7 @@ test("Shell history eviction preserves idle Agent threads and follow-up", async 
     const runner: ShellRunnerLike = {sandboxStatus: {kind: "ready", networkMode: "restricted", platform: "macos", warnings: []},
         async run() {return {stdout: "", stderr: "", termination: {kind: "exit", code: 0, signal: null}, outputBytes: 0, outputComplete: true};}};
     let runs = 0;
-    const runtime = createTaskRuntimeForTest(cwd, runner, (options, request) => ({agentId: options.agentId, async run() {
+    const runtime = createTaskRuntimeForTest(cwd, runner, (options, request) => ({agentId: options.agentId, async close() {}, async run() {
         runs++; return {agentId: options.agentId, agentType: request.agentType, description: request.description,
             reply: "done", reason: "completed", iterations: 1, toolUseCount: 0, durationMs: 0};}}));
     try {

@@ -88,11 +88,10 @@ export type AgentEvent =
         uiData?: ToolUIData;
         completedTask?: import("../tasks/types.js").TaskResultReceipt;
     }
-    | {
-        type: "tool_result_persisted";
-        toolCallId: string;
-        persisted: PersistedToolResult;
-    }
+    | ({type: "tool_result_delivery"; toolCallId: string} & (
+        {status: "saved"; persisted: PersistedToolResult} |
+        {status: "failed"; outcome: ToolOutcome; result: string}
+    ))
     | {type: "turn_interrupted"; reason: TurnAbortReason}
     | {
         type: "subagent_start";

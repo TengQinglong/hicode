@@ -25,6 +25,11 @@ export class SessionUIEventCollector {
             return;
         }
 
+        if (event.type === "tool_result_delivery") {
+            if (event.status === "failed") this.currentEvents = this.currentEvents.map(item =>
+                item.type === "tool_call" && item.toolCallId === event.toolCallId ? {...item, outcome: event.outcome} : item);
+            return;
+        }
         if (event.type === "tool_call_start") {
             this.activeToolCalls.add(event.toolCallId);
             return;

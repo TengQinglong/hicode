@@ -54,7 +54,7 @@ test("task report Markdown retains content and styles across wrapped viewport ro
 test("Agent detail uses terminal height, scrolls, preserves selection and returns through one Esc per level", async () => {
   await withTempProject(async cwd => {
     const ctx = createTestContext(cwd);
-    const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, (options, request) => ({agentId: options.agentId, async run() {
+    const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, (options, request) => ({agentId: options.agentId, async close() {}, async run() {
       return {agentId: options.agentId, agentType: request.agentType, description: request.description, reason: "completed",
         reply: "## Final report\n**Implemented** src/ui.ts\n" + Array.from({length: 70}, (_, index) => `Line ${index}`).join("\n"),
         iterations: 13, toolUseCount: 22, durationMs: 1};
@@ -184,7 +184,7 @@ test("followup displays the current run duration and excludes idle time from the
     const ctx = createTestContext(cwd);
     const base = Date.parse("2026-09-19T00:00:00.000Z");
     let run = 0;
-    const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, options => ({agentId: options.agentId, async run() {
+    const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, options => ({agentId: options.agentId, async close() {}, async run() {
       run++;
       setSystemTime(new Date(base + (run === 1 ? 10000 : 130000)));
       return {agentId: options.agentId, agentType: "Worker", description: "Board", reply: "Verified", reason: "completed", iterations: 1, toolUseCount: 0, durationMs: 0};

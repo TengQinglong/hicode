@@ -155,15 +155,15 @@ class ConfiguredHookRuntime implements HookRuntime {
                     source: matcher.source, type: hook.type, handler: hookHandler(hook)};
                 const finish = async (handled: HookHandlerResult) => {
                     let execution: HookExecution = {...identity, ...handled.execution};
-                    if (expired()) {
-                        handled.output = undefined;
-                        execution = {...execution, outcome: signal.aborted ? "interrupted" : execution.outcome === "skipped_budget" ? "skipped_budget" : "error",
-                            message: signal.aborted ? "Hook execution cancelled" : `Hook dispatch timed out (${budget}ms)`};
-                    }
                     if (handled.diagnostic && context?.store) {
                         try {execution.artifact = await context.store.persistText({toolCallId: `hook:${identity.executionId}`,
                             toolName: `hook:${input.hook_event_name}`, content: handled.diagnostic.slice(0, 65536)});}
                         catch {execution = {...execution, outcome: "error", message: "Failed to save Hook diagnostics"}; handled.output = undefined;}
+                    }
+                    if (expired()) {
+                        handled.output = undefined;
+                        execution = {...execution, outcome: signal.aborted ? "interrupted" : execution.outcome === "skipped_budget" ? "skipped_budget" : "error",
+                            message: signal.aborted ? "Hook execution cancelled" : `Hook dispatch timed out (${budget}ms)`};
                     }
                     if (execution.outcome === "error" || execution.outcome === "skipped_budget") {
                         if (hook.purpose === "control") result.error ??= execution.message ?? "Control Hook execution failed";

@@ -1,4 +1,4 @@
-import type {ChildTaskAccess} from "./childAccess.js";
+import type {ChildShellSession} from "./childAccess.js";
 import type {Todo} from "../todos.js";
 import type {AgentMessaging} from "../runtime/agentMessaging.js";
 import type {RuntimeMessageQueue} from "../runtime/messageQueue.js";
@@ -177,7 +177,7 @@ export interface TaskSessionLike {
 
     initialize(): Promise<void>;
 
-    createChildShellSession(store: ToolResultStore): ChildTaskAccess;
+    createChildShellSession(store: ToolResultStore): ChildShellSession;
 
     close(): Promise<void>;
 

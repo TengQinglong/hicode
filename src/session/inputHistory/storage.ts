@@ -51,7 +51,9 @@ export function createInputHistoryStore(storage:HiCodeStorageLayout):InputHistor
             await withFileLock(`${path}.lock`,async()=>{
                 const previous=readEntries(storage,path,project,sessionId);
                 const entry:Entry={version:3,sessionId,project,input,timestamp:new Date().toISOString()};
-                const rows=[...previous.filter(item=>item.input!==input),entry].slice(-MAX_ENTRIES).map(item=>JSON.stringify(item)+"\n");
+                const serialized = JSON.stringify(entry) + "\n";
+                if (Buffer.byteLength(serialized) > MAX_HISTORY_BYTES) return;
+                const rows=[...previous.filter(item=>item.input!==input).map(item=>JSON.stringify(item)+"\n"),serialized].slice(-MAX_ENTRIES);
                 let bytes=rows.reduce((sum,row)=>sum+Buffer.byteLength(row),0);
                 while(bytes>MAX_HISTORY_BYTES&&rows.length)bytes-=Buffer.byteLength(rows.shift()!);
                 await writeFileAtomically(path,rows.join(""),0o600);

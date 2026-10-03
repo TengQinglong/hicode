@@ -82,7 +82,7 @@ describe("OS Sandbox integration", () => {
             const runner = createShellRunner(runtime, testChildEnvironment);
             const tasks = createTaskRuntimeForTest(cwd, runner, () => ({
                 agentId: "unused",
-                async run() { throw new Error("network test does not launch agents"); },
+                async close() {}, async run() { throw new Error("network test does not launch agents"); },
             }));
             try {
                 expect(runtime.status.kind).toBe("ready");

@@ -72,3 +72,19 @@ test("policy persistence failure leaves running service permissions unchanged", 
         expect(manager.getSnapshots()[0]?.toolPolicy).toBeUndefined(); expect(manager.getTools()).toEqual(tools);
     } finally {await manager.closeAll();}
 }));
+
+test("close cancels a pending human approval without waiting for the UI", async () => withTempProject(async (cwd, storage) => {
+    const entered = Promise.withResolvers<void>();
+    const answer = Promise.withResolvers<McpApprovalDecision>();
+    const manager = createMcpManager({cwd, storage, sources: [], childEnvironment: testChildEnvironment,
+        hostServers: [{name: "fixture", command: process.execPath, args: []}],
+        requestApproval: async () => {entered.resolve(); return answer.promise;}});
+    const initializing = manager.initialize();
+    try {
+        await entered.promise;
+        await manager.closeAll();
+        await initializing;
+        expect(manager.getTools()).toEqual([]);
+        expect(manager.getSnapshots()[0]?.status).toBe("closed");
+    } finally {answer.resolve("skip"); await manager.closeAll();}
+}));

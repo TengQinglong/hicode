@@ -13,6 +13,8 @@ import type {
     McpManagerOptions,
     McpServerSnapshot,
     McpToolPolicy,
+    McpApprovalRequest,
+    McpApprovalDecision,
 } from "./types.js";
 
 interface MutableConnection {
@@ -34,8 +36,9 @@ function errorMessage(error: unknown): string {
 class McpManager implements McpManagerLike {
     private connections: MutableConnection[] = [];
     private listeners = new Set<() => void>();
-    private initialized = false;
-    private closed = false;
+    private initialization?: Promise<void>;
+    private readonly lifetime = new AbortController();
+    private get closed(): boolean {return this.lifetime.signal.aborted;}
     private closing: Promise<void> | undefined;
 
     constructor(private readonly options: McpManagerOptions) {
@@ -65,6 +68,17 @@ class McpManager implements McpManagerLike {
         return this.connections.flatMap((item) => item.tools);
     }
 
+    private requestApproval(request: McpApprovalRequest): Promise<McpApprovalDecision> {
+        const signal = AbortSignal.any([this.lifetime.signal, ...(this.options.signal ? [this.options.signal] : [])]);
+        if (signal.aborted) return Promise.resolve("skip");
+        return new Promise((resolve, reject) => {
+            const abort = () => {resolve("skip");};
+            signal.addEventListener("abort", abort, {once: true});
+            Promise.resolve().then(() => signal.aborted ? "skip" as const : this.options.requestApproval!(request))
+                .then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+        });
+    }
+
     private async getApproval(connection: MutableConnection, reviewDenied: boolean): Promise<"allow" | "deny" | "pending"> {
         if (this.closed || this.options.signal?.aborted) return "pending";
         const server = connection.server;
@@ -83,7 +97,7 @@ class McpManager implements McpManagerLike {
         }
         if (server.source === "user" && stored.decision === "pending") return "allow";
         if ((stored.decision === "deny" && !reviewDenied) || this.options.headless || !this.options.requestApproval) return stored.decision;
-        const decision = await this.options.requestApproval({
+        const decision = await this.requestApproval({
             projectPath: identity.projectPath,
             serverName: server.name,
             ...(server.config.type === "stdio"
@@ -105,9 +119,12 @@ class McpManager implements McpManagerLike {
         return decision === "deny" ? "deny" : stored.decision;
     }
 
-    async initialize(): Promise<void> {
-        if (this.initialized) return;
-        this.initialized = true;
+    initialize(): Promise<void> {
+        return this.initialization ??= this.initializeConnections();
+    }
+
+    private async initializeConnections(): Promise<void> {
+        if (this.closed) return;
         const loaded = await loadMcpConfig(
             this.options.storage,
             this.options.cwd,
@@ -323,7 +340,8 @@ class McpManager implements McpManagerLike {
         try {
             await pending;
             if (this.closed || this.options.signal?.aborted || generation !== connection.generation || !["connected", "refreshing"].includes(connection.snapshot.status)) {
-                throw new Error("MCP connection closed while saving permissions");
+                // Durable policy was committed; a closed connection cannot apply it live.
+                return;
             }
             connection.snapshot.toolPolicy = policy;
             if (connection.snapshot.status === "connected") this.publishTools(connection, connection.connected!, generation);
@@ -379,7 +397,7 @@ class McpManager implements McpManagerLike {
 
     async closeAll(): Promise<void> {
         if (this.closing) return this.closing;
-        this.closed = true;
+        this.lifetime.abort("shutdown");
         for (const item of this.connections) {
             item.generation++;
             item.controller?.abort();
@@ -389,7 +407,7 @@ class McpManager implements McpManagerLike {
             item.snapshot.toolCount = 0;
         }
         this.closing = (async () => {
-            await Promise.allSettled(this.connections.flatMap(item => [item.connected?.close(), item.connecting]));
+            await Promise.allSettled([this.initialization, ...this.connections.flatMap(item => [item.connected?.close(), item.connecting, item.pending])]);
             for (const item of this.connections) {
                 if (item.snapshot.status === "connected" || item.snapshot.status === "connecting") {
                     item.snapshot.status = "closed";

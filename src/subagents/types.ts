@@ -84,6 +84,8 @@ interface SubagentThreadRunInput {
 export interface SubagentThread {
     readonly agentId: string;
 
+    close(): Promise<void>;
+
     run(input: SubagentThreadRunInput): Promise<SubagentResult>;
 }
 

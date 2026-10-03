@@ -96,7 +96,7 @@ function parseApprovalDocument(value: unknown): ApprovalDocument {
 async function readDocument(path: string): Promise<ApprovalDocument> {
     let handle;
     try {
-        handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
         const metadata = await handle.stat();
         if (!metadata.isFile()) {
             throw new Error("MCP approval document is not a safe regular file");

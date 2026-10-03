@@ -45,3 +45,16 @@ test("non-regular files are rejected without blocking",async()=>{
   }
  });
 });
+
+
+test("an individually oversized serialized entry never evicts existing input history", async () => {
+    await withTempProject(async (cwd, storage) => {
+        const store = createInputHistoryStore(storage);
+        await store.append(cwd, "a", "preserve this history");
+        const path = getSessionInputHistoryPath(storage, cwd, "a");
+        const before = await readFile(path, "utf8");
+        await store.append(cwd, "a", "\\".repeat(1024 * 1024));
+        expect(await readFile(path, "utf8")).toBe(before);
+        expect(await store.load(cwd, "a")).toEqual(["preserve this history"]);
+    });
+});

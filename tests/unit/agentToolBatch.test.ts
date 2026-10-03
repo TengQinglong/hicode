@@ -416,7 +416,7 @@ describe("Agent tool-call batch", () => {
         )
       ).toHaveLength(1);
       expect(
-        events.filter((event) => event.type === "tool_result_persisted")
+        events.filter((event) => event.type === "tool_result_delivery")
       ).toHaveLength(1);
       expect(
         events
