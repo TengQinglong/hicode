@@ -1,3 +1,5 @@
+import type {ManagedReviewTask} from "./managed.js";
+import type {StartTaskReviewInput} from "./types.js";
 import type {LLMCallOptions, LLMCaller, Message} from "../llm/types.js";
 import type {TaskReviewEvidence} from "./types.js";
 import {finishPromptLogRun} from "../llm/promptLog.js";
@@ -34,4 +36,33 @@ export function createTaskReviewRunner({callLLM}: {callLLM: LLMCaller}): TaskRev
             if (trace) finishPromptLogRun(storage, trace);
         }
     };
+}
+
+
+/** Execute an already registered advisory task; TaskRuntime owns publication and lifetime. */
+export async function runReviewTask(
+    task: ManagedReviewTask,
+    input: StartTaskReviewInput,
+    review: TaskReviewRunner,
+    publishFinished: (task: ManagedReviewTask) => Promise<void>,
+): Promise<void> {
+    const {parentContext, evidence} = input;
+    const signal = AbortSignal.any([input.signal, parentContext.signal, task.controller.signal, AbortSignal.timeout(60_000)]);
+    try {
+        signal.throwIfAborted();
+        const text = await review({storage: parentContext.storage, cwd: parentContext.cwd,
+            model: parentContext.fastModel, provider: parentContext.fastProvider, signal, evidence,
+            trace: {scope: "session", ownerCwd: parentContext.llmTrace?.ownerCwd ?? parentContext.cwd,
+                sessionId: parentContext.llmTrace?.scope === "session" ? parentContext.llmTrace.sessionId : parentContext.sessionId,
+                runId: task.id}});
+        signal.throwIfAborted();
+        task.resultPreview = text;
+        task.status = "completed";
+    } catch {
+        task.status = signal.aborted ? "cancelled" : "failed";
+        task.outputIssue = "Background task review was cancelled, timed out or returned invalid feedback; the main task continues.";
+    } finally {
+        task.completedAt = new Date().toISOString();
+        await publishFinished(task);
+    }
 }

@@ -25,7 +25,7 @@ export function isCoordinationWait(thread: ToolCallThread): boolean {
 }
 
 /** Default projection folds successful stages using deterministic tool semantics; failures, denials and cancellations retain raw rows. */
-export function projectDefaultThreads(threads: UIThread[]): ConversationItem[] {
+export function projectDefaultThreads(threads: UIThread[], from = 0): ConversationItem[] {
     const items: ConversationItem[] = [];
     const notifiedShellTasks = new Set<string>();
     for (let index = 0; index < threads.length;) {
@@ -33,6 +33,7 @@ export function projectDefaultThreads(threads: UIThread[]): ConversationItem[] {
         if (thread.role === "task_notification" && thread.kind === "shell") {
             notifiedShellTasks.add(thread.taskId);
         }
+        if (index < from) {index += 1; continue;}
         if (isToolCall(thread) && (thread.hiddenByFileChange ||
             (isCoordinationWait(thread) && (thread.status === "running" || thread.outcome === "ok" ||
                 (thread.name === "task" && thread.outcome === "failed" && thread.completedTask &&

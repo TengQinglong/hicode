@@ -71,9 +71,9 @@ export async function processToolOutput(input: {
     } catch (error) {
         return {
             ...receipt,
-            modelContent: replaceContentText(original.content, buildPersistFailureMessage(input.toolName, preview, error)),
-            displayContent: `${preview}\n\n(Failed to save full result)`,
-            outcome,
+            modelContent: replaceContentText(original.content, `Operation outcome before output delivery: ${outcome}.\n` + buildPersistFailureMessage(input.toolName, preview, error)),
+            displayContent: `${preview}\n\n(Failed to save full result; operation outcome: ${outcome})`,
+            outcome: outcome === "ok" ? "output_failed" : outcome,
             ...(uiData ? {uiData} : {}),
         };
     }

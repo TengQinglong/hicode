@@ -99,3 +99,17 @@ describe("source-backed terminal scrollback", () => {
         expect(wideDiff.every((line) => stringWidth(line) <= 72)).toBe(true);
     });
 });
+
+
+test("incremental scrollback folds an already displayed Shell failure but preserves new errors and transcript", async () => {
+    const taskId = "t_123456789abc";
+    const notification: UIThread = {id: "n", role: "task_notification", taskId, kind: "shell", status: "failed", shellTermination: "exit", label: "exit 1", summary: "exit 1"};
+    const wait: UIThread = {id: "w", role: "tool_call", toolCallId: "w", name: "task", args: JSON.stringify({action: "wait", task_id: taskId}),
+        status: "done", outcome: "failed", result: "WAIT_RESULT", completedTask: {taskId, notificationId: "a".repeat(64)}};
+    const options = {showWelcome: false, width: 100, height: 30};
+    expect(await renderTranscriptForScrollback({...options, threads: [notification, wait], from: 1})).not.toContain("WAIT_RESULT");
+    expect(await renderTranscriptForScrollback({...options, threads: [notification, wait]})).not.toContain("WAIT_RESULT");
+    expect(await renderTranscriptForScrollback({...options, threads: [wait]})).toContain("WAIT_RESULT");
+    expect(await renderTranscriptForScrollback({...options, threads: [notification, {...wait, completedTask: undefined}], from: 1})).toContain("WAIT_RESULT");
+    expect(await renderTranscriptForScrollback({...options, threads: [notification, wait], from: 1, expanded: true})).toContain("WAIT_RESULT");
+});

@@ -423,11 +423,13 @@ function ThreadView({
 // assistant：● {text}
 export function MessageList({
                                 threads,
+                                from = 0,
                                 paused = false,
                                 transcript = false,
                                 terminalWidth: widthOverride,
                             }: {
     threads: UIThread[];
+    from?: number;
     paused?: boolean;
     transcript?: boolean;
     terminalWidth?: number;
@@ -435,7 +437,7 @@ export function MessageList({
     const terminalWidth = useTerminalWidth(widthOverride);
     return (
         <Box flexDirection="column">
-            {(transcript ? threads : projectDefaultThreads(threads)).map((item) => (
+            {(transcript ? threads.slice(from) : projectDefaultThreads(threads, from)).map((item) => (
                 <ThreadView
                     key={item.id}
                     item={item}

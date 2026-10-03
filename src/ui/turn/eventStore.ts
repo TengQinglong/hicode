@@ -1,4 +1,4 @@
-import {toolFileChanges} from "../../fileChanges/index.js";
+import {toolFileChanges} from "../../toolResults/uiData.js";
 import type {MessageContent} from "../../images/content.js";
 import {createAssistantThread, createTaskNotificationThread, createUserThread, reduceThreads, threadsFromHistory,} from "../conversation/threadReducer.js";
 import type {AgentEvent} from "../../agent/types.js";

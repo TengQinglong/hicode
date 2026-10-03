@@ -1,4 +1,4 @@
-import type {ToolUIData} from "../fileChanges/index.js";
+import type {ToolUIData} from "./uiData.js";
 import type {StoredImage, MessageContent} from "../images/content.js";
 import type {TaskResultReceipt} from "../tasks/types.js";
 
@@ -37,7 +37,8 @@ export interface PersistedBinaryArtifact {
     image?: StoredImage;
 }
 
-export type ToolOutcome = "ok" | "failed" | "denied" | "interrupted";
+// output_failed means the operation succeeded but its complete output could not be delivered.
+export type ToolOutcome = "ok" | "failed" | "output_failed" | "denied" | "interrupted";
 
 export type ToolOutput =
     | string

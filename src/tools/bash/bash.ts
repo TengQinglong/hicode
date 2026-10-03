@@ -1,8 +1,10 @@
+import {captureApprovalEvidence} from "../../permissions/evidence.js";
+import {noMatchSearch, shellOutcome} from "./result.js";
 import {formatTaskHeader} from "../../tasks/format.js";
 import {z} from "zod";
 import {ApprovalBudget, requestApproval} from "../../permissions/approval.js";
 import {realpath, stat} from "node:fs/promises";
-import {basename, resolve} from "node:path";
+import {resolve} from "node:path";
 import {ToolInputError, type Tool, type ToolContext} from "../types.js";
 import {matchPattern} from "../../permissions/index.js";
 import {
@@ -134,16 +136,6 @@ function runningOutput(task: ShellTaskSnapshot, service: boolean): string {
     return `Captured output (not a readiness check):\n${start ? "[Earlier output omitted; use task status for more]\n" : ""}${preview}`;
 }
 
-function noMatchSearch(command: string, result: ShellExecutionResult): "rg" | "grep" | undefined {
-    if (result.termination.kind !== "exit" || result.termination.code !== 1 || result.termination.signal !== null ||
-        result.stdout.trim() || result.stderr.trim() || result.outputComplete === false) return undefined;
-    // This is a result hint, never an execution or permission decision. As in a shell,
-    // the final command usually determines the status of a command list.
-    const lastProgram = parseShellCommand(command).segments.at(-1)?.tokens[0];
-    const name = lastProgram ? basename(lastProgram) : undefined;
-    return name === "rg" || name === "grep" ? name : undefined;
-}
-
 function formatShellResult(result: ShellExecutionResult, noMatches?: "rg" | "grep"): string {
     const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
     const termination = result.termination;
@@ -173,13 +165,6 @@ function formatShellResult(result: ShellExecutionResult, noMatches?: "rg" | "gre
         ? `Command exited with code ${termination.code}`
         : `Execution failed (${status})`;
     return `${heading}:\n${detail || "(no output)"}${timeoutNotice}`;
-}
-
-function shellOutcome(result: ShellExecutionResult): "ok" | "failed" | "interrupted" {
-    if (result.termination.kind === "aborted") return "interrupted";
-    return result.termination.kind === "exit" && result.termination.code === 0
-        ? "ok"
-        : "failed";
 }
 
 function formatShellStatus(result: ShellExecutionResult): string {
@@ -370,7 +355,9 @@ export const bashTool: Tool<typeof inputSchema> = {
         }
         const effectiveSandboxPermissions = readAccess || workspace ? "use_default" as const : ctx.permissionMode === "full-access" && ctx.allowFullAccess
             ? "require_escalated" as const : sandbox_permissions;
-        const networkEvidence = structuredClone(ctx.approvalEvidence?.() ?? []);
+        const needsNetworkApproval = !!ctx.networkAccess && effectiveSandboxPermissions !== "require_escalated" &&
+            ctx.shellRunner.sandboxStatus.kind === "ready" && ctx.shellRunner.sandboxStatus.networkMode === "restricted";
+        const networkEvidence = needsNetworkApproval ? captureApprovalEvidence(ctx.approvalEvidence?.() ?? []) : [];
         const restrictedHuman = ctx.permissionMode === "ask" && effectiveSandboxPermissions !== "require_escalated" &&
             ctx.shellRunner.sandboxStatus.kind === "ready" && ctx.shellRunner.sandboxStatus.networkMode === "restricted";
         const canContinue = !!ctx.tasks?.shellContinuation && !workspace && !readAccess && (!restrictedHuman || yield_time_ms !== undefined);
@@ -382,7 +369,7 @@ export const bashTool: Tool<typeof inputSchema> = {
         const networkBudget = new ApprovalBudget();
         const networkBase: ToolContext = {...ctx, canUseTool: async () => ({behavior: "deny", message: "Task has no human interaction channel"}),
             onApprovalEvent: undefined, signal: AbortSignal.abort("task-request-signal-required"), approvalBudget: networkBudget};
-        const networkAccess = ctx.networkAccess ? {
+        const networkAccess = needsNetworkApproval && ctx.networkAccess ? {
             session: ctx.networkAccess,
             canUseTool: async (_tool: string, message: string, input: unknown, options?: Parameters<ToolContext["canUseTool"]>[3]) => {
                 const requestSignal = options?.signal ?? networkBase.signal;
@@ -444,9 +431,9 @@ export const bashTool: Tool<typeof inputSchema> = {
                         signal: ctx.signal, onHandoff: () => {interaction = undefined;}});
                 if (started.kind === "inline") {
                     const status = started.outputIssue ? `\nOutput delivery failed: ${started.outputIssue}` : "";
-                    return {content: (started.persisted ? formatShellStatus(started.result) : formatShellResult(started.result)) + status,
+                    return {content: (started.persisted ? formatShellStatus(started.result) : formatShellResult(started.result, noMatchSearch(command, started.result))) + status,
                         ...(started.persisted ? {persisted: started.persisted, displayContent: formatShellStatus(started.result) + "\n" + started.persisted.preview + status} : {}),
-                        outcome: started.outputIssue ? "failed" as const : shellOutcome(started.result)};
+                        outcome: started.outputIssue && shellOutcome(command, started.result) === "ok" ? "output_failed" as const : shellOutcome(command, started.result)};
                 }
                 const task = started.task;
                 if (task.status !== "running") {
@@ -454,7 +441,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                         content: formatObservedBackgroundTask(task, !run_in_background),
                         completedTask: {taskId: task.id, notificationId: taskNotificationId(task.id, 1)},
                         outcome: task.outputIssue
-                            ? "failed" as const
+                            ? task.termination?.kind === "exit" && task.termination.code === 0 ? "output_failed" as const : "failed" as const
                             : task.status === "completed"
                             ? "ok" as const
                             : task.status === "cancelled"
@@ -510,7 +497,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                 if (!shouldPersist || result.termination.kind === "aborted") {
                     return {
                         content: formatShellResult(result, noMatches),
-                        outcome: noMatches ? "ok" as const : shellOutcome(result),
+                        outcome: noMatches ? "ok" as const : shellOutcome(command, result),
                     };
                 }
                 try {
@@ -525,12 +512,12 @@ export const bashTool: Tool<typeof inputSchema> = {
                         content: formatShellStatus(result),
                         displayContent: `${formatShellStatus(result)}\n${persisted.preview}`,
                         persisted,
-                        outcome: shellOutcome(result),
+                        outcome: shellOutcome(command, result),
                     };
                 } catch (error) {
                     return {
-                        content: `${formatShellResult(result)}\n\nFailed to save full output: ${error instanceof Error ? error.message : String(error)}`,
-                        outcome: "failed" as const,
+                        content: `${formatShellResult(result)}\n\nFailed to save full output: ${error instanceof Error ? error.message : String(error)}. Operation effects were not rolled back; inspect before retrying.`,
+                        outcome: shellOutcome(command, result) === "ok" ? "output_failed" as const : shellOutcome(command, result),
                     };
                 }
             } finally {

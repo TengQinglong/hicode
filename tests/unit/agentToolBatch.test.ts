@@ -2,7 +2,7 @@ import {contentText} from "../../src/images/content.js";
 import { describe, expect, test } from "bun:test";
 import { executeToolCallBatch } from "../../src/agent/toolBatch.js";
 import { abortableDelay, createTurnAbortController } from "../../src/runtime/abort.js";
-import type { ToolUIData } from "../../src/fileChanges/index.js";
+import type { ToolUIData } from "../../src/toolResults/uiData.js";
 import type { PersistedToolResult } from "../../src/toolResults/index.js";
 import type { AgentEvent } from "../../src/agent/types.js";
 import type { Message, ToolCall } from "../../src/llm/types.js";

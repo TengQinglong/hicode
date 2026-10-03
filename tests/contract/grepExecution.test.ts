@@ -75,3 +75,33 @@ test("large saved results are searched without the old per-file limit and remain
         expect(foreign.modelContent).not.toContain("game.test.js:42");
     });
 });
+
+
+test("search no-match and real errors agree across foreground, managed inline and background completion", async () => {
+    await withTempProject(async cwd => {
+        const {createTaskRuntimeForTest} = await import("../helpers/taskRuntime.js");
+        const {waitForTaskCompletion} = await import("../../src/tasks/wait.js");
+        const ctx = createTestContext(cwd, {permissionMode: "full-access"});
+        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner);
+        const tasks = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
+        await writeFile(join(cwd, "source.txt"), "present\n");
+        try {
+            for (const [command, expected] of [["true; rg ABSENT source.txt", "ok"], ["true; rg ABSENT missing.txt", "failed"], ["true; exit 1", "failed"]] as const) {
+                for (const context of [ctx, {...ctx, tasks}]) {
+                    const result = await executeToolResult("bash", JSON.stringify({command}), context, command);
+                    expect(result.outcome).toBe(expected);
+                    if (expected === "ok") expect(result.modelContent).toContain("No matches found");
+                }
+                const started = await tasks.startShell({command, cwd, toolCallId: command});
+                await waitForTaskCompletion(tasks, [started.id], ctx.signal, "shell");
+                const waited = await executeToolResult("task", JSON.stringify({action: "wait", task_id: started.id}), {...ctx, tasks}, "wait");
+                expect(waited.outcome).toBe(expected);
+                if (expected === "ok") {
+                    expect(waited.modelContent).toContain("No matches found");
+                    expect((await tasks.get(started.id))?.status).toBe("completed");
+                    expect((await tasks.get(started.id))).toMatchObject({termination: {kind: "exit", code: 1}});
+                }
+            }
+        } finally {await runtime.close();}
+    });
+});

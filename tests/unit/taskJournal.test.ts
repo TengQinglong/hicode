@@ -1,7 +1,7 @@
-import {decodeTaskJournalEntry} from "../../src/tasks/codec.js";
+import {decodeTaskJournalEntry, serializeTaskJournalEntry} from "../../src/tasks/codec.js";
 import {describe, expect, test} from "bun:test";
-import {appendFile, readFile} from "node:fs/promises";
-import {join} from "node:path";
+import {appendFile, readFile, mkdir, writeFile} from "node:fs/promises";
+import {join, dirname} from "node:path";
 import {createHiCodeStorageLayout, getSessionStorageDirectory} from "../../src/persistence/index.js";
 import {createTaskJournal} from "../../src/tasks/journal.js";
 import {taskNotificationId, TaskNotificationCenter} from "../../src/tasks/notifications.js";
@@ -177,4 +177,28 @@ test("interrupted is an Agent-only persisted status", () => {
         agentType: "Worker", description: "work", status: "interrupted", startedAt: "2026-08-30T00:00:00.000Z", completedAt: "2026-08-30T00:00:01.000Z",
         reason: "interrupted", progress: {runCount: 1, runStartedAt: "2026-08-30T00:00:00.000Z", previousDurationMs: 0, todosUpdated: false, iterations: 1, toolUseCount: 1, pendingMessages: 0}}};
     expect(decodeTaskJournalEntry(agent, "session-a")?.type).toBe("task_finished");
+});
+
+
+test("compaction retains old running tasks beyond the completed-history budget", async () => {
+    await withTempProject(async cwd => {
+        const storage = createHiCodeStorageLayout({hicodeHome: join(cwd, "store")});
+        const entries = [serializeTaskJournalEntry(shellEvent({sequence: 1, taskId: "old-running"}))];
+        let sequence = 1;
+        for (let index = 0; index < 511; index++) {
+            const taskId = `completed-${index}`;
+            entries.push(serializeTaskJournalEntry(shellEvent({sequence: ++sequence, taskId, status: "completed", type: "task_finished"})));
+            entries.push(serializeTaskJournalEntry({version: 8, type: "task_notification_claimed", sequence: ++sequence,
+                sessionId: "session-a", taskId, notificationId: taskNotificationId(taskId, 1)}));
+        }
+        const path = pathFor(storage, cwd);
+        await mkdir(dirname(path), {recursive: true});
+        await writeFile(path, entries.join("\n") + "\n");
+        await createTaskJournal(storage, cwd).append(shellEvent({sequence: ++sequence, taskId: "new-running"}));
+        const loaded = await createTaskJournal(storage, cwd).load("session-a");
+        expect(loaded.tasks.find(task => task.id === "old-running")?.status).toBe("running");
+        expect(loaded.tasks.find(task => task.id === "new-running")?.status).toBe("running");
+        expect(loaded.tasks.filter(task => task.status === "completed")).toHaveLength(32);
+        expect(loaded.pendingRuns).toHaveLength(0);
+    });
 });

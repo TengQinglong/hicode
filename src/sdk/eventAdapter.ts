@@ -1,4 +1,4 @@
-import {toolFileChanges} from "../fileChanges/index.js";
+import {toolFileChanges} from "../toolResults/uiData.js";
 import type {AgentEvent, StopReason} from "../agent/types.js";
 import {SessionUIEventCollector} from "../session/index.js";
 import type {
@@ -50,6 +50,7 @@ function terminalToolStatus(
     outcome: ToolCallItem["outcome"]
 ): ToolCallItem["status"] {
     switch (outcome) {
+        case "output_failed":
         case "failed":
             return "failed";
         case "denied":

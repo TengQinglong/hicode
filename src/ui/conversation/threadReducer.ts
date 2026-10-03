@@ -1,6 +1,6 @@
 import {contentText, type MessageContent} from "../../images/content.js";
 import {userContentText} from "./userContent.js";
-import {toolFileChanges} from "../../fileChanges/index.js";
+import {toolFileChanges} from "../../toolResults/uiData.js";
 import {randomUUID} from "node:crypto";
 import {mergeFileChange} from "../../fileChanges/index.js";
 import type {PersistedUIEvent} from "../../session/index.js";
@@ -108,25 +108,27 @@ export function threadsFromHistory(
     }
 
     for (const event of uiEvents) {
-        if (event.type === "approval_review") continue;
+        if (event.type !== "tool_call") continue;
         const target = threads.find(
             (thread) =>
                 thread.role === "tool_call" && thread.toolCallId === event.toolCallId
         );
         if (!target || target.role !== "tool_call") continue;
-        if (event.type === "tool_call") {
-            target.outcome = event.outcome;
-            if (event.completedTask) target.completedTask = event.completedTask;
-            if (event.fileRead && event.outcome === "ok") target.uiData = {type: "file_read", receipt: event.fileRead};
-            if (event.agentReceipt && event.outcome === "ok") target.uiData = {type: "agent_receipt", receipt: event.agentReceipt};
-            continue;
-        }
+        target.outcome = event.outcome;
+        if (event.completedTask) target.completedTask = event.completedTask;
+        if (event.fileRead && event.outcome === "ok") target.uiData = {type: "file_read", receipt: event.fileRead};
+        if (event.agentReceipt && event.outcome === "ok") target.uiData = {type: "agent_receipt", receipt: event.agentReceipt};
+    }
+    for (const event of uiEvents) {
+        if (event.type !== "file_change") continue;
+        const target = threads.find(thread => thread.role === "tool_call" && thread.toolCallId === event.toolCallId);
+        if (!target || target.role !== "tool_call") continue;
         threads = reduceThreads(threads, {
             type: "tool_call_end",
             turnId: event.turnId,
             toolCallId: event.toolCallId,
             result: target.result ?? "File modified",
-            outcome: "ok",
+            outcome: target.outcome ?? "ok",
             uiData: {type: "file_change", change: event.change},
         }, createId);
     }
@@ -353,7 +355,7 @@ export function reduceThreads(
                             turnId: event.turnId,
                             ...(event.uiData ? {uiData: event.uiData} : {}),
                             ...(event.completedTask ? {completedTask: event.completedTask} : {}),
-                            ...(changes.length > 0 && event.uiData?.type === "file_change" && t.name !== "bash"
+                            ...(changes.length > 0 && event.outcome === "ok" && event.uiData?.type === "file_change" && t.name !== "bash"
                                 ? {hiddenByFileChange: true}
                                 : {}),
                             ...(event.persisted ? {persisted: event.persisted} : {}),

@@ -81,3 +81,11 @@ describe("web_fetch boundaries", () => {
     })).toBeNull();
   });
 });
+
+
+test.each(["signed", "deny", "foreign", "private"])("redirect references preserve the exact target and domain boundary: %s", async mode => {
+    const child = Bun.spawn([process.execPath, fileURLToPath(new URL("../fixtures/webFetchRedirect.ts", import.meta.url)), mode],
+        {env: testChildEnvironment.base, stdout: "pipe", stderr: "pipe"});
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect({code, stdout, stderr}).toEqual({code: 0, stdout: "verified\n", stderr: ""});
+});

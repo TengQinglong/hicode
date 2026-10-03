@@ -1,3 +1,4 @@
+import {createFileChange} from "../../src/fileChanges/index.js";
 import {describe, expect, test} from "bun:test";
 import {SDKEventAdapter} from "../../src/sdk/eventAdapter.js";
 import type {ThreadEventPayload} from "../../src/sdk/protocol.js";
@@ -159,4 +160,17 @@ describe("SDK event adapter", async () => {
     await adapter.handleAgentEvent({type: "coordination_message", messageId: "message-id", text: "Child requests clarification"});
     expect(events.find(event => event.type === "item.completed")).toMatchObject({item: {id: "message-id", type: "coordination_message", text: "Child requests clarification"}});
     expect(events.some(event => "item" in event && event.item.type === "agent_message")).toBe(false);
+});
+
+
+test("SDK preserves committed file changes alongside output_failed status", async () => {
+    const events: ThreadEventPayload[] = [];
+    const adapter = new SDKEventAdapter("turn", event => {events.push(event);});
+    const change = createFileChange({path: "a.ts", kind: "update", oldContent: "before", newContent: "after"});
+    await adapter.handleAgentEvent({type: "tool_call_start", turnId: "turn", toolCallId: "edit", name: "edit_file", args: "{}"});
+    await adapter.handleAgentEvent({type: "tool_call_end", turnId: "turn", toolCallId: "edit", outcome: "output_failed",
+        result: "delivery failed", uiData: {type: "file_change", change}});
+    await adapter.finish("completed");
+    expect(events).toContainEqual(expect.objectContaining({type: "item.completed", item: expect.objectContaining({type: "tool_call", status: "failed", outcome: "output_failed"})}));
+    expect(events).toContainEqual(expect.objectContaining({type: "item.completed", item: expect.objectContaining({type: "file_change", changes: [change]})}));
 });

@@ -1,4 +1,4 @@
-import {toolFileChanges} from "../fileChanges/index.js";
+import {toolFileChanges} from "../toolResults/uiData.js";
 import type {AgentEvent} from "../agent/types.js";
 import {mergeFileChange} from "../fileChanges/index.js";
 import {

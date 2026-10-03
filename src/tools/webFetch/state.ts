@@ -1,4 +1,4 @@
-import {createHash} from "node:crypto";
+import {createHash, randomUUID} from "node:crypto";
 import type {PersistedToolResult} from "../../toolResults/index.js";
 
 function sourceKey(value: string): string {
@@ -8,6 +8,7 @@ function sourceKey(value: string): string {
 }
 
 interface WebSource {
+    kind: "source";
     result: PersistedToolResult;
     fetchedAt: string;
     expiresAt: number;
@@ -15,12 +16,31 @@ interface WebSource {
 
 /** Session-owned references only; bodies remain in the existing result store. */
 export class WebSources {
-    private readonly entries = new Map<string, WebSource>();
+    private readonly entries = new Map<string, WebSource | {kind: "redirect"; url: string; expiresAt: number}>();
+
+    resolveUrl(value: string): string {
+        if (!value.startsWith("web-redirect:")) return value;
+        const entry = this.entries.get(value);
+        if (entry?.kind === "redirect" && entry.expiresAt > performance.now()) return entry.url;
+        this.entries.delete(value);
+        throw new Error("Redirect reference is unavailable or expired; fetch the original URL again.");
+    }
+
+    rememberRedirect(url: string): string {
+        const reference = `web-redirect://${new URL(url).host}/${randomUUID()}`;
+        this.reserve();
+        this.entries.set(reference, {kind: "redirect", url, expiresAt: performance.now() + 300_000});
+        return reference;
+    }
+
+    private reserve(): void {
+        if (this.entries.size >= 32) this.entries.delete(this.entries.keys().next().value!);
+    }
 
     get(url: string): WebSource | undefined {
         const key = sourceKey(url);
         const entry = this.entries.get(key);
-        if (entry && entry.expiresAt > performance.now()) return entry;
+        if (entry?.kind === "source" && entry.expiresAt > performance.now()) return entry;
         this.entries.delete(key);
         return undefined;
     }
@@ -29,8 +49,8 @@ export class WebSources {
         if (!result.complete) return;
         const key = sourceKey(url);
         this.entries.delete(key);
-        if (this.entries.size >= 32) this.entries.delete(this.entries.keys().next().value!);
-        this.entries.set(key, {result, fetchedAt, expiresAt: performance.now() + Math.min(300_000, ttlMs)});
+        this.reserve();
+        this.entries.set(key, {kind: "source", result, fetchedAt, expiresAt: performance.now() + Math.min(300_000, ttlMs)});
     }
 
     forget(url: string): void {this.entries.delete(sourceKey(url));}

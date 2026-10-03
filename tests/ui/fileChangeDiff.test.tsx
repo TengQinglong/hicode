@@ -1,3 +1,5 @@
+import {SessionUIEventCollector} from "../../src/session/uiEventCollector.js";
+import {decodeSessionContentBlock} from "../../src/session/codec.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "ink-testing-library";
 import { createFileChange } from "../../src/fileChanges/index.js";
@@ -180,4 +182,34 @@ describe("file change diff UI", () => {
     expect(frame).toContain("restored.ts");
     expect(frame).not.toContain("edit_file");
   });
+});
+
+
+test("output delivery failure retains both the committed diff and visible failure", () => {
+    const change = createFileChange({path: "a.ts", kind: "update", oldContent: "before\n", newContent: "after\n"});
+    const started = reduceThreads([], {type: "tool_call_start", turnId: "turn", toolCallId: "edit", name: "edit_file", args: '{"path":"a.ts"}'});
+    const threads = reduceThreads(started, {type: "tool_call_end", turnId: "turn", toolCallId: "edit", outcome: "output_failed",
+        result: "Full output delivery failed", uiData: {type: "file_change", change}});
+    const frame = render(<MessageList threads={threads}/>).lastFrame() ?? "";
+    expect(frame).toContain("Full output delivery failed");
+    expect(frame).toContain("after");
+    expect(threads.find(thread => thread.role === "tool_call")).not.toHaveProperty("hiddenByFileChange", true);
+});
+
+
+test("output_failed survives persisted UI replay without hiding its error or committed change", () => {
+    const collector = new SessionUIEventCollector();
+    const change = createFileChange({path: "a.ts", kind: "update", oldContent: "before\n", newContent: "after\n"});
+    collector.handleEvent({type: "tool_call_start", turnId: "turn", toolCallId: "edit", name: "edit_file", args: '{"path":"a.ts"}'});
+    collector.handleEvent({type: "tool_call_end", turnId: "turn", toolCallId: "edit", outcome: "output_failed",
+        result: "Full output delivery failed", uiData: {type: "file_change", change}});
+    const events = collector.getEvents();
+    for (const event of events) expect(() => decodeSessionContentBlock({kind: "ui", value: event})).not.toThrow();
+    const history: Message[] = [{role: "assistant", content: null, tool_calls: [{id: "edit", type: "function", function: {name: "edit_file", arguments: '{"path":"a.ts"}'}}]},
+        {role: "tool", tool_call_id: "edit", content: "Full output delivery failed"}];
+    const threads = threadsFromHistory(history, [...events]);
+    expect(threads.find(thread => thread.role === "tool_call")).toMatchObject({outcome: "output_failed"});
+    const frame = render(<MessageList threads={threads}/>).lastFrame() ?? "";
+    expect(frame).toContain("Full output delivery failed");
+    expect(frame).toContain("after");
 });

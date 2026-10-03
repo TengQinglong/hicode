@@ -1,6 +1,6 @@
 import {expect, test} from "bun:test";
 import {RuntimeMessageQueue} from "../../src/runtime/messageQueue.js";
-import {createChildTaskAccess} from "../../src/tasks/childAccess.js";
+import {createTestToolResultStore} from "../helpers/toolResultStore.js";
 import {childTaskTool, taskTool} from "../../src/tools/task/task.js";
 import {createTaskRuntimeForTest} from "../helpers/taskRuntime.js";
 import {createTestContext} from "../helpers/testContext.js";
@@ -53,7 +53,7 @@ test("child wait exposes only its owned Shell task", async () => {
         const base = createTestContext(cwd);
         const runtime = createTaskRuntimeForTest(cwd, base.shellRunner);
         const parent = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
-        const child = createChildTaskAccess(parent, base.toolResultStore).tasks;
+        const child = parent.createChildShellSession(createTestToolResultStore(cwd, "child"));
         const ctx = createTestContext(cwd);
         ctx.tasks = child;
         try {

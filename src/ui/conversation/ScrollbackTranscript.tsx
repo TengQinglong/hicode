@@ -101,6 +101,7 @@ function withFinalNewline(value: string): string {
 /** Render retained transcript source once at the target terminal width. */
 export async function renderTranscriptForScrollback(input: {
     threads: UIThread[];
+    from?: number;
     showWelcome: boolean;
     width: number;
     height: number;
@@ -112,6 +113,7 @@ export async function renderTranscriptForScrollback(input: {
             {input.showWelcome && <Welcome/>}
             <MessageList
                 threads={input.threads}
+                from={input.from}
                 paused
                 transcript={input.expanded}
                 terminalWidth={input.width}
@@ -172,7 +174,8 @@ export function ScrollbackTranscript({
         let active = true;
         const timer = setTimeout(() => {
             const rendering = plan.kind === "draft" ? Promise.resolve(plan.text) : renderTranscriptForScrollback({
-                threads: plan.kind === "append" ? threads.slice(plan.from) : threads,
+                threads,
+                from: plan.kind === "append" ? plan.from : 0,
                 expanded,
                 showWelcome: plan.includeWelcome,
                 width,

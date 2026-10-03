@@ -1,3 +1,4 @@
+import type {ToolOutcome} from "../toolResults/types.js";
 import type {PersistedToolResult, ToolResultStore} from "../toolResults/index.js";
 
 export const HOOK_EVENTS = [
@@ -77,7 +78,7 @@ export type HookInput = {session_id: string; turn_id?: string} & (
     | ({hook_event_name: "PostToolUse"; tool_response: HookToolResponse & {outcome: "ok"}} & ToolHookInput)
     | ({hook_event_name: "PostToolUseFailure"; tool_response: HookToolResponse & {outcome: "failed"}} & ToolHookInput)
     | {hook_event_name: "PostToolBatch"; batch_id: string; status: "completed" | "interrupted" | "failed";
-        tools: {tool_call_id: string; name: string; outcome: "ok" | "failed" | "denied" | "interrupted";
+        tools: {tool_call_id: string; name: string; outcome: ToolOutcome;
             summary: string; result_id?: string; changes: {path: string; kind: "create" | "update" | "delete"}[]}[]}
     | {hook_event_name: "Stop"; candidate: string; continuation_used: boolean}
     | {hook_event_name: "TurnEnd"; status: "completed" | "failed" | "cancelled" | "blocked" | "limit";

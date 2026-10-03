@@ -133,9 +133,13 @@ function compactEntries(entries: readonly TaskJournalEntry[]): TaskJournalEntry[
             if (entry.task.kind !== "review" && entry.task.status !== "running") terminals.set(taskNotificationId(entry.task.id, entry.task.kind === "agent" ? entry.task.progress.runCount : 1), entry);
         }
     }
-    const retainedTasks = [...latestTasks.values()]
-        .sort((left, right) => left.sequence - right.sequence)
-        .slice(-MAX_PERSISTED_TASKS);
+    const latest = [...latestTasks.values()];
+    const retainedTasks = [
+        ...latest.filter(entry => entry.task.status === "running"),
+        ...latest.filter(entry => entry.task.status !== "running")
+            .sort((left, right) => left.sequence - right.sequence)
+            .slice(-MAX_PERSISTED_TASKS),
+    ];
     const pending = [...terminals].filter(([id]) => !claims.has(id)).map(([, entry]) => entry);
     const retained = new Map([...retainedTasks, ...pending].map(entry => [entry.sequence, entry]));
     const retainedNotificationIds = new Set(retainedTasks.map(entry => taskNotificationId(entry.task.id, entry.task.kind === "agent" ? entry.task.progress.runCount : 1)));

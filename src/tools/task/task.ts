@@ -123,7 +123,8 @@ export const taskTool: Tool<typeof inputSchema> = {
                     if (!completed || completed.kind !== "shell") return {content: "Shell task became unavailable", outcome: "failed"};
                     return {content: formatTask(completed) + (completed.status === "running" ? "\nNew input is available and will be delivered after this tool batch." : ""),
                         ...(completed.status !== "running" ? {completedTask: {taskId: completed.id, notificationId: taskNotificationId(completed.id, 1)}} : {}),
-                        outcome: completed.status === "failed" || completed.outputIssue ? "failed" : "ok"};
+                        outcome: completed.outputIssue && completed.termination?.kind === "exit" && completed.termination.code === 0
+                            ? "output_failed" : completed.status === "failed" || completed.outputIssue ? "failed" : "ok"};
                 }
             }
             if (task_id) {

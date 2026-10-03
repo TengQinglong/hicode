@@ -26,7 +26,7 @@ await withTempProject(async cwd => {
     const result = await executeToolResult("web_fetch", JSON.stringify({
         url: "https://example.com/docs", ...(mode === "maximum" ? {max_chars: 100_000} : {}),
     }), ctx, "web-call");
-    assert.equal(result.outcome, mode === "http-error" ? "failed" : "ok");
+    assert.equal(result.outcome, mode === "http-error" ? "failed" : mode === "save-failure" ? "output_failed" : "ok");
     assert.ok(!contentText(result.modelContent).includes("MIDDLEAPICONTRACT"));
     if (mode === "save-failure") {
         assert.equal(result.persisted, undefined);

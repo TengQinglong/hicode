@@ -1,18 +1,11 @@
+import {noMatchSearch, shellOutcome} from "../tools/bash/result.js";
 import {createTurnAbortController, normalizeTurnAbortReason} from "../runtime/abort.js";
-import type {ShellExecutionResult} from "../tools/bash/process.js";
 import type {ShellRunnerLike} from "../tools/bash/shellRunner.js";
 import type {StartShellTaskInput, TaskSessionBinding, TaskStatus,} from "./types.js";
 import {type ManagedShellTask, readOutputPreview,} from "./managed.js";
 import {isExpectedShellShutdown} from "./notifications.js";
 
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
-
-function statusFromResult(result: ShellExecutionResult): TaskStatus {
-    if (result.termination.kind === "aborted") return "cancelled";
-    return result.termination.kind === "exit" && result.termination.code === 0
-        ? "completed"
-        : "failed";
-}
 
 export async function createShellTask(
     id: string,
@@ -70,10 +63,12 @@ export async function runShellTask(
         };
         const result = await run();
         if (!task.published) task.inlineResult = result;
-        finalStatus = statusFromResult(result);
+        const outcome = shellOutcome(input.command, result);
+        finalStatus = outcome === "ok" ? "completed" : outcome === "interrupted" ? "cancelled" : "failed";
         task.termination = result.termination;
         const outputPreview = await readOutputPreview(task.outputPath);
-        task.outputPreview = outputPreview;
+        const noMatches = noMatchSearch(input.command, result);
+        task.outputPreview = noMatches ? `No matches found (${noMatches} exit code 1).` : outputPreview;
         // Proxy approval diagnostics are generated after process output capture.
         if (result.stderr.trim() && !task.outputPreview.includes(result.stderr.trim())) {
             task.outputPreview = `${task.outputPreview}\n${result.stderr}`.trim();

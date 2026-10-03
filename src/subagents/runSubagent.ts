@@ -3,7 +3,7 @@ import {createSessionPersistence} from "../session/storage.js";
 import {createSessionArchiveAccess, prepareSessionArchive} from "../session/archive.js";
 import {childTaskTool} from "../tools/task/task.js";
 import {createToolCatalog} from "../tools/catalog.js";
-import {createChildTaskAccess} from "../tasks/childAccess.js";
+import {isParentTaskSession} from "../tasks/childAccess.js";
 import {CUSTOM_AGENT_FORBIDDEN_TOOLS} from "./registration.js";
 import {ensureSessionIdentity} from "../persistence/projectState.js";
 import {finishPromptLogRun} from "../llm/promptLog.js";
@@ -109,7 +109,6 @@ export function createSubagentFactories(
                 ...parentContext.mcpManager?.getTools().filter(tool => allowedNames.has(tool.name)) ?? []],
         });
         const childSkills = definition.source === "builtin" && definition.agentType === "Explore" ? [] : structuredClone(parentContext.skills);
-        const childTasks = parentContext.tasks ? createChildTaskAccess(parentContext.tasks, parentContext.toolResultFiles) : undefined;
         const initialToolNames = runtime.getToolSchemas()
             .map((tool) => tool.function.name);
         const useFastModel = usesFastSubagentModel(definition);
@@ -135,6 +134,8 @@ export function createSubagentFactories(
             options.storageCwd ?? parentContext.cwd,
             childSessionId
         );
+        const childTasks = parentContext.tasks && isParentTaskSession(parentContext.tasks)
+            ? parentContext.tasks.createChildShellSession(childToolResultStore) : undefined;
         const childToolResultFiles = request.contextSnapshot !== undefined
             ? createForkResultFiles(childHistory, parentContext.toolResultFiles, childToolResultStore)
             : undefined;
@@ -192,7 +193,7 @@ export function createSubagentFactories(
                             const data = await parentContext.imageAccess.read(ref);
                             const sourceData = await parentContext.imageAccess.readSource(ref);
                             await persistPreparedImage({store: childToolResultStore, origin: {kind: "tool", toolCallId: request.parentToolCallId, toolName: "agent"},
-                                prepared: {data, image: ref.image}, sourceData, signal: parentContext.signal});
+                                prepared: {data, image: ref.image}, sourceData, signal: input.signal});
                             copied.add(ref.imageId);
                         }
                     }
@@ -209,7 +210,7 @@ export function createSubagentFactories(
                             storage: parentContext.storage, shellRunner: parentContext.shellRunner, readOnlyTools: !writable,
                             cwd, workspaceBoundary: cwd, instructions, toolNames: runtime.toolNames, availableTools: runtime.getTools(),
                             skills: childSkills,
-                            tasks: childTasks?.tasks,
+                            tasks: childTasks,
                             fileCommits: parentContext.fileCommits,
                             agentMessaging: canMessageParent ? options.agentMessaging : undefined,
                             // Children gain edit authority only from their own actual reads.
@@ -227,7 +228,7 @@ export function createSubagentFactories(
                             compactState: childCompactState,
                             contextUsage: childContextUsage,
                             toolResultStore: childToolResultStore,
-                            toolResultFiles: {resolveFile: async path => await (childToolResultFiles ?? childToolResultStore).resolveFile(path) ?? await childTasks?.files.resolveFile(path) ?? null},
+                            toolResultFiles: childToolResultFiles ?? childToolResultStore,
                         },
                         host: {
                             canUseTool: async () => ({

@@ -11,7 +11,7 @@ const MAX_CHARS = 100_000;
 
 const inputSchema = z.object({
     refresh: z.boolean().default(false).describe("Fetch again instead of reusing this Session\'s complete result from the last five minutes. Domain permission is checked for every call."),
-    url: z.string().trim().min(1).describe("Public HTTP(S) URL to fetch."),
+    url: z.string().trim().min(1).describe("Public HTTP(S) URL or a web-redirect reference returned by this tool."),
     max_chars: z
         .number()
         .int()
@@ -58,7 +58,8 @@ function isTextContentType(contentType: string): boolean {
 }
 
 function permissionContent(url: string): string {
-    return `domain:${parsePublicWebUrl(url).hostname.toLowerCase()}`;
+    const target = url.startsWith("web-redirect:") ? `https://${new URL(url).host}/` : url;
+    return `domain:${parsePublicWebUrl(target).hostname.toLowerCase()}`;
 }
 
 export const webFetchTool: Tool<typeof inputSchema> = {
@@ -68,9 +69,9 @@ export const webFetchTool: Tool<typeof inputSchema> = {
     maxResultSizeChars: Infinity,
     isReadOnly: () => true,
     isConcurrencySafe: () => true,
-    async checkPermissions({url}) {
+    async checkPermissions({url}, ctx) {
         try {
-            const parsed = parsePublicWebUrl(url);
+            const parsed = parsePublicWebUrl(ctx.webSources.resolveUrl(url));
             return {
                 behavior: "ask",
                 message: `Network access required to read public content from ${parsed.hostname} .`,
@@ -93,6 +94,7 @@ export const webFetchTool: Tool<typeof inputSchema> = {
     },
     async execute({url, max_chars, refresh}, ctx, invocation) {
         ctx.signal.throwIfAborted();
+        url = ctx.webSources.resolveUrl(url);
         if (refresh) ctx.webSources.forget(url);
         const cached = ctx.webSources.get(url);
         const saved = cached && await ctx.toolResultStore.resolveFile(cached.result.path).catch((error: unknown) => {
@@ -118,11 +120,13 @@ export const webFetchTool: Tool<typeof inputSchema> = {
             response.status >= 300 && response.status < 400 &&
             response.redirectUrl
         ) {
+            const target = parsePublicWebUrl(response.redirectUrl).toString();
+            const reference = ctx.webSources.rememberRedirect(target);
             return [
                 `Cross-domain redirect was not followed automatically (HTTP ${response.status}).`,
                 `Original URL: ${displayWebUrl(response.url)}`,
                 `Target URL: ${displayWebUrl(response.redirectUrl)}`,
-                "To continue, call web_fetch on the target URL to check and authorize the new domain separately.",
+                `To continue, call web_fetch with url=${JSON.stringify(reference)} to check and authorize the new domain separately. This Session reference preserves the exact target without exposing query values.`,
             ].join("\n");
         }
         const octetStream = response.contentType.split(";", 1)[0]!.trim().toLowerCase() === "application/octet-stream";
@@ -182,7 +186,7 @@ export const webFetchTool: Tool<typeof inputSchema> = {
             } catch (error) {
                 return {
                     content: buildPersistFailureMessage("web_fetch", content.slice(0, Math.min(max_chars, ctx.toolResultStore.previewChars)), error),
-                    outcome: response.status >= 400 ? "failed" : "ok",
+                    outcome: response.status >= 400 ? "failed" : "output_failed",
                 };
             }
         }

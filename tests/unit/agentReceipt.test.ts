@@ -4,7 +4,7 @@ import {createAgentReceipt} from "../../src/tools/agent/receipt.js";
 import {SessionUIEventCollector} from "../../src/session/uiEventCollector.js";
 import {decodeSessionContentBlock} from "../../src/session/codec.js";
 import {threadsFromHistory} from "../../src/ui/conversation/threadReducer.js";
-import {toolFileChanges} from "../../src/fileChanges/types.js";
+import {toolFileChanges} from "../../src/toolResults/uiData.js";
 
 test("Agent receipts survive the normal event codec and history restoration without becoming file changes", () => {
     const collector = new SessionUIEventCollector();

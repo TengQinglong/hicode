@@ -63,6 +63,7 @@ export function buildPersistFailureMessage(
     return [
         `<persisted-output-error tool=${JSON.stringify(toolName)}>`,
         `Output was too large, but the complete result could not be saved: ${message}`,
+        "This is an output delivery failure. Any completed operation and its side effects have not been rolled back. Inspect the current state before retrying; do not rerun a mutating operation merely to recover its output.",
         "",
         "Bounded preview:",
         escapeProtocolText(preview),

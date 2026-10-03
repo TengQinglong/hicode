@@ -10,7 +10,7 @@ import {createRootSessionRuntime} from "../../src/runtime/sessionRuntime.js";
 import {runRootTurn} from "../../src/runtime/turnRuntime.js";
 import {createSDKThread} from "../../src/sdk/thread.js";
 import {loadSession} from "../../src/session/index.js";
-import {createChildTaskAccess} from "../../src/tasks/childAccess.js";
+import {createTestToolResultStore} from "../helpers/toolResultStore.js";
 import type {ShellRunnerLike} from "../../src/tools/bash/shellRunner.js";
 import {runAgentForTest} from "../helpers/agent.js";
 import {continuityHost} from "../helpers/continuity.js";
@@ -300,7 +300,7 @@ test("SDK finite continuation is available while services stay disabled; Thread.
 test("child default continuation cannot wait for or stop parent Shells", async () => {
     await withTempProject(async cwd => {
         const {resources, tasks, ctx} = fixture(cwd);
-        const child = createChildTaskAccess(tasks, ctx.toolResultStore).tasks;
+        const child = tasks.createChildShellSession(createTestToolResultStore(cwd, "child"));
         try {
             const parent = await tasks.startShell({command: "sleep 30", cwd, toolCallId: "parent"});
             const own = await child.runShell({command: "sleep 0.3; printf child", cwd, toolCallId: "child", waitMs: 100,
@@ -320,7 +320,7 @@ test("output promotion failure preserves real exit and returns a failed delivery
         try {
             const start = await executeToolResult("bash", '{"command":"sleep 0.3; printf done","yield_time_ms":100}', ctx, "storage");
             const result = await executeToolResult("task", JSON.stringify({action: "wait", task_id: start.runningTask}), ctx, "wait");
-            expect(result.outcome).toBe("failed");
+            expect(result.outcome).toBe("output_failed");
             expect(result.modelContent).toContain("exit code 0");
             expect(result.modelContent).toContain("fixture storage failure");
             expect((await tasks.get(start.runningTask!))?.status).toBe("failed");
@@ -334,7 +334,7 @@ test("startup service output failure is visible alongside captured output and re
         ctx.toolResultStore.promoteFile = async () => {throw new Error("fixture storage failure");};
         try {
             const result = await executeToolResult("bash", '{"command":"printf captured","run_in_background":true}', ctx, "failed-output");
-            expect(result.outcome).toBe("failed");
+            expect(result.outcome).toBe("output_failed");
             expect(result.modelContent).toContain("captured");
             expect(result.modelContent).toContain("exit 0");
             expect(result.modelContent).toContain("fixture storage failure");

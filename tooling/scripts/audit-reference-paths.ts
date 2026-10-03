@@ -5,8 +5,8 @@ const root = process.cwd();
 const referenceRoot = resolve(root, "docs/reference");
 const findings: string[] = [];
 
-function existsSourceReference(value: string): boolean {
-    const target = resolve(root, value);
+function existsSourceReference(value: string, sourceRoot: string): boolean {
+    const target = resolve(sourceRoot, value);
     if (existsSync(target)) return true;
     if (!value.endsWith(".js")) return false;
     const withoutExtension = target.slice(0, -3);
@@ -16,6 +16,9 @@ function existsSourceReference(value: string): boolean {
 for (const name of readdirSync(referenceRoot).filter((file) => file.endsWith(".md"))) {
     const file = resolve(referenceRoot, name);
     const content = readFileSync(file, "utf8");
+    const declaredRoot = content.match(/^<!-- source-root: (.+) -->$/m)?.[1];
+    const sourceRoot = declaredRoot ? resolve(dirname(file), declaredRoot) : root;
+    if (!existsSync(sourceRoot)) findings.push(`${name}: 不存在的源码基准 ${sourceRoot}`);
     const lines = content.split("\n");
     for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index]!;
@@ -30,7 +33,7 @@ for (const name of readdirSync(referenceRoot).filter((file) => file.endsWith(".m
         for (const match of line.matchAll(/`(src\/[^`\s]+)`/g)) {
             const path = match[1]!.replace(/[,:;.)]+$/, "");
             if (/[<>{}*]/.test(path)) continue;
-            if (!existsSourceReference(path)) {
+            if (!existsSourceReference(path, sourceRoot)) {
                 findings.push(`${name}:${index + 1} 不存在的源码路径 ${path}`);
             }
         }

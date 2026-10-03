@@ -506,9 +506,7 @@ class SDKThreadImpl implements SessionThread {
         }
         try {
             await active?.settled;
-            await Promise.all((await this.options.session.taskSession.list())
-                .filter(task => task.kind === "shell" && task.status === "running")
-                .map(task => this.options.session.taskSession.stop(task.id)));
+            await this.options.session.taskSession.close();
             try {
                 const result = await this.options.session.runSessionEnd(
                     this.lastEndReason

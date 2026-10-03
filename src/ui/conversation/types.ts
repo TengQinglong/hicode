@@ -1,7 +1,8 @@
 import type {HookExecution} from "../../hooks/types.js";
 import type {PersistedToolResult, ToolOutcome} from "../../toolResults/index.js";
 import type {AgentType} from "../../subagents/types.js";
-import type {FileChange, ToolUIData} from "../../fileChanges/index.js";
+import type {FileChange} from "../../fileChanges/index.js";
+import type {ToolUIData} from "../../toolResults/uiData.js";
 
 export type UIThread =
     | {id: string; role: "hook"; status: "running" | "done";

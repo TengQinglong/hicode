@@ -1,8 +1,9 @@
+import type {ToolOutcome} from "../toolResults/types.js";
 import type {HookLifecycleEvent, HookInput} from "../hooks/types.js";
 import type {TurnAbortReason} from "../runtime/abort.js";
 import type {PersistedToolResult} from "../toolResults/index.js";
 import type {AgentType} from "../subagents/types.js";
-import type {ToolUIData} from "../fileChanges/index.js";
+import type {ToolUIData} from "../toolResults/uiData.js";
 import type {LLMStreamProgress} from "../llm/types.js";
 import type {MemoryChange} from "../memory/types.js";
 import type {Todo} from "../todos.js";
@@ -82,7 +83,7 @@ export type AgentEvent =
         turnId: string;
         toolCallId: string;
         result: string;
-        outcome?: "ok" | "failed" | "denied" | "interrupted";
+        outcome?: ToolOutcome;
         persisted?: PersistedToolResult;
         uiData?: ToolUIData;
         completedTask?: import("../tasks/types.js").TaskResultReceipt;

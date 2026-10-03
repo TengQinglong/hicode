@@ -1,5 +1,5 @@
 import {contentText} from "../images/content.js";
-import {toolFileChanges} from "../fileChanges/index.js";
+import {toolFileChanges} from "../toolResults/uiData.js";
 import {randomUUID} from "node:crypto";
 import {formatHookContext} from "../hooks/index.js";
 import {
@@ -14,7 +14,7 @@ import {formatInterruptedToolResult} from "../tools/registry.js";
 import type {ToolContext} from "../tools/types.js";
 import type {AgentEvent} from "./types.js";
 import type {Message, ToolCall} from "../llm/types.js";
-import type {ToolUIData} from "../fileChanges/index.js";
+import type {ToolUIData} from "../toolResults/uiData.js";
 
 export type ToolExecutor = (
     name: string,

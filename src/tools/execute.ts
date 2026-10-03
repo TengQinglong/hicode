@@ -1,4 +1,4 @@
-import {toolFileChanges} from "../fileChanges/index.js";
+import {toolFileChanges} from "../toolResults/uiData.js";
 import {requestApproval, type ApprovalResolution} from "../permissions/approval.js";
 import {appendContentText, contentText} from "../images/content.js";
 import {HookControlError,  formatHookContext, getHookExecutionIssues, type HookBatchResult, type ToolHookRuntime,} from "../hooks/index.js";

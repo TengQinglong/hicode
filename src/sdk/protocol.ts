@@ -1,3 +1,4 @@
+import type {ToolOutcome} from "../toolResults/types.js";
 import type {ImageReference} from "../images/content.js";
 import type {HookExecution, HookInput} from "../hooks/types.js";
 import type {StopReason} from "../agent/types.js";
@@ -53,7 +54,7 @@ export interface ToolCallItem extends ThreadItemBase {
     resultPath?: string;
     resultByteLength?: number;
     resultComplete?: boolean;
-    outcome?: "ok" | "failed" | "denied" | "interrupted";
+    outcome?: ToolOutcome;
 }
 
 export interface FileChangeItem extends ThreadItemBase {

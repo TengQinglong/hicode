@@ -4,6 +4,7 @@ import {
   applyBatchToolResultBudget,
   processToolOutput,
 } from "../../src/toolResults/index.js";
+import {toolFileChanges} from "../../src/toolResults/uiData.js";
 import { createFileChange } from "../../src/fileChanges/index.js";
 import type { Message } from "../../src/llm/types.js";
 import { withTempProject } from "../helpers/tempProject.js";
@@ -101,10 +102,28 @@ describe("tool result budgets", () => {
         maxResultSizeChars: 100,
         store,
       });
+      expect(result.outcome).toBe("output_failed");
+      expect(result.modelContent).toContain("Operation outcome before output delivery: ok");
       expect(result.persisted).toBeUndefined();
       expect(result.modelContent).toContain("could not be saved");
       expect(result.modelContent.length).toBeLessThan(1_000);
       expect(result.modelContent).not.toContain("q".repeat(100));
     });
   });
+});
+
+
+test("delivery failure preserves committed file changes and non-success outcomes", async () => {
+    await withTempProject(async cwd => {
+        const store = createTestToolResultStore(cwd, "failed-delivery", {maxSessionBytes: 0});
+        const change = createFileChange({path: "a.ts", kind: "update", oldContent: "old", newContent: "new"});
+        for (const outcome of ["ok", "failed", "denied", "interrupted"] as const) {
+            const result = await processToolOutput({store, toolName: "edit_file", toolCallId: outcome, maxResultSizeChars: 1,
+                output: {content: "completed operation output".repeat(100), outcome, uiData: {type: "file_change", change}}});
+            expect(result.outcome).toBe(outcome === "ok" ? "output_failed" : outcome);
+            expect(result.uiData).toEqual(outcome === "ok" ? {type: "file_change", change} : undefined);
+            expect(toolFileChanges(result.uiData, result.outcome)).toEqual(outcome === "ok" ? [change] : []);
+            expect(result.modelContent).toContain(`Operation outcome before output delivery: ${outcome}`);
+        }
+    });
 });

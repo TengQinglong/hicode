@@ -1,3 +1,4 @@
+import {captureApprovalEvidence} from "./evidence.js";
 import {randomUUID} from "node:crypto";
 import type {Message} from "../llm/types.js";
 import type {ToolContext} from "../tools/types.js";
@@ -156,7 +157,7 @@ export async function requestApproval(
             : toolName === "bash" ? "exec" : options.presentation?.kind === "filesystem_access" ? "file" : "tool",
         sessionId: ctx.sessionId, turnId: ctx.turnId, toolCallId, toolName, cwd: ctx.cwd,
         input: structuredClone(input), reason, presentation: options.presentation,
-        evidence: structuredClone(ctx.approvalEvidence?.() ?? []),
+        evidence: captureApprovalEvidence(ctx.approvalEvidence?.() ?? []),
     };
     const emit = async (event: Omit<ApprovalEvent, "type" | "requestId" | "turnId" | "toolCallId" | "source">) => {
         await ctx.onApprovalEvent?.({type: "approval_review", requestId: request.id, turnId: ctx.turnId, toolCallId, source: "auto-review", ...event});
