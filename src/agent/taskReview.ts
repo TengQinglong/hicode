@@ -1,5 +1,6 @@
 import type {QueuedAgentInput} from "./inputChannel.js";
 import {contentText} from "../images/content.js";
+import {toolFileChanges} from "../toolResults/uiData.js";
 import type {Message, UserMessageOrigin} from "../llm/types.js";
 import type {AgentEvent} from "./types.js";
 import type {ToolContext} from "../tools/types.js";
@@ -8,6 +9,28 @@ import type {TaskReviewEvidence, TaskReviewSnapshot} from "../tasks/types.js";
 const INTERVAL = 10;
 const MAX_EVIDENCE_CHARS = 24_000;
 const MAX_ITEM_CHARS = 2_000;
+const OMITTED = "[Evidence omitted: length limit; missing actions and checks are unknown.]";
+
+interface ReviewItem {
+    text: string;
+    source: "tool" | "claim";
+}
+
+function selectEvidence(items: readonly ReviewItem[]): ReviewItem[] {
+    let remaining = MAX_EVIDENCE_CHARS - OMITTED.length - 1;
+    const retained = new Set<ReviewItem>();
+    // Keep recent tool evidence before spending the remaining budget on unverified claims.
+    for (const source of ["tool", "claim"] as const) {
+        for (let index = items.length - 1; index >= 0; index--) {
+            const item = items[index]!;
+            const size = item.text.length + 2;
+            if (item.source !== source || size > remaining) continue;
+            retained.add(item);
+            remaining -= size;
+        }
+    }
+    return items.filter(item => retained.has(item));
+}
 
 function bounded(value: string, limit: number): string {
     if (value.length <= limit) return value;
@@ -17,7 +40,7 @@ function bounded(value: string, limit: number): string {
 
 /** Turn-owned evidence and delivery; execution and cancellation belong to TaskRuntime. */
 export class TaskReviewProgress {
-    private rounds: {round: number; items: string[]}[] = [];
+    private rounds: {round: number; items: ReviewItem[]; omitted: boolean}[] = [];
     private requirements: string[];
     private pending: Promise<TaskReviewSnapshot> | undefined;
     private ready: TaskReviewSnapshot | undefined;
@@ -38,31 +61,42 @@ export class TaskReviewProgress {
     record(event: AgentEvent, round: number): void {
         if (!this.ctx.taskReviewEnabled || !this.ctx.tasks || !("startReview" in this.ctx.tasks)) return;
         let item: string | undefined;
-        if (event.type === "tool_call_start") item = `Tool ${event.name} (${event.toolCallId}) arguments: ${event.args}`;
+        if (event.type === "tool_call_start") item = `Requested tool ${event.name} (${event.toolCallId}) arguments (execution not yet confirmed): ${event.args}`;
         if (event.type === "tool_call_end") item = `Tool result (${event.toolCallId}), outcome=${event.outcome}: ${event.result}`;
-        if (event.type === "assistant_text") item = `Assistant ${event.phase}: ${event.content}`;
-        if (item) this.appendEvidence(round, item);
+        if (event.type === "assistant_text") item = `Assistant ${event.phase} claim (not independently verified): ${event.content}`;
+        if (item) this.appendEvidence(round, item, event.type === "assistant_text" ? "claim" : "tool");
+        if (event.type === "tool_call_end") {
+            for (const change of toolFileChanges(event.uiData, event.outcome)) {
+                const diff = change.hunks.flatMap(hunk => hunk.lines
+                    .filter(line => line.type !== "context")
+                    .map(line => `${line.type === "add" ? "+" : "-"}${line.content}`)).join("\n");
+                this.appendEvidence(round,
+                    `Committed file change (${event.toolCallId}): ${change.kind} ${change.path}; diff=${change.diffStatus}\n${diff}`,
+                    "tool");
+            }
+        }
     }
 
     recordInput(input: QueuedAgentInput, round: number): void {
         if (input.source === "user_input") {this.steer(contentText(input.content)); return;}
-        this.appendEvidence(Math.max(1, round), `${input.source} (${input.id}): ${contentText(input.content)}`);
+        const source = input.source === "task_notification" ? "tool" : "claim";
+        const label = source === "claim" ? "agent_message claim (not independently verified)" : "task_notification";
+        this.appendEvidence(Math.max(1, round), `${label} (${input.id}): ${contentText(input.content)}`, source);
     }
 
-    private appendEvidence(round: number, item: string): void {
+    private appendEvidence(round: number, item: string, source: ReviewItem["source"]): void {
         if (!this.ctx.taskReviewEnabled || !this.ctx.tasks || !("startReview" in this.ctx.tasks)) return;
         let current = this.rounds.at(-1);
         if (!current || current.round !== round) {
-            current = {round, items: []};
+            current = {round, items: [], omitted: false};
             this.rounds.push(current);
             if (this.rounds.length > INTERVAL) this.rounds.shift();
         }
-        current.items.push(bounded(item, MAX_ITEM_CHARS));
-        // A parallel batch can be arbitrarily large; do not retain unbounded event copies.
-        while (current.items.join("\n").length > MAX_EVIDENCE_CHARS) {
-            current.items.splice(current.items[0]?.startsWith("[Evidence omitted") ? 1 : 0, 1);
-            if (!current.items[0]?.startsWith("[Evidence omitted")) current.items.unshift("[Evidence omitted: large tool batch]");
-        }
+        current.items.push({text: bounded(`Round ${round}:\n${item}`, MAX_ITEM_CHARS), source});
+        // Bound even a single large tool batch, without allowing commentary to evict its results.
+        const retained = selectEvidence(current.items);
+        current.omitted ||= retained.length < current.items.length;
+        current.items = retained;
     }
 
     steer(input: string): void {
@@ -79,10 +113,13 @@ export class TaskReviewProgress {
             !this.ctx.tasks || !("startReview" in this.ctx.tasks)) return;
         const fromRound = round - INTERVAL + 1;
         const selected = this.rounds.filter(item => item.round >= fromRound);
+        const items = selected.flatMap(item => item.items);
+        const retained = selectEvidence(items);
+        const omitted = selected.some(item => item.omitted) || retained.length < items.length;
         const evidence: TaskReviewEvidence = Object.freeze({
             fromRound, toRound: round,
             requirements: this.requirements.join("\n\n") + (this.omittedRequirements ? "\n[Earlier user updates omitted: requirements may be incomplete]" : ""),
-            activity: bounded(selected.map(item => `Round ${item.round}:\n${item.items.join("\n")}`).join("\n\n"), MAX_EVIDENCE_CHARS),
+            activity: (omitted ? `${OMITTED}\n` : "") + retained.map(item => item.text).join("\n\n"),
         });
         const revision = this.revision;
         const operation = this.ctx.tasks.startReview({parentContext: this.ctx, evidence,

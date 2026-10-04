@@ -88,6 +88,23 @@ class ActorFilesystemTest(unittest.TestCase):
         self.assertEqual(args[args.index('/run/a/public')-1],'--ro-bind')
         self.assertEqual(args[args.index('/run/a/public')+1],'/tests')
 
+    def test_tex_runtime_mounts_are_read_only_and_do_not_expose_parent_state(self):
+        from protocol import actor_readonly_mounts
+        release = Path('/opt/hicode/releases/' + 'a' * 64)
+        def resolve(path, strict=False):
+            return Path('/opt/hicode/node_modules') if path == release/'node_modules' else path
+        with patch.object(Path, 'exists', return_value=True), \
+             patch.object(Path, 'is_dir', return_value=True), \
+             patch.object(Path, 'is_symlink', return_value=False), \
+             patch.object(Path, 'resolve', resolve):
+            args = actor_readonly_mounts(release, None)
+        mounts = [args[i:i+3] for i in range(0, len(args), 3)]
+        self.assertIn(['--ro-bind', '/etc/texmf', '/etc/texmf'], mounts)
+        self.assertIn(['--ro-bind', '/var/lib/texmf', '/var/lib/texmf'], mounts)
+        for parent in ['/etc', '/var', '/var/lib', '/eval', '/root']:
+            self.assertNotIn(parent, args)
+        self.assertNotIn('--bind', args)
+
     def test_incomplete_or_mixed_actor_views_fail_closed(self):
         for options in [{'actor_release':'/release'},{'actor_events':'/events'},
                         {'actor_release':'/release','actor_events':'/events','root_overlay':True},

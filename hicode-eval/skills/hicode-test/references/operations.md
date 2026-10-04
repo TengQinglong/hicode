@@ -68,7 +68,7 @@ recover 用于 needs_recovery，证据不足会拒绝；resume 只恢复既有�
 
 周期收集失败见 `collection-error.txt`，不能仅据此判断 Agent 执行失败。快照中的符号链接只记录目标文本，不应解引用读取宿主文件。FEAL 编译只使用封存后的独立测试副本；Headless 临时根只用于判题。判题依赖准备失败是 unavailable，不能计作模型答错。
 
-准备新题使用外部审定题包，先 register-tasks，再 prepare-environments --ids ID1,ID2；缺 SWE 配方先补充 config/environment-recipes 并验证。评测器不生成原始 SWE 题包，不向准备容器安装题目依赖。公开输入和隐藏判题材料保持分离。源码调整后验证并冻结新 payload，再提交测试。
+选题、镜像准备及等待源码完成的交接步骤见 [准备流程](preparation.md)。准备记录与真实运行记录分开，只有提交成功才有 batch/run ID。
 
 ## 已完成 SWE 的仅验收复核
 
@@ -78,3 +78,5 @@ recover 用于 needs_recovery，证据不足会拒绝；resume 只恢复既有�
 成绩台账与清理独立：`catalog.json` 保留累计通过和尝试摘要，`run-archive/` 保留精简补丁和判题依据。`environment.json` 是该次实际镜像层身份，`environments/preparation-report.json` 区分已准备、失败和缺题包。`catalog` 的 environmentPrepared 表示已有回执，运行前还会验证源内容和镜像。
 
 用户主动要求单题重跑时：`bash hicode-eval/eval.sh retry --run "$HE_RUN" --port "$HE_PORT"`。返回关联原 run 的新单题 batch；原批次统计不改变。重复调用相同原 run 返回同一后继。模型/payload 不匹配时需恢复原服务配置；不要通过改写原状态绕过限制。
+
+补判的网络修复可显式使用 `regrade --verifier-proxy http://HOST:PORT`。仅接受无凭据 HTTP(S) origin，代理只进入该次 verifier，localhost 测试服务器仍直连，Actor/模型网关不受影响。保留原 URL、TLS 校验、测试断言与封存答案；不可为通过而伪造网页响应。环境修正后的补判成绩单独记录，不静默覆盖原 run。

@@ -40,13 +40,32 @@ class OfficialTestReplay(unittest.TestCase):
         self.assertEqual(paths,['tests/new.py','tests/old.py']);self.assertEqual((self.repo/'tests/old.py').read_text(),'original\n');self.assertFalse((self.repo/'tests/new.py').exists())
         git(['apply','-'],self.repo,text.encode())
         self.assertEqual((self.repo/'tests/new.py').read_text(),'official new\n');self.assertEqual((self.repo/'production.py').read_text(),'model production\n');self.assertEqual(text,before)
-    def test_symlink_parent_and_production_paths_rejected_before_any_reset(self):
+    def test_symlink_parent_and_git_metadata_rejected_before_any_reset(self):
         text=self.official_patch();shutil.rmtree(self.repo/'tests');(self.repo/'tests').symlink_to(self.root)
         with self.assertRaisesRegex(ValueError,'safe directory'):restore_official_test_paths(self.repo,self.base,text)
         (self.repo/'tests').unlink();(self.repo/'tests').mkdir();(self.repo/'tests/old.py').write_text('unchanged\n')
-        bad=text.replace('tests/new.py','production.py')
+        bad=text.replace('tests/new.py','.git/config')
         with self.assertRaisesRegex(ValueError,'boundaries'):restore_official_test_paths(self.repo,self.base,bad)
         self.assertEqual((self.repo/'tests/old.py').read_text(),'unchanged\n')
+    def test_official_support_paths_replayed_without_resetting_unrelated_model_changes(self):
+        (self.repo/'library').mkdir()
+        (self.repo/'library/helper.py').write_text('baseline helper\n')
+        git(['add','-A'],self.repo);git(['commit','-qm','support baseline'],self.repo)
+        base=git(['rev-parse','HEAD'],self.repo).decode().strip()
+        (self.repo/'library/helper.py').write_text('official helper\n')
+        (self.repo/'root_fixture.py').write_text('official fixture\n')
+        git(['add','-A'],self.repo)
+        text=git(['diff','--cached','--binary',base],self.repo).decode()
+        git(['reset','--hard',base],self.repo)
+        (self.repo/'library/helper.py').write_text('model helper\n')
+        (self.repo/'root_fixture.py').write_text('model fixture\n')
+        (self.repo/'production.py').write_text('model fix\n')
+        self.assertEqual(restore_official_test_paths(self.repo,base,text),
+                         ['library/helper.py','root_fixture.py'])
+        git(['apply','-'],self.repo,text.encode())
+        self.assertEqual((self.repo/'library/helper.py').read_text(),'official helper\n')
+        self.assertEqual((self.repo/'root_fixture.py').read_text(),'official fixture\n')
+        self.assertEqual((self.repo/'production.py').read_text(),'model fix\n')
     def test_model_symlink_at_test_file_is_removed_without_reading_target(self):
         text=self.official_patch();(self.repo/'tests/new.py').symlink_to('/etc/passwd')
         restore_official_test_paths(self.repo,self.base,text);git(['apply','-'],self.repo,text.encode())
@@ -69,6 +88,17 @@ class OfficialTestReplay(unittest.TestCase):
             self.assertFalse(verification_validity(spec,status,parsed,code)[0])
         self.assertTrue(verification_validity(spec,{'target':'FAILED','regression':'PASSED'},True,1)[0])
         self.assertTrue(verification_validity(spec,{'target':'PASSED','regression':'PASSED'},True,0)[0])
+
+    def test_recheck_proxy_preserves_local_test_servers_and_rejects_credentials(self):
+        from swe import verifier_proxy_environment
+        self.assertEqual(verifier_proxy_environment(None), {})
+        env = verifier_proxy_environment('http://host.lima.internal:7890')
+        self.assertEqual(env['HTTPS_PROXY'], 'http://host.lima.internal:7890')
+        self.assertEqual(env['NO_PROXY'], 'localhost,127.0.0.1,::1')
+        for value in ['socks5://host:7890', 'http://user:secret@host', 'http://host/path',
+                      'http://host?key=secret', 'http://host\n', 1]:
+            with self.assertRaises(ValueError):
+                verifier_proxy_environment(value)
     def test_pytest_scm_uses_original_base_ancestry_for_install_and_grading(self):
         receipt={'baseCommit':'a'*40,'describe':'7.1.2-80-gaa55975','version':'7.1.3.dev80+gaa55975'}
         (self.repo/'.git/hicode-source-version.json').write_text(json.dumps(receipt))

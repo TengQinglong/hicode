@@ -12,6 +12,7 @@ import tempfile
 import time
 import re
 import ast
+from urllib.parse import urlsplit
 from protocol import atomic_json, namespace_argv
 
 from venv_paths import ENV_MOUNT
@@ -95,6 +96,29 @@ def export_patch(baseline, final):
             if child.is_dir() and not child.is_symlink(): shutil.rmtree(child)
             else: child.unlink()
         other = Path(tmp) / 'final'; snapshot(final, other)
+        # Only new, recognizable runtime artifacts are omitted. Existing
+        # fixtures and arbitrary new source files ignore Actor .gitignore rules.
+        baseline_paths = set()
+        for directory, names, files in os.walk(baseline, followlinks=False):
+            baseline_paths.update((Path(directory) / name).relative_to(baseline)
+                                  for name in [*names, *files])
+        for name, marker, prefix in [
+                ('.pytest_cache', 'CACHEDIR.TAG', b'Signature: 8a477f597d28d172789f06886806bc55'),
+                ('.hypothesis', '.gitignore', b'# Automatically created by Hypothesis')]:
+            path = other / name
+            signature = path / marker
+            if (Path(name) not in baseline_paths and path.is_dir() and not path.is_symlink() and
+                    signature.is_file() and not signature.is_symlink() and
+                    signature.stat().st_size < 4096 and signature.read_bytes().startswith(prefix)):
+                shutil.rmtree(path)
+        for directory, _, files in os.walk(other, followlinks=False):
+            parent = Path(directory)
+            if parent.name != '__pycache__':
+                continue
+            for name in files:
+                path = parent / name
+                if name.endswith(('.pyc', '.pyo')) and path.relative_to(other) not in baseline_paths:
+                    path.unlink()
         for child in other.iterdir(): shutil.move(str(child), str(trusted / child.name))
         git(['add', '-f', '-A'], trusted)
         return git(['diff', '--cached', '--binary', '--full-index', '--no-ext-diff', '--no-textconv', 'HEAD', '--'], trusted).decode('utf-8', errors='strict')
@@ -166,7 +190,7 @@ def namespace_eval_commands(commands, repo, version):
             # Rebuilding in an isolated env would resolve another toolchain.
             result.append('python -m pip install --no-deps --no-build-isolation -e .')
             continue
-        if (repo=='django/django' and version=='3.2' and
+        if (repo=='django/django' and version in {'3.0', '3.1', '3.2'} and
             command=="sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen"):
             # Locale generation belongs to trusted preparation. The read-only
             # grader checks that same precondition instead of writing /etc.
@@ -195,7 +219,7 @@ def xarray_arm_reporting(project):
 
 
 def official_test_paths(patch, project):
-    """Use Git's binary/quoted path parser, then restrict resets to test files."""
+    """Confine the frozen official patch to repository paths, regardless of directory name."""
     if not isinstance(patch, str) or not patch or len(patch.encode()) > 4 * 1024 * 1024:
         raise ValueError('Invalid official test patch')
     fields = git(['apply', '--numstat', '-z', '-'], project, patch.encode()).split(b'\0')
@@ -213,9 +237,8 @@ def official_test_paths(patch, project):
             path = Path(value)
             if (path.is_absolute() or not value or str(path) != value or
                     any(c in value for c in '\0\n\r\t') or
-                    any(p in {'.', '..', '.git'} for p in path.parts) or
-                    not any(p in {'tests', 'testing'} for p in path.parts[:-1])):
-                raise ValueError('Official patch path is outside test boundaries: ' + repr(value))
+                    any(p in {'.', '..', '.git'} for p in path.parts)):
+                raise ValueError('Official patch path is outside repository boundaries: ' + repr(value))
             paths.append(value)
     if not paths: raise ValueError('Official patch has no test paths')
     return sorted(set(paths))
@@ -239,7 +262,8 @@ def restore_official_test_paths(project, baseline_commit, patch):
             if not entry.startswith((b'100644 blob ', b'100755 blob ')):
                 raise ValueError('Official test baseline is not a regular file: ' + name)
             tracked.append(name)
-    # Validate every path first. Never reset the repository or unrelated production code.
+    # The Host-validated official patch may include test support inside the library.
+    # Reset only its declared paths, never the whole tree or unrelated model changes.
     for name in paths:
         target = project / name
         if target.is_symlink() or target.is_file(): target.unlink()
@@ -275,12 +299,100 @@ def controlled_eval_script(commands, baseline_commit, test_patch):
             '\n)\nhicode_test_exit=$?\n' + end + '\nexit "$hicode_test_exit"\n')
 
 
+def normalize_django_log(log, expected):
+    """Append canonical unittest outcomes for the upstream parser; keep raw output intact."""
+    start_marker, end_marker = '>>>>> Start Test Output', '>>>>> End Test Output'
+    if log.count(start_marker) != 1 or log.count(end_marker) != 1:
+        return log
+    start, end = log.index(start_marker) + len(start_marker), log.index(end_marker)
+    if start >= end:
+        return log
+    wanted = set(expected)
+    statuses = {}
+    aliases = {}
+    current = None
+    failure = None
+    header = re.compile(r'(test\S* \([^()\n]+\))')
+    priority = {'PASSED': 0, 'SKIPPED': 1, 'FAILED': 2, 'ERROR': 3}
+    body_errors = set()
+    for section in re.split(r'^=+\s*$', log[start:end], flags=re.MULTILINE):
+        error = re.match(r'\s*ERROR: (test\S* \([^()\n]+\))', section)
+        if not error:
+            continue
+        name = error.group(1)
+        method = name.split(' ', 1)[0]
+        # A named case with its own test-body frame has executed and failed.
+        # Loader, setUp and tearDown errors remain unavailable; error wording
+        # (AttributeError, SQL errors, etc.) is not used to guess attribution.
+        frame = r'^  File "/testbed/tests/[^"\n]+", line \d+, in ' + re.escape(method) + r'\s*$'
+        if re.search(frame, section, re.MULTILINE):
+            body_errors.add(name)
+
+    def record(name, status):
+        if name and priority[status] >= priority.get(statuses.get(name), -1):
+            statuses[name] = status
+
+    for raw in log[start:end].splitlines():
+        line = raw.strip()
+        detail = re.match(r'^(FAIL|ERROR): (test\S* \([^()\n]+\))', line)
+        if detail:
+            current = detail.group(2)
+            failure = 'FAILED' if detail.group(1) == 'FAIL' else 'ERROR'
+            record(current, failure)
+            for alias in aliases.get(current, ()):
+                record(alias, failure)
+            continue
+        # A failed subTest has no inline verdict: the next test can start on the
+        # same line. Only the last test on that line owns its trailing verdict.
+        matches = [match for match in header.finditer(line)
+                   if match.start() == 0 or line[:match.start()].endswith(' ... ')]
+        if matches:
+            description = line.split(' ... ', 1)[0]
+            if matches[0].start() and current and description in wanted:
+                aliases.setdefault(current, set()).add(description)
+            current = matches[-1].group(1)
+            failure = None
+            tail = line[matches[-1].end():].strip()
+        else:
+            tail = line
+            description = line.split(' ... ', 1)[0]
+            if current and description in wanted:
+                aliases.setdefault(current, set()).add(description)
+                if failure:
+                    record(description, failure)
+        verdict = re.fullmatch(r'(?:\.\.\.\s+)?(ok|OK|FAIL|ERROR|skipped(?:\s+.*)?)', tail)
+        if verdict and current and not failure:
+            value = verdict.group(1)
+            status = ('PASSED' if value in ('ok', 'OK') else
+                      'SKIPPED' if value.startswith('skipped') else
+                      'FAILED' if value == 'FAIL' else 'ERROR')
+            record(current, status)
+            for alias in aliases.get(current, ()):
+                record(alias, status)
+            current = None
+        elif ' ... ' in tail and current and not failure:
+            # Descriptive test IDs occupy a separate line in unittest output.
+            description, value = tail.rsplit(' ... ', 1)
+            if description in wanted and value in ('ok', 'OK', 'FAIL', 'ERROR'):
+                status = {'ok': 'PASSED', 'OK': 'PASSED', 'FAIL': 'FAILED', 'ERROR': 'ERROR'}[value]
+                record(current, status)
+                record(description, status)
+                current = None
+    suffix = {'PASSED': 'ok', 'FAILED': 'FAIL', 'ERROR': 'ERROR', 'SKIPPED': 'skipped'}
+    for name in body_errors:
+        for alias in {name, *aliases.get(name, ())}:
+            if statuses.get(alias) == 'ERROR':
+                statuses[alias] = 'FAILED'
+    recovered = [f'{name} ... {suffix[statuses[name]]}' for name in sorted(wanted) if name in statuses]
+    return log[:end] + '\n\n' + '\n'.join(recovered) + '\n' + log[end:] if recovered else log
+
+
 def verification_validity(spec, statuses, parsed, exit_code):
     expected = list(dict.fromkeys([*spec.FAIL_TO_PASS, *spec.PASS_TO_PASS]))
     if not spec.FAIL_TO_PASS or not parsed or exit_code not in (0, 1):
         return False, 'Original verifier did not start or finish normally'
-    absent = [name for name in expected if statuses.get(name) not in {'PASSED', 'FAILED'}]
-    if absent: return False, 'Original target/regression tests not executed: ' + ', '.join(absent[:8])
+    unresolved = [name for name in expected if statuses.get(name) not in {'PASSED', 'FAILED'}]
+    if unresolved: return False, 'Original target/regression results are missing, skipped, or errored: ' + ', '.join(unresolved[:8])
     return True, None
 
 
@@ -307,6 +419,20 @@ def verifier_log_directory(root):
     return logs
 
 
+def verifier_proxy_environment(proxy):
+    if proxy is None:
+        return {}
+    if not isinstance(proxy, str) or len(proxy) > 2048:
+        raise ValueError('Invalid verifier proxy')
+    url = urlsplit(proxy)
+    if (url.scheme not in {'http', 'https'} or not url.hostname or url.username is not None or
+            url.password is not None or url.path not in {'', '/'} or url.query or url.fragment or
+            any(c.isspace() or ord(c) < 32 for c in proxy)):
+        raise ValueError('Verifier proxy must be an HTTP(S) origin without credentials')
+    # Original suites run local HTTP servers; they must never traverse the proxy.
+    return {'HTTP_PROXY': proxy, 'HTTPS_PROXY': proxy, 'NO_PROXY': 'localhost,127.0.0.1,::1'}
+
+
 def grade_swe_patch(root, config, uid, gid, cancelled, patch):
     """Replay an immutable prediction in a fresh Host-owned grading workspace."""
     root = Path(root)
@@ -326,6 +452,7 @@ def grade_swe_patch(root, config, uid, gid, cancelled, patch):
     env = {'PATH': ENV_MOUNT+'/bin:'+os.environ['PATH'], 'HOME': str(grade_home), 'LANG': 'C.UTF-8',
            'VIRTUAL_ENV': ENV_MOUNT, 'PYTHONDONTWRITEBYTECODE':'1', 'PIP_DISABLE_PIP_VERSION_CHECK':'1'}
     env.update(project_environment(config['swe']['repo'],root/'baseline'))
+    env.update(verifier_proxy_environment(config.get('verifierProxy')))
     if config['swe']['repo'] in {'pydata/xarray', 'pytest-dev/pytest'}:
         from scm import read_source_version
         read_source_version(root/'baseline', config['swe']['baseCommit'])
@@ -371,12 +498,17 @@ def grade_swe_patch(root, config, uid, gid, cancelled, patch):
     argv = namespace_argv(['bash','/tests/eval.sh'], work, grade_home, root/'logs', root/'control-placeholder',
                           root/'tests', workdir='/testbed', environment=grade_env, readonly_logs=True)
     code = supervise(argv, output=logs/'output.txt', timeout=config['verifierSeconds'], env=env, cwd=work, demote=demote, cancelled=cancelled)
-    statuses, parsed = get_logs_eval(spec, str(logs/'output.txt'))
+    parsed_output = logs/'output.txt'
+    if row['repo'] == 'django/django':
+        parsed_output = logs/'parsed-output.txt'
+        parsed_output.write_text(normalize_django_log((logs/'output.txt').read_text(),
+                                                     [*spec.FAIL_TO_PASS, *spec.PASS_TO_PASS]))
+    statuses, parsed = get_logs_eval(spec, str(parsed_output))
     valid, reason = verification_validity(spec, statuses, parsed, code)
     atomic_json(logs/'validity.json', {'valid': valid, 'reason': reason, 'exitCode': code,
                 'targetTests': spec.FAIL_TO_PASS, 'regressionTests': spec.PASS_TO_PASS,
                 'actual': {name: statuses.get(name) for name in [*spec.FAIL_TO_PASS, *spec.PASS_TO_PASS]}})
-    report = get_eval_report(spec, prediction, str(logs/'output.txt'), include_tests_status=True)
+    report = get_eval_report(spec, prediction, str(parsed_output), include_tests_status=True)
     atomic_json(logs/'report.json', report)
     if not valid: return 'unavailable', reason + '; see verifier/output.txt and validity.json.'
     item = report[prediction['instance_id']]

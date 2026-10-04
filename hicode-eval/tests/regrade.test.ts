@@ -48,6 +48,25 @@ test('corrupted or redirected archived patches fail before Linux grading',async(
  }finally{lock.mockRestore();execute.mockRestore();await rm(f.data,{recursive:true,force:true});}
 });
 
+test('explicit verifier proxy is recorded only in the independent recheck',async()=>{
+ const f=await fixture();const lock=spyOn(leases,'lease').mockResolvedValue(async()=>{});
+ const proxy='http://host.lima.internal:7890';
+ const execute=spyOn(LinuxMachine.prototype,'regrade').mockImplementation(async(run,_review,_task,_patch,_inputTask,input,output)=>{
+  expect(input.verifierProxy).toBe(proxy);
+  expect(JSON.parse(await readFile(join(output,'input.json'),'utf8')).verifierProxy).toBe(proxy);
+  await save(join(output,'result.json'),{version:1,runId:run,instanceId:f.id,patchSha256:f.sha256,grading:'failed',reason:'test failure',originalExecution:'completed',modelCalls:0});
+ });
+ try{
+  const config=await readFile(join(f.data,'config.json'),'utf8');
+  await regradeRun(f.data,f.run,proxy);
+  expect(await readFile(join(f.data,'config.json'),'utf8')).toBe(config);
+  for(const invalid of ['socks5://host:7890','http://user:secret@host:7890','http://host/path','http://host/?key=secret','http://host\n']){
+   await expect(regradeRun(f.data,f.run,invalid)).rejects.toThrow();
+  }
+  expect(execute).toHaveBeenCalledTimes(1);
+ }finally{lock.mockRestore();execute.mockRestore();await rm(f.data,{recursive:true,force:true});}
+});
+
 test('sealed prediction recovers a patch missing only because verifier setup never began',async()=>{
  const f=await fixture();const lock=spyOn(leases,'lease').mockResolvedValue(async()=>{});
  const execute=spyOn(LinuxMachine.prototype,'regrade').mockImplementation(async(run,_review,_task,patch,_inputTask,_input,output)=>{

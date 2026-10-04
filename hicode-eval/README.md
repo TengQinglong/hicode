@@ -216,13 +216,13 @@ bash hicode-eval/eval.sh register-tasks --catalog CATALOG --swe-tasks PREPARED_S
 bash hicode-eval/eval.sh prepare-environments --catalog CATALOG --environments ENVIRONMENTS --ids TASK_ID
 ```
 
-依赖只通过 `config/environment-recipes/` 和可选特殊准备层构建；题包校验通过不代表已有可用依赖镜像。当前仅提供已验证的四组 SWE 配方，其他组合逐组审定、补齐并验证，不因历史通过就视为就绪。
+依赖只通过 `config/environment-recipes/` 和可选特殊准备层构建；题包校验通过不代表已有可用依赖镜像。现有 SWE 配方及其可用性以生产校验为准，其他组合逐组审定、补齐并验证，不因历史通过就视为就绪。
 
 - Agent 仅收到原始题面、指定 base code、仓库自带公开测试和各题独立的 Python 环境，工作目录 `/testbed`。不提供 gold patch、hints、隐藏 test patch 或评分测试名单。
-- Agent 结束或超时后先停止该题所有进程，再由宿主读取实际文件，以受保护的安装基线导出新增、修改、删除、二进制及可执行位变化。忽略 Agent 控制的 Git/index/hooks，不采信模型自报补丁。
+- Agent 结束或超时后先停止该题所有进程，再由宿主读取实际文件，以受保护的安装基线导出新增、修改、删除、二进制及可执行位变化。忽略 Agent 控制的 Git/index/hooks，不采信模型自报补丁。新增且可识别的运行缓存不进入提交补丁，已有夹具与新增源码保留，完整现场仍归档。
 - `prediction.json` 使用官方 `instance_id`、`model_name_or_path`、`model_patch` 字段；`patch-manifest.json` 记录原 base commit、安装基线 commit、数据 revision 和补丁哈希。
 - 在干净代码、独立依赖和新 Home 中重放补丁，原 hidden test patch 仅此时进入判题视图。使用官方 4.1.0 的对应仓库测试命令、日志解析和 FAIL_TO_PASS/PASS_TO_PASS 评分；保存原始 `logs/verifier/output.txt` 和 `report.json`，不转换成虚构的 CTRF。
-- 无完整测试输出、初始化失败或判题超时记为 `unavailable`，不误判模型错误；官方回归测试未通过记为 `failed`。恢复只核验已有报告和补丁哈希，不重跑 Agent 或判题。
+- 无完整测试输出、初始化失败或判题超时记为 `unavailable`，不误判模型错误；官方回归测试未通过记为 `failed`。Django 命名测试的异常若有测试正文栈帧，按执行失败记录；加载或 setup/teardown 异常仍保留为 `unavailable`。恢复只核验已有报告和补丁哈希，不重跑 Agent 或判题。
 
 这是 **独立容器研发评测**：使用 venv 替代官方 Conda/实例镜像、从源码归档重建 Git 基线，官方脚本的环境激活及测试文件 reset commit 随之适配，测试、断言和评分规则不变。不能把这些结果表述为官方镜像下的榜单复现。支持范围由题包校验与现有配方共同决定；运行前必须完成新镜像准备和验证。
 
@@ -240,10 +240,10 @@ Xarray 的依赖与编译条件由配方声明。冻结题包必须携带真实�
 在原 run 已完成且证据完整、专用评测机可用时，可运行：
 
 ```bash
-bun hicode-eval/src/cli.ts regrade --data-dir ../hicode-eval-data/runs --run RUN_ID
+bun hicode-eval/src/cli.ts regrade --data-dir ../hicode-eval-data/container-v1 --run RUN_ID
 ```
 
-这个命令校验原 `model.patch` 哈希和冻结题包，重新运行原判题，结果保存在 `runs/RUN_ID/rechecks/REVIEW_ID/`。它不再提交任务或调用模型，也不会覆盖第一次的分数和日志。验收未启动或原目标测试没有实际执行时返回 `unavailable`；需要查看 `logs/verifier/validity.json` 和 `output.txt`。历史复验补齐的依赖及其来源单独写在 `dependency-conditions.json`。
+这个命令校验原 `model.patch` 哈希和冻结题包，重新运行原判题，结果保存在 `runs/RUN_ID/rechecks/REVIEW_ID/`。它不再提交任务或调用模型，也不会覆盖第一次的分数和日志。验收未启动或原目标测试没有实际执行时返回 `unavailable`；需要查看 `logs/verifier/validity.json` 和 `output.txt`。历史复验补齐的依赖及其来源单独写在 `dependency-conditions.json`。 若判题需要现有代理，可追加 `--verifier-proxy http://HOST:PORT`（无凭据的 HTTP(S) origin）；仅本次补判联网使用，localhost 测试服务器绕过代理，Actor 和服务配置不变。
 
 
 ## 环境存档与历史清理
@@ -278,7 +278,7 @@ bun hicode-eval/tests/containerSmoke.ts --catalog CATALOG --environments ENVIRON
 
 干净构建回执使用 version 2，记录 `recipeSha256`、父镜像和不可变 imageId。每层保留 `context/` 与 `build.log`；旧 version 1 环境不会被新准备器当作干净环境使用。准备阶段可联网下载公开依赖，作答与判题仍按批次的 isolated/open 设置执行，真实模型凭据不进入构建上下文。
 
-依赖配方同时声明 requirements（运行版本）、buildRequirements（通用编译工具）、buildGroups（需要不同工具版本的编译顺序）和 buildEnvironment（编译变量）。分组只能构建已锁定的运行包；编译专用包在镜像发布前移除，最终重新核对运行版本。独立的 BuildKit 下载缓存仅保存新构建下载的公开包，不进入作答容器。
+依赖配方同时声明 requirements（运行版本）、buildRequirements（通用编译工具）、buildGroups（需要不同工具版本的编译顺序）和 buildEnvironment（编译变量）。分组只能构建已锁定的运行包；编译专用包在镜像发布前移除，最终重新核对运行版本。独立的 BuildKit 下载缓存仅保存新构建下载的公开包，不进入作答容器。 Django 3.0–3.2 的 Python 3.6 环境使用固定的 CPython 3.6.15/OpenSSL 1.1.1w 公开源码和 SHA256 构建，源码运行时配方仅支持固定运行依赖，不接受自定义编译变量或分组；现代 Python 镜像保持原构建方式。
 
 ## 重建准备容器
 

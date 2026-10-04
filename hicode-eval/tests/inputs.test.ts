@@ -93,10 +93,16 @@ test('catalog includes reviewed tasks with the exact newly required inputs', asy
   expect(available['portfolio-optimization']!.inputs.some(file => file.target === 'cvxopt_benchmark.py')).toBe(false);
   expect(available['video-processing']!.inputs.map(file => file.target)).toEqual(['example_video.mp4']);
   expect(available['video-processing']!.packages).toContain('toml==0.10.2');
-  expect(available['fix-git']!.initializer).toEqual({ kind: 'bash', file: 'setup.sh' });
+  expect(available['fix-git']!.initializer).toEqual({ kind: 'bash', file: 'eval-setup.sh' });
+  expect(available['fix-git']!.inputs).toContainEqual({source:'environment/fix-git-input.tar',target:'fix-git-input.tar'});
+  const gitInitializer=await readFile(new URL('../config/initializers/fix-git.sh',import.meta.url));
+  expect(available['fix-git']!.hashes['environment/eval-setup.sh']).toBe(createHash('sha256').update(gitInitializer).digest('hex'));
+  expect(available['fix-git']!.hashes['environment/setup.sh']).toBe('99125cf2e362f2f4a864ba2f55c2f0e9f0aa0641fed588cef588184fcc192de2');
   expect(available['vulnerable-secret']!.initializer).toEqual({ kind: 'bash', file: 'eval-setup.sh' });
   expect(available['query-optimize']!.inputs.map(file => file.target)).toEqual(['my-sql-query.sql', 'oewn.sqlite']);
   expect(available['query-optimize']!.commands).toContain('sqlite3');
+  expect(available['dna-assembly']!.commands).toEqual(['oligotm']);
+  expect(available['dna-insert']!.commands).toEqual(['oligotm']);
   expect(available['break-filter-js-from-html']!.publicTestInputs).toEqual([{source:'environment/filter.py',target:'filter.py'}]);
   expect(available['path-tracing']!.verifierChroot).toBe(true);
   expect(available['path-tracing-reverse']!.verifierChroot).toBe(true);

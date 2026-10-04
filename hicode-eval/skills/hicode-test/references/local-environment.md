@@ -19,10 +19,10 @@
 
 服务不在运行时，先按 config.json 的 context/machine 用 Docker inspect 检查专用机器；有用户启动测试的指令后再通过 eval.sh serve 复用同一 data-dir、catalog、environments 和 payload。机器停止时可以启动配置中的同名容器；容器已删除时按 README 的干净准备机命令从 base.json 的 imageId 重建，不恢复旧缓存卷。活动任务期间不部署另一版、不另开同机服务。
 
-外部 TASK-STATUS 是历史人工记录；累计成绩以 catalog.json 为准，实时运行以 status 和对应 batches/runs 为准。旧 six-tasks-20260928 已结束运行已压缩归档，不能再据旧目录为空推断成绩丢失。原题清单中的哈希只证明已审核输入，不能证明 wheel 缓存、系统工具、网络和资源现在就绪。
+外部 TASK-STATUS 是历史人工记录；累计成绩以 catalog.json 为准，实时运行以 status 和对应 batches/runs 为准。旧 six-tasks-20260928 已结束运行已压缩归档，不能再据旧目录为空推断成绩丢失。原题清单中的哈希只证明已审核输入；镜像回执、实际镜像和系统工具仍需核对。
 
 本机 `~/.codex/skills/hicode-test` 符号链接指向 checkout 的 `hicode-eval/skills/hicode-test/`。其他窗口读取同一份 Skill；改仓库目录或移动 checkout 后，应重新确认符号链接目标，而不是维护另一份独立复制。
 
 当前 Colima hicode 配置为 6 CPU、16 GiB 内存、180 GiB 磁盘；容器上限不等于预留内存，5 并发仍需关注实际资源使用。虚拟机重启后使用 bash .devcontainer/linux.sh engine-start 恢复 AppArmor 配置。
 
-2026-10-03 已切换到 version 2 配方式镜像与 hicode-eval-clean。旧 hicode-eval-linux 和 version 1 镜像保留用于历史核对，不作为新底座输入。干净环境目前只准备五题回归组合，其余题目的累计成绩保留，但不能因历史通过就视为环境就绪。切换记录见 ../hicode-eval-data/records/clean-environment-v2-20261003.json。
+当前入口使用 version 2 配方式镜像和 hicode-eval-clean。已准备题数、镜像可用性和活动任务均在操作时查询，不在技能中维护静态计数。旧容器是否仍存在以 Docker inspect 为准，不作为新环境输入。每批准备结果另存 records/，不会因历史通过就视为新环境就绪。

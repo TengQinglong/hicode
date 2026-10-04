@@ -56,7 +56,7 @@ export class LinuxMachine {
     await run(this.docker('cp',join(taskRoot,'repository'),container+':'+remote+'/baseline'),{timeout:60000});
     await run(this.docker('cp',join(taskRoot,'hidden'),container+':'+remote+'/tests'));
     await run(this.docker('cp',patchPath,container+':'+remote+'/model.patch'));
-    await save(join(output,'job.json'),{dataset:'swe-bench-verified',swe:task,verifierSeconds:task.verifierSeconds,model:this.config.model});
+    await save(join(output,'job.json'),{dataset:'swe-bench-verified',swe:task,verifierSeconds:task.verifierSeconds,model:this.config.model,verifierProxy:input.verifierProxy});
     for(const name of ['job.json','input.json'])await run(this.docker('cp',join(output,name),container+':'+remote+'/'+name));
     // No runner, tmux, provider credential or Actor release is involved.
     await run(this.docker('exec',container,'/opt/hicode-swe/grader/bin/python',remote+'/worker/regrade.py',remote),{timeout:(task.verifierSeconds+300)*1000});

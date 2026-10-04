@@ -28,7 +28,11 @@ const digest=(value:string)=>createHash('sha256').update(value).digest('hex');
 function aptInstall(packages:readonly string[]):string {
   return packages.length?'RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends '+packages.join(' ')+' && rm -rf /var/lib/apt/lists/*\n':'';
 }
-const commandPackages:Record<string,string>={gcc:'build-essential','g++':'build-essential',vim:'vim',sqlite3:'sqlite3',ffmpeg:'ffmpeg',chromium:'chromium',chromedriver:'chromium-driver'};
+const commandPackages:Record<string,string>={gcc:'build-essential','g++':'build-essential',rustc:'rustc',bc:'bc',openssl:'openssl',vim:'vim',sqlite3:'sqlite3',ffmpeg:'ffmpeg',chromium:'chromium',chromedriver:'chromium-driver',oligotm:'primer3',Rscript:'r-base',cobc:'gnucobol3',screen:'screen',expect:'expect',gfortran:'gfortran',h5cc:'libhdf5-dev','pkg-config':'pkg-config',gcov:'gcc',tclsh:'tcl',pdflatex:'texlive-latex-base=2023.20240207-1'};
+function environmentBuilder(definition?:DependencyRecipe){
+  return definition?.python==='3.6.15'?'prepare_source_environment.py':'prepare_environment.py';
+}
+
 
 /** Only recipe inputs enter builds. The cache machine and run files are never imported. */
 export class EnvironmentStore {
@@ -122,7 +126,7 @@ export class EnvironmentStore {
         throw Error('The target project must come from the frozen task source, not a package in the dependency image');
       }
     }
-    const recipe=digest((await Promise.all(['prepare_environment.py','venv_paths.py'].map(name=>readFile(join(EVAL_ROOT,'src/worker',name),'utf8')))).join('\n')+JSON.stringify(dependencies??null)+await readFile(join(EVAL_ROOT,'src/datasets/reviewed_test_deps.py'),'utf8'));
+    const recipe=digest((await Promise.all([environmentBuilder(dependencies),'venv_paths.py'].map(name=>readFile(join(EVAL_ROOT,'src/worker',name),'utf8')))).join('\n')+JSON.stringify(dependencies??null)+await readFile(join(EVAL_ROOT,'src/datasets/reviewed_test_deps.py'),'utf8'));
     if(task.preparation){
       if(await realpath(task.preparation.directory)!==resolve(task.preparation.directory))throw Error('Symlinked preparation directory');
       const files=await tree(task.preparation.directory);
@@ -142,8 +146,9 @@ export class EnvironmentStore {
           if(definition){
             await save(join(stage,'recipe.json'),definition);
             await mkdir(join(stage,'worker'));
-            for(const name of ['prepare_environment.py','venv_paths.py'])await cp(join(EVAL_ROOT,'src/worker',name),join(stage,'worker',name));
-            body=aptInstall(definition.systemPackages)+'COPY recipe.json /opt/hicode-environment/dependencies.json\nCOPY worker /opt/hicode-eval\nRUN --mount=type=cache,id=hicode-clean-uv-v1,target=/root/.cache/uv,sharing=locked python3 /opt/hicode-eval/prepare_environment.py /opt/hicode-environment/dependencies.json\n';
+            const builder=environmentBuilder(definition);
+            for(const name of [builder,'venv_paths.py'])await cp(join(EVAL_ROOT,'src/worker',name),join(stage,'worker',name));
+            body=aptInstall(definition.systemPackages)+'COPY recipe.json /opt/hicode-environment/dependencies.json\nCOPY worker /opt/hicode-eval\nRUN --mount=type=cache,id=hicode-clean-uv-v1,target=/root/.cache/uv,sharing=locked python3 /opt/hicode-eval/'+builder+' /opt/hicode-environment/dependencies.json\n';
           }else if('packages' in metadata){
             const packages=[...new Set(metadata.commands.map(command=>{
               const value=commandPackages[command];if(!value)throw Error('No system package recipe for command '+command);return value;

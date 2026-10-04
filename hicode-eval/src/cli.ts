@@ -20,11 +20,12 @@ import {validatePublicTask,profiles} from './host/publicTasks.js';
 async function main() {
   process.umask(0o077);
   const { positionals, values: v } = parseArgs({ allowPositionals: true, options: {
-    apply:{type:'boolean'},catalog:{type:'string'},environments:{type:'string'},'include-passed':{type:'boolean'},cpus:{type:'string',default:'1'},'memory-mb':{type:'string',default:'4096'},network: {type:'string', default:'isolated'}, ids: {type:'string'}, 'data-dir': { type: 'string' }, tasks: { type: 'string' }, 'swe-tasks': { type: 'string' }, payload: { type: 'string' }, 'docker-context': { type: 'string', default: 'colima-hicode' }, machine: { type: 'string', default: 'hicode-eval-clean' }, concurrency: { type: 'string', default: '2' }, port: { type: 'string', default: '8878' }, file: { type: 'string' }, run: { type: 'string' }, batch: { type: 'string' }, 'wait-seconds': { type: 'string', default: '30' }, source: { type: 'string' }, model: { type: 'string' }, 'model-config': { type: 'string' }, 'snapshot-worktree': { type: 'boolean' }, help: { type: 'boolean' }
+    'verifier-proxy':{type:'string'},apply:{type:'boolean'},catalog:{type:'string'},environments:{type:'string'},'include-passed':{type:'boolean'},cpus:{type:'string',default:'1'},'memory-mb':{type:'string',default:'4096'},network: {type:'string', default:'isolated'}, ids: {type:'string'}, 'data-dir': { type: 'string' }, tasks: { type: 'string' }, 'swe-tasks': { type: 'string' }, payload: { type: 'string' }, 'docker-context': { type: 'string', default: 'colima-hicode' }, machine: { type: 'string', default: 'hicode-eval-clean' }, concurrency: { type: 'string', default: '2' }, port: { type: 'string', default: '8878' }, file: { type: 'string' }, run: { type: 'string' }, batch: { type: 'string' }, 'wait-seconds': { type: 'string', default: '30' }, source: { type: 'string' }, model: { type: 'string' }, 'model-config': { type: 'string' }, 'snapshot-worktree': { type: 'boolean' }, help: { type: 'boolean' }
   } });
   const command = positionals[0];
-  if (v.help || !command) { console.log('HiCode Eval · isolated containers\n  serve --data-dir DIR --payload DIR --catalog FILE --environments DIR [--machine hicode-eval-clean] [--network open|isolated]\n  prepare --payload DIR [--snapshot-worktree]\n  register-tasks --catalog FILE [--tasks DIR] [--swe-tasks DIR]\n  archive-runs --catalog FILE --data-dir DIR [--apply]\n  prepare-environments --catalog FILE --environments DIR [--ids ID1,ID2] [--include-passed]\n  catalog | submit --file batch.json | status [--batch ID]\n  wait --batch ID [--wait-seconds 30] | cancel --batch ID | resume --batch ID | recover --run ID | retry --run ID | report --batch ID --file report.md\n  regrade --data-dir DIR --run ID  # frozen SWE patch only; no Agent/model'); return; }
+  if (v.help || !command) { console.log('HiCode Eval · isolated containers\n  serve --data-dir DIR --payload DIR --catalog FILE --environments DIR [--machine hicode-eval-clean] [--network open|isolated]\n  prepare --payload DIR [--snapshot-worktree]\n  register-tasks --catalog FILE [--tasks DIR] [--swe-tasks DIR]\n  archive-runs --catalog FILE --data-dir DIR [--apply]\n  prepare-environments --catalog FILE --environments DIR [--ids ID1,ID2] [--include-passed]\n  catalog | submit --file batch.json | status [--batch ID]\n  wait --batch ID [--wait-seconds 30] | cancel --batch ID | resume --batch ID | recover --run ID | retry --run ID | report --batch ID --file report.md\n  regrade --data-dir DIR --run ID [--verifier-proxy URL]  # frozen SWE patch only; no Agent/model'); return; }
   if (positionals.length !== 1 || !['serve','prepare','catalog','submit','status','wait','cancel','resume','recover','retry','report','regrade','prepare-environments','register-tasks','archive-runs'].includes(command)) throw Error('Unknown command');
+  if (v['verifier-proxy'] && command !== 'regrade') throw Error('--verifier-proxy is only supported by regrade');
   const required = (key: keyof typeof v) => { const value = v[key]; if (typeof value !== 'string' || !value) throw Error('Missing --' + key); return value; };
   const port = z.number().int().min(1024).max(65535).parse(Number(v.port));
   if(command==='archive-runs'){
@@ -67,7 +68,7 @@ async function main() {
     if(failed.length)process.exitCode=1;return;
   }
   if(command==='regrade'){
-    console.log(JSON.stringify(await regradeRun(await directory(required('data-dir')),idSchema.parse(required('run'))),null,2));
+    console.log(JSON.stringify(await regradeRun(await directory(required('data-dir')),idSchema.parse(required('run')),v['verifier-proxy']),null,2));
     return;
   }
   if (command === 'prepare') {

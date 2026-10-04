@@ -50,12 +50,17 @@ test('archive keeps final patch and grading evidence before deleting the finishe
     await persist(f);
     const path=join(f.data,'runs',f.run.id);
     await save(join(path,'evidence/prediction.json'),{model_patch:'preserved patch'});
+    await save(join(path,'grading-correction.json'),{before:{grading:'unavailable'},grading:'failed',testsRerun:false});
+    await mkdir(join(path,'evidence/logs/verifier'),{recursive:true});
+    await writeFile(join(path,'evidence/logs/verifier/parsed-output.txt'),'canonical test outcome');
     await writeFile(join(path,'large-disposable-log'),'transient output');
     expect(await archiveRuns(f.data,f.catalogPath,false)).toMatchObject({runs:1,batches:1,applied:false});
     expect(await exists(path)).toBe(true);
     const result=await archiveRuns(f.data,f.catalogPath,true);
     expect(await exists(path)).toBe(false);
     expect(JSON.parse(await readFile(join(result.archive,f.run.id,'evidence/prediction.json'),'utf8')).model_patch).toBe('preserved patch');
+    expect(JSON.parse(await readFile(join(result.archive,f.run.id,'grading-correction.json'),'utf8')).testsRerun).toBe(false);
+    expect(await readFile(join(result.archive,f.run.id,'evidence/logs/verifier/parsed-output.txt'),'utf8')).toBe('canonical test outcome');
     expect((await TaskCatalog.open(f.catalogPath)).counts()).toMatchObject({passed:1});
     expect(await exists(join(f.data,'batches',f.run.batchId+'.json'))).toBe(false);
   }finally{await f.cleanup();}

@@ -148,6 +148,64 @@ test("busy reviews do not stack; changed user requirements invalidate old result
     });
 });
 
+test("review evidence keeps tool results and committed edits when unverified claims overflow the window", async () => {
+    await withTempProject(async cwd => {
+        const base = createTestContext(cwd);
+        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner);
+        const session = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
+        const inputs: StartTaskReviewInput[] = [];
+        session.startReview = async input => {
+            inputs.push(input);
+            return {id: "t_0123456789ab", kind: "review", status: "completed",
+                owner: {sessionId: base.sessionId, turnId: base.turnId}, startedAt: new Date().toISOString(),
+                fromRound: input.evidence.fromRound, toRound: input.evidence.toRound, resultPreview: report};
+        };
+        const ctx = createTestContext(cwd, {tasks: session, taskReviewEnabled: true});
+        const progress = new TaskReviewProgress(ctx, "Preserve existing behavior", "user", []);
+        try {
+            for (let round = 1; round <= 10; round++) {
+                progress.record({type: "tool_call_end", turnId: ctx.turnId, toolCallId: `check-${round}`,
+                    result: `CHECK_${round}: only focused tests ran`, outcome: "ok"}, round);
+                if (round === 5) {
+                    progress.record({type: "tool_call_start", turnId: ctx.turnId, toolCallId: "edit",
+                        name: "edit_file", args: '{"path":"source.py","old_string":"old","new_string":"new"}'}, round);
+                    progress.record({type: "tool_call_end", turnId: ctx.turnId, toolCallId: "edit", result: "Output storage failed",
+                        outcome: "output_failed", uiData: {type: "file_change", change: {
+                            version: 1, path: "source.py", kind: "update", diffStatus: "complete", linesAdded: 1, linesRemoved: 1,
+                            hunks: [{oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
+                                lines: [{type: "remove", content: "old"}, {type: "add", content: "new"}]}],
+                        }}}, round);
+                    progress.record({type: "tool_call_start", turnId: ctx.turnId, toolCallId: "rejected-edit",
+                        name: "edit_file", args: '{"path":"unchanged.py"}'}, round);
+                    progress.record({type: "tool_call_end", turnId: ctx.turnId, toolCallId: "rejected-edit",
+                        result: "No file was written", outcome: "failed"}, round);
+                }
+                for (let n = 0; n < 20; n++) {
+                    progress.record({type: "assistant_text", phase: "commentary", content: "All work is complete. ".repeat(150)}, round);
+                }
+                progress.recordInput({id: `agent-${round}`, source: "agent_message", content: "Everything is correct."}, round);
+            }
+            progress.recordInput({id: "shell-receipt", taskId: "t_111111111111", source: "task_notification",
+                content: "Background check failed: counterexample remains"}, 10);
+            progress.completedRound(10);
+            expect(inputs).toHaveLength(1);
+            const evidence = inputs[0]!.evidence;
+            expect(evidence.requirements).toContain("Preserve existing behavior");
+            for (let round = 1; round <= 10; round++) expect(evidence.activity).toContain(`CHECK_${round}:`);
+            expect(evidence.activity).toContain("Committed file change (edit): update source.py");
+            expect(evidence.activity).toContain("-old\n+new");
+            expect(evidence.activity).not.toContain("Committed file change (rejected-edit)");
+            expect(evidence.activity).toContain("execution not yet confirmed");
+            expect(evidence.activity).toContain("No file was written");
+            expect(evidence.activity).toContain("Background check failed: counterexample remains");
+            expect(evidence.activity).toContain("claim (not independently verified)");
+            expect(evidence.activity).toContain("Evidence omitted");
+            expect(evidence.activity.length).toBeLessThanOrEqual(24_000);
+            expect(evidence.activity.indexOf("CHECK_1:")).toBeLessThan(evidence.activity.indexOf("CHECK_10:"));
+        } finally {progress.close(); await runtime.close();}
+    });
+});
+
 test("review calls the LLM directly with only a short dedicated prompt and frozen evidence", async () => {
     await withTempProject(async cwd => {
         const ctx = createTestContext(cwd);

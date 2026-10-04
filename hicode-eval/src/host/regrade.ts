@@ -12,13 +12,20 @@ import {lease} from './lease.js';
 
 const patchManifestSchema = z.object({sha256:z.string().regex(/^[a-f0-9]{64}$/), baseCommit:z.string(), baselineCommit:z.string(), revision:z.string(), method:z.literal('host-owned-tree-diff')}).strict();
 const predictionSchema = z.object({instance_id:z.string(), model_name_or_path:z.string(), model_patch:z.string()}).strict();
+const verifierProxySchema = z.string().max(2048).url().refine(value => {
+  const url = new URL(value);
+  return !/[\s\x00-\x1f\x7f]/.test(value) && ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password &&
+    url.pathname === '/' && !url.search && !url.hash;
+}, 'Verifier proxy must be an HTTP(S) origin without credentials');
 export interface RegradeInput {
   version:1;runId:string;reviewId:string;instanceId:string;baseCommit:string;patchSha256:string;
   originalExecution:Run['execution'];originalGrading:Run['grading'];createdAt:string;
+  verifierProxy:string|null;
 }
 
-export async function regradeRun(data: string, runId: string) {
+export async function regradeRun(data: string, runId: string, verifierProxy?: string) {
   idSchema.parse(runId);
+  const proxy = verifierProxy === undefined ? null : verifierProxySchema.parse(verifierProxy);
   const release = await lease(data, 'regrade');
   try {
     const config = await readJson(join(data,'config.json'),configSchema);
@@ -55,7 +62,7 @@ export async function regradeRun(data: string, runId: string) {
     // A verifier setup failure can occur after sealing prediction.json but before
     // model.patch is written. Reconstruct only in this independent recheck copy.
     if(predictionOnly){patchPath=join(output,'model.patch');await writeFile(patchPath,patch,{mode:0o600});}
-    const input:RegradeInput = {version:1,runId,reviewId,instanceId:task.instanceId,baseCommit:task.baseCommit,patchSha256:sha256,originalExecution:state.execution,originalGrading:state.grading,createdAt:new Date().toISOString()};
+    const input:RegradeInput = {version:1,runId,reviewId,instanceId:task.instanceId,baseCommit:task.baseCommit,patchSha256:sha256,originalExecution:state.execution,originalGrading:state.grading,createdAt:new Date().toISOString(),verifierProxy:proxy};
     await save(join(output,'input.json'),input);
     const machine = new LinuxMachine(config);
     await machine.regrade(runId,reviewId,taskRoot,patchPath,task,input,output);

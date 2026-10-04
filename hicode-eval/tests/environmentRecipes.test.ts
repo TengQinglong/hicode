@@ -44,3 +44,12 @@ test('dependency recipe rejects unpinned dependencies, direct references and she
   expect(dependencyRecipeSchema.safeParse({...recipe,buildGroups:[{packages:['other==1'],requirements:[]}]}).success).toBe(false);
   expect(baseImagesSchema.safeParse({system:'ubuntu:latest'}).success).toBe(false);
 });
+
+
+test('source Python recipes accept only the reviewed release without custom build injection',()=>{
+  const recipe={version:1,python:'3.6.15',requirements:['pip==21.3.1'],buildRequirements:[],buildEnvironment:{},buildGroups:[],systemPackages:['build-essential'],provenance:'reviewed'};
+  expect(dependencyRecipeSchema.safeParse(recipe).success).toBe(true);
+  for(const python of ['3.6','3.6.14','3.7.17'])expect(dependencyRecipeSchema.safeParse({...recipe,python}).success).toBe(false);
+  for(const changes of [{buildRequirements:['other==1']},{buildEnvironment:{LD_PRELOAD:'/tmp/library'}},{buildGroups:[{packages:['pip==21.3.1'],requirements:[]}]}])
+    expect(dependencyRecipeSchema.safeParse({...recipe,...changes}).success).toBe(false);
+});

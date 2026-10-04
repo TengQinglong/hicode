@@ -218,7 +218,10 @@
     "verifierPrelude": "none",
     "inputs": [],
     "directories": [],
-    "packages": []
+    "packages": [],
+    "commands": [
+      "openssl"
+    ]
   },
   "raman-fitting": {
     "hashes": {
@@ -730,7 +733,10 @@
     "verifierPackages": [
       "setuptools==80.9.0"
     ],
-    "verifierPrelude": "compile-feal-extension"
+    "verifierPrelude": "compile-feal-extension",
+    "commands": [
+      "gcc"
+    ]
   },
   "circuit-fibsqrt": {
     "hashes": {
@@ -804,7 +810,10 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "cobc"
+    ]
   },
   "largest-eigenval": {
     "hashes": {
@@ -855,7 +864,10 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "oligotm"
+    ]
   },
   "dna-insert": {
     "hashes": {
@@ -877,7 +889,10 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "oligotm"
+    ]
   },
   "protein-assembly": {
     "hashes": {
@@ -945,7 +960,10 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "gcc"
+    ]
   },
   "polyglot-rust-c": {
     "hashes": {
@@ -961,7 +979,11 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "rustc",
+      "g++"
+    ]
   },
   "write-compressor": {
     "hashes": {
@@ -995,7 +1017,12 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "gcc",
+      "rustc",
+      "bc"
+    ]
   },
   "sqlite-with-gcov": {
     "hashes": {
@@ -1022,7 +1049,13 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "gcc",
+      "g++",
+      "gcov",
+      "tclsh"
+    ]
   },
   "headless-terminal": {
     "hashes": {
@@ -1048,7 +1081,11 @@
       "requests==2.32.5"
     ],
     "verifierPrelude": "none",
-    "verifierRootOverlay": true
+    "verifierRootOverlay": true,
+    "commands": [
+      "screen",
+      "expect"
+    ]
   },
   "modernize-scientific-stack": {
     "hashes": {
@@ -1096,7 +1133,14 @@
       "matplotlib==3.10.7",
       "scipy==1.16.3"
     ],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "gcc",
+      "g++",
+      "gfortran",
+      "h5cc",
+      "pkg-config"
+    ]
   },
   "portfolio-optimization": {
     "hashes": {
@@ -1199,7 +1243,10 @@
       "numpy==2.3.3",
       "scipy==1.16.2"
     ],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "Rscript"
+    ]
   },
   "fix-git": {
     "hashes": {
@@ -1211,7 +1258,9 @@
       "solution/solve.sh": "4789fa74e92e5b7b893c4b8637c26db2b6458b2136edfc3e686cc278dfc23630",
       "task.toml": "65ed15b71751a10df66cd1fba4658762156f34bacd9f7ba1688a13947d0999e6",
       "tests/test.sh": "4770437ea96c3cc84684b4f99d55fb148fcac09f9ea1e8ef49de487716e6c334",
-      "tests/test_outputs.py": "a8a6f51eb0d7c4ebdf0813c8f0b645edf29c995f1f9faf2aca3886a6713043f3"
+      "tests/test_outputs.py": "a8a6f51eb0d7c4ebdf0813c8f0b645edf29c995f1f9faf2aca3886a6713043f3",
+      "environment/fix-git-input.tar": "aeb46a9f0b79c1c7784a891a38cf394a9d116f8789b9fd8a49d1b7d674dddf35",
+      "environment/eval-setup.sh": "ef3c64724f189951e1182d519bc882988e772f61e70db0a0742d2e5d5bbf1813"
     },
     "inputs": [
       {
@@ -1221,11 +1270,15 @@
       {
         "source": "environment/resources/patch_files/default.html",
         "target": "resources/patch_files/default.html"
+      },
+      {
+        "source": "environment/fix-git-input.tar",
+        "target": "fix-git-input.tar"
       }
     ],
     "initializer": {
       "kind": "bash",
-      "file": "setup.sh"
+      "file": "eval-setup.sh"
     },
     "directories": [],
     "packages": [],
@@ -1268,7 +1321,10 @@
       "setuptools==80.9.0"
     ],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "gcc"
+    ]
   },
   "extract-elf": {
     "hashes": {
@@ -1294,7 +1350,10 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "gcc"
+    ]
   },
   "vulnerable-secret": {
     "hashes": {
@@ -1354,7 +1413,11 @@
     ],
     "verifierPrelude": "none",
     "verifierRootOverlay": true,
-    "verifierChroot": true
+    "verifierChroot": true,
+    "commands": [
+      "gcc",
+      "ffmpeg"
+    ]
   },
   "path-tracing-reverse": {
     "hashes": {
@@ -1385,7 +1448,11 @@
     ],
     "verifierPrelude": "none",
     "verifierRootOverlay": true,
-    "verifierChroot": true
+    "verifierChroot": true,
+    "commands": [
+      "gcc",
+      "g++"
+    ]
   },
   "query-optimize": {
     "hashes": {
@@ -1471,7 +1538,13 @@
       "pandas==2.3.2",
       "scipy==1.16.1"
     ],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "Rscript",
+      "gcc",
+      "g++",
+      "gfortran"
+    ]
   },
   "financial-document-processor": {
     "hashes": {
@@ -1620,7 +1693,10 @@
     "directories": [],
     "packages": [],
     "verifierPackages": [],
-    "verifierPrelude": "none"
+    "verifierPrelude": "none",
+    "commands": [
+      "pdflatex"
+    ]
   },
   "large-scale-text-editing": {
     "hashes": {

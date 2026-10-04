@@ -156,7 +156,7 @@ test('Sphinx catalog enforces reviewed versions and original Python 3.9',async()
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
-test('Django 3.2 retains its original Python 3.6 contract',async()=>{
+test('Django 3.0 through 3.2 retain their original Python 3.6 contract',async()=>{
  const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-django32-')));
  const id='django__django-12754',path=join(root,id);
  try{
@@ -165,10 +165,12 @@ test('Django 3.2 retains its original Python 3.6 contract',async()=>{
    revision:'c'.repeat(40),baseCommit:'a'.repeat(40),harnessVersion:'4.1.0',
    environment:'/opt/hicode-swe/cache/'+'a'.repeat(64),verifierSeconds:1800,
    baselineCommit:'b'.repeat(40),files:{},evaluationMode:'shared-linux-development'};
-  await save(join(path,'swe-task.json'),{...base,python:'3.6'});
-  expect((await sweCatalog(root))[0]?.id).toBe(id);
-  await save(join(path,'swe-task.json'),{...base,python:'3.9'});
-  await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
+  for (const version of ['3.0','3.1','3.2']) {
+   await save(join(path,'swe-task.json'),{...base,version,python:'3.6'});
+   expect((await sweCatalog(root))[0]?.id).toBe(id);
+   await save(join(path,'swe-task.json'),{...base,version,python:'3.9'});
+   await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
+  }
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
