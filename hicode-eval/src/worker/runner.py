@@ -125,8 +125,8 @@ try:
     extra={'HICODE_EVAL_SOURCE':release,'HICODE_EVAL_HOME':str(conf)}
     if is_swe:
         if not (swe_environment/'.ready.json').is_file():raise ValueError('Prepared actor environment is missing')
-        from swe import editable_install_argv
-        command(namespace(editable_install_argv('/opt/hicode-swe/env/bin/python','/testbed',config['swe']['repo'])),timeout=60,output_path=logs/'repo-install.txt')
+        from swe import editable_install_argv, SOURCE_INSTALL_TIMEOUT_SECONDS
+        command(namespace(editable_install_argv('/opt/hicode-swe/env/bin/python','/testbed',config['swe']['repo'])),timeout=SOURCE_INSTALL_TIMEOUT_SECONDS,output_path=logs/'repo-install.txt')
     for required in config.get('commands',[]):
         if not shutil.which(required):raise RuntimeError('Task environment missing command: '+required)
     packages=config.get('packages',[])

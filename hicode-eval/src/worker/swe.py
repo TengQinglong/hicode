@@ -17,21 +17,32 @@ from protocol import atomic_json, namespace_argv
 
 from venv_paths import ENV_MOUNT
 
+# Native editable installs can validate existing build outputs for over a minute.
+SOURCE_INSTALL_TIMEOUT_SECONDS = 300
+
 def editable_install_argv(python, project, repo):
     args = [str(python), '-m', 'pip', 'install', '--no-deps', '--no-build-isolation']
-    return [*args, '-e', str(project) + ('[test]' if repo == 'sphinx-doc/sphinx' else '')]
+    extra = '[test]' if repo in ('sphinx-doc/sphinx', 'astropy/astropy') else '[dev]' if repo == 'mwaskom/seaborn' else ''
+    if repo == 'scikit-learn/scikit-learn':
+        args.append('--no-use-pep517')
+    return [*args, '-e', str(project) + extra]
 
 
 def project_environment(repo, project=None):
     # tox-current-env's fake Python links bypass venv discovery. Keep the same
     # public source and cached packages visible without changing test commands.
     if repo == 'sphinx-doc/sphinx':
-        return {'PYTHONPATH':'/testbed:'+ENV_MOUNT+'/lib/python3.9/site-packages'}
-    if repo in ('pydata/xarray', 'pytest-dev/pytest'):
+        return {'PYTEST_ADDOPTS': '-rA', 'PYTHONPATH':'/testbed:'+ENV_MOUNT+'/lib/python3.9/site-packages'}
+    if repo in ('pydata/xarray', 'pytest-dev/pytest', 'astropy/astropy', 'matplotlib/matplotlib'):
         if project is None: raise ValueError('SCM project requires verified upstream version metadata')
         from scm import read_source_version
         receipt = read_source_version(project)
-        return {'SETUPTOOLS_SCM_PRETEND_VERSION': receipt['version']}
+        environment={'SETUPTOOLS_SCM_PRETEND_VERSION': receipt['version']}
+        if repo == 'matplotlib/matplotlib':
+            # setuptools 68's editable-wheel build uses temporary extension
+            # paths. Preserve its reviewed develop cache across startup/replay.
+            environment.update(SETUPTOOLS_ENABLE_FEATURES='legacy-editable',MPLBACKEND='Agg')
+        return environment
 
     return {}
 
@@ -81,7 +92,7 @@ def git(args, cwd, input=None):
            'GIT_AUTHOR_NAME': 'HiCode Eval', 'GIT_AUTHOR_EMAIL': 'eval@localhost',
            'GIT_COMMITTER_NAME': 'HiCode Eval', 'GIT_COMMITTER_EMAIL': 'eval@localhost'}
     return subprocess.check_output(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.autocrlf=false',
-                                   '-c', 'core.fileMode=true', '-c', 'safe.directory=' + str(cwd), *args], cwd=cwd, env=env, stderr=subprocess.PIPE, input=input)
+                                   '-c', 'core.fileMode=true', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'safe.directory=' + str(cwd), *args], cwd=cwd, env=env, stderr=subprocess.PIPE, input=input)
 
 
 def export_patch(baseline, final):
@@ -188,10 +199,21 @@ def namespace_eval_commands(commands, repo, version):
             continue
         if command.startswith('source /opt/miniconda3/bin/activate') or command.startswith('conda activate '):
             continue
-        if repo in ('pydata/xarray','pytest-dev/pytest') and command=='python -m pip install -e .':
+        if repo in ('pydata/xarray','pytest-dev/pytest','pylint-dev/pylint','pallets/flask','matplotlib/matplotlib') and command=='python -m pip install -e .':
             # Both phases use the same cached dependencies and SCM backend.
             # Rebuilding in an isolated env would resolve another toolchain.
             result.append('python -m pip install --no-deps --no-build-isolation -e .')
+            continue
+        install = {
+            'astropy/astropy': 'python -m pip install -e .[test] --verbose',
+            'psf/requests': 'python -m pip install .',
+            'mwaskom/seaborn': 'python -m pip install -e .[dev]',
+            'scikit-learn/scikit-learn': 'python -m pip install -v --no-use-pep517 --no-build-isolation -e .',
+        }.get(repo)
+        if command == install:
+            # Rebuild the patched project with the already prepared toolchain.
+            result.append(command.replace('pip install ', 'pip install --no-deps ' +
+                ('' if '--no-build-isolation' in command else '--no-build-isolation '), 1))
             continue
         if (repo=='django/django' and version in {'3.0', '3.1', '3.2'} and
             command=="sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen"):
@@ -390,6 +412,12 @@ def normalize_django_log(log, expected):
     return log[:end] + '\n\n' + '\n'.join(recovered) + '\n' + log[end:] if recovered else log
 
 
+def normalize_sympy_log(text):
+    # SymPy's runner emits E after executing a test body that raised. Unlike
+    # pytest collection/setup ERROR, this is a completed failing test.
+    return re.sub(r'^(test_[A-Za-z0-9_]+) E$', r'\1 F', text, flags=re.MULTILINE)
+
+
 def verification_validity(spec, statuses, parsed, exit_code):
     expected = list(dict.fromkeys([*spec.FAIL_TO_PASS, *spec.PASS_TO_PASS]))
     if not spec.FAIL_TO_PASS or not parsed or exit_code not in (0, 1):
@@ -456,7 +484,7 @@ def grade_swe_patch(root, config, uid, gid, cancelled, patch):
            'VIRTUAL_ENV': ENV_MOUNT, 'PYTHONDONTWRITEBYTECODE':'1', 'PIP_DISABLE_PIP_VERSION_CHECK':'1'}
     env.update(project_environment(config['swe']['repo'],root/'baseline'))
     env.update(verifier_proxy_environment(config.get('verifierProxy')))
-    if config['swe']['repo'] in {'pydata/xarray', 'pytest-dev/pytest'}:
+    if config['swe']['repo'] in {'pydata/xarray', 'pytest-dev/pytest', 'astropy/astropy', 'matplotlib/matplotlib'}:
         from scm import read_source_version
         read_source_version(root/'baseline', config['swe']['baseCommit'])
     args = namespace_argv(['git','apply','--whitespace=nowarn','/tests/model.patch'], work, grade_home,
@@ -510,6 +538,9 @@ def grade_swe_patch(root, config, uid, gid, cancelled, patch):
         parsed_output = logs/'parsed-output.txt'
         parsed_output.write_text(normalize_django_log((logs/'output.txt').read_text(),
                                                      [*spec.FAIL_TO_PASS, *spec.PASS_TO_PASS]))
+    elif row['repo'] == 'sympy/sympy':
+        parsed_output = logs/'parsed-output.txt'
+        parsed_output.write_text(normalize_sympy_log((logs/'output.txt').read_text()))
     statuses, parsed = get_logs_eval(spec, str(parsed_output))
     valid, reason = verification_validity(spec, statuses, parsed, code)
     atomic_json(logs/'validity.json', {'valid': valid, 'reason': reason, 'exitCode': code,

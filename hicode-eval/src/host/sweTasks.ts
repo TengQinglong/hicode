@@ -5,8 +5,8 @@ import { readJson, tree, evidenceTree, contained } from './store.js';
 const sha = z.string().regex(/^[a-f0-9]{64}$/);
 export const sweTaskSchema = z.object({
   kind: z.literal('swe-bench-verified'), instanceId: z.string().regex(/^[a-zA-Z0-9_-]+__[a-zA-Z0-9_.-]+-\d+$/),
-  revision: z.string().regex(/^[a-f0-9]{40}$/), repo: z.enum(['django/django', 'sympy/sympy', 'pytest-dev/pytest', 'pydata/xarray', 'sphinx-doc/sphinx']),
-  version: z.enum(['0.12', '1.0', '1.1', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '3.0', '3.1', '3.2', '3.3', '3.4', '3.5', '4.3', '7.1', '4.0', '4.1', '4.2', '5.0', '5.1', '5.2', '5.4', '6.0', '6.2', '7.2', '2022.03', '2022.06', '2022.09']),
+  revision: z.string().regex(/^[a-f0-9]{40}$/), repo: z.enum(['django/django', 'sympy/sympy', 'pytest-dev/pytest', 'pydata/xarray', 'sphinx-doc/sphinx', 'astropy/astropy', 'scikit-learn/scikit-learn', 'pylint-dev/pylint', 'psf/requests', 'pallets/flask', 'mwaskom/seaborn', 'matplotlib/matplotlib']),
+  version: z.enum(['0.12', '1.0', '1.1', '1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12', '2.0', '2.3', '2.4', '2.9', '2.10', '2.14', '2.15', '2.26', '2.27', '3.0', '3.1', '3.2', '3.3', '3.4', '3.5', '3.6', '3.7', '4.3', '4.5', '4.6', '7.1', '4.0', '4.1', '4.2', '5.0', '5.1', '5.2', '5.4', '6.0', '6.2', '6.3', '7.2', '2022.03', '2022.06', '2022.09']),
   baseCommit: z.string().regex(/^[a-f0-9]{40}$/), harnessVersion: z.literal('4.1.0'),
   environment: z.string().regex(/^\/opt\/hicode-swe\/cache\/[a-f0-9]{64}$/),
   python: z.enum(['3.6', '3.8', '3.9', '3.10', '3.11']), verifierSeconds: z.number().int().min(60).max(7200),
@@ -21,12 +21,19 @@ function checkPythonVersion(task: SweTask): void {
       : task.version === '4.1' || task.version === '4.2' ? '3.9'
       : task.version === '5.0' ? '3.11' : undefined
     : task.repo === 'sympy/sympy'
-      ? ['1.0', '1.1', '1.4', '1.5', '1.6'].includes(task.version) ? '3.6'
+      ? ['1.0', '1.1', '1.2', '1.4', '1.5', '1.6'].includes(task.version) ? '3.6'
         : ['1.7', '1.8', '1.9', '1.10', '1.11', '1.12'].includes(task.version) ? '3.9' : undefined
       : task.repo === 'pytest-dev/pytest'
-        ? ['5.0', '5.1', '5.2', '5.4', '6.0', '6.2', '7.2'].includes(task.version) ? '3.9' : undefined
+        ? ['4.5', '4.6', '5.0', '5.1', '5.2', '5.4', '6.0', '6.2', '6.3', '7.2'].includes(task.version) ? '3.9' : undefined
         : task.repo === 'sphinx-doc/sphinx'
-          ? ['3.1', '3.2', '3.3', '3.4', '3.5', '4.0', '4.1', '4.2', '4.3', '5.0', '5.1', '5.2', '7.1', '7.2'].includes(task.version) ? '3.9' : undefined
+          ? ['3.0', '3.1', '3.2', '3.3', '3.4', '3.5', '4.0', '4.1', '4.2', '4.3', '5.0', '5.1', '5.2', '7.1', '7.2'].includes(task.version) ? '3.9' : undefined
+        : task.repo === 'astropy/astropy' ? ['5.0', '5.1', '5.2'].includes(task.version) ? '3.9' : undefined
+        : task.repo === 'scikit-learn/scikit-learn' ? task.version === '1.3' ? '3.9' : undefined
+        : task.repo === 'pylint-dev/pylint' ? ['2.9', '2.10', '2.14', '2.15', '3.0'].includes(task.version) ? '3.9' : undefined
+        : task.repo === 'psf/requests' ? ['2.0', '2.3', '2.4', '2.9', '2.26', '2.27'].includes(task.version) ? '3.9' : undefined
+        : task.repo === 'pallets/flask' ? task.version === '2.3' ? '3.11' : undefined
+        : task.repo === 'matplotlib/matplotlib' ? ['3.6','3.7'].includes(task.version) ? '3.11' : undefined
+        : task.repo === 'mwaskom/seaborn' ? task.version === '0.12' ? '3.9' : undefined
         : ['0.12', '2022.03', '2022.06', '2022.09'].includes(task.version) ? '3.10' : undefined;
   if (!expected || task.python !== expected ||
       !task.instanceId.startsWith(task.repo.replace('/', '__') + '-'))
@@ -69,10 +76,10 @@ export async function validateSweTask(id: string, path: string): Promise<SweTask
       throw Error(`SWE source requires a real repository/${name} directory before registration or submission; prepare the Git workspace and run the Actor sandbox preflight`);
     }
   }
-  if (task.repo === 'pytest-dev/pytest' || task.repo === 'pydata/xarray') {
+  if (task.repo === 'pytest-dev/pytest' || task.repo === 'pydata/xarray' || task.repo === 'astropy/astropy' || task.repo === 'matplotlib/matplotlib') {
     await readJson(join(path,'repository/.git/hicode-source-version.json'),z.object({
       baseCommit:z.literal(task.baseCommit),
-      describe:z.string().regex(/^v?[0-9]+(?:\.[0-9]+)+(?:[ab]\d+|rc\d+)?(?:\.dev\d+)?-\d+-g[a-f0-9]+$/),
+      describe:z.string().regex(/^v?[0-9]+(?:\.[0-9]+)+(?:[ab]\d+|rc\d+)?(?:\.dev\d*)?-\d+-g[a-f0-9]+$/),
       version:z.string().regex(/^[0-9]+(?:\.[0-9]+)+(?:[ab]\d+|rc\d+)?(?:\.dev[0-9]+\+g[a-f0-9]+|\+[0-9]+\.g[a-f0-9]+)?$/),
     }).strict());
   }

@@ -72,7 +72,7 @@ recover 用于 needs_recovery，证据不足会拒绝；resume 只恢复既有�
 
 ## 已完成 SWE 的仅验收复核
 
-仅在用户明确要求复验时使用 `bun hicode-eval/src/cli.ts regrade --data-dir "$HE_DATA" --run RUN_ID`。它先核对历史原题包、`prediction.json` 和原 `model.patch` 哈希，再在单独目录执行原判题；不会运行 Agent、调用模型或重交任务。结果位于 `runs/RUN_ID/rechecks/REVIEW_ID/`，含 `result.json`、`logs/verifier/validity.json`、原目标与回归测试状态；首次 run 的状态与分数不回写。验收环境、补丁或原测试节点无法完成时记录 `unavailable`，不是模型代码失败。复验成功也只是这次补丁判题结论，不改变首次执行事实。
+仅在用户明确要求复验时使用 `bun hicode-eval/src/cli.ts regrade --data-dir "$HE_DATA" --run RUN_ID`。它先核对历史原题包、`prediction.json` 和原 `model.patch` 哈希；如果补丁与预测均未落盘且原判题不可用，则核验完整收集回执后从原封存工作区重建补丁。随后在单独目录执行原判题；不会运行 Agent、调用模型或重交任务。结果位于 `runs/RUN_ID/rechecks/REVIEW_ID/`，含 `result.json`、`logs/verifier/validity.json`、原目标与回归测试状态；首次 run 的状态与分数不回写。验收环境、补丁或原测试节点无法完成时记录 `unavailable`，不是模型代码失败。复验成功也只是这次补丁判题结论，不改变首次执行事实。
 
 
 成绩台账与清理独立：`catalog.json` 保留累计通过和尝试摘要，`run-archive/` 保留精简补丁和判题依据。`environment.json` 是该次实际镜像层身份，`environments/preparation-report.json` 区分已准备、失败和缺题包。`catalog` 的 environmentPrepared 表示已有回执，运行前还会验证源内容和镜像。

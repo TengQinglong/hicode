@@ -137,3 +137,15 @@ class AssignmentPromptTest(unittest.TestCase):
         self.assertEqual(public_test_entries({'dataset':'swe-bench-verified','swe':{'repo':'pytest-dev/pytest'}}),['/testbed/testing/'])
         self.assertEqual(public_test_entries({'publicTestInputs':[{'source':'environment/file.py','target':'file.py'}]}),['/tests/file.py'])
         self.assertEqual(public_test_entries({}),[])
+
+
+class PublicProjectEntries(unittest.TestCase):
+    def test_all_new_project_entries_can_build_an_assignment(self):
+        from protocol import public_test_entries, assignment_prompt
+        for repo in ['astropy/astropy','scikit-learn/scikit-learn','pylint-dev/pylint','psf/requests','pallets/flask','mwaskom/seaborn','matplotlib/matplotlib']:
+            entries=public_test_entries({'dataset':'swe-bench-verified','swe':{'repo':repo}})
+            self.assertTrue(entries)
+            self.assertTrue(all(x.startswith('/testbed/') for x in entries))
+            prompt=assignment_prompt('Original instruction',1800,'isolated','/testbed',entries)
+            self.assertIn(entries[0],prompt)
+            self.assertIn('Original instruction',prompt)

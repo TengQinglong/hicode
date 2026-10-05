@@ -221,6 +221,13 @@ def public_test_entries(config):
             'pytest-dev/pytest':['/testbed/testing/'],
             'pydata/xarray':['/testbed/xarray/tests/'],
             'sphinx-doc/sphinx':['/testbed/tests/'],
+            'astropy/astropy':['/testbed/astropy/**/tests/'],
+            'scikit-learn/scikit-learn':['/testbed/sklearn/**/tests/'],
+            'pylint-dev/pylint':['/testbed/tests/'],
+            'psf/requests':['/testbed/test_requests.py','/testbed/tests/'],
+            'pallets/flask':['/testbed/tests/'],
+            'mwaskom/seaborn':['/testbed/tests/'],
+            'matplotlib/matplotlib':['/testbed/lib/matplotlib/tests/'],
         }[config['swe']['repo']]
     return ['/tests/'+entry['target'] for entry in config.get('publicTestInputs',[])]
 

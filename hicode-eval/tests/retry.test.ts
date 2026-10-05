@@ -1,5 +1,5 @@
 import {test,expect,spyOn} from 'bun:test';
-import {mkdtemp,realpath,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,realpath,mkdir,writeFile,readFile,rm,utimes,stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {Lab} from '../src/host/manager.js';
@@ -36,12 +36,15 @@ async function fixture(){
 test('retry preserves frozen input and prior score; concurrent clicks and restart reuse one durable attempt',async()=>{
  const f=await fixture();let server:ReturnType<typeof serve>|undefined;
  try{
+  const timestamp=new Date('2001-02-03T04:05:06Z');
+  await utimes(join(f.frozen,'input.txt'),timestamp,timestamp);
   const before=await readFile(join(f.root,'runs',f.original.id,'state.json'),'utf8');
   const [a,b]=await Promise.all([f.lab.retry(f.original.id),f.lab.retry(f.original.id)]);
   expect(a.id).toBe(b.id);expect(a.id).not.toBe(f.batch.id);
   expect(a.retryOf).toEqual({batchId:f.batch.id,runId:f.original.id,attempt:2});
   const id=a.runIds[0]!;
   expect(await readFile(join(f.lab.path(id),'task/fixture/input.txt'),'utf8')).toBe('original public input');
+  expect((await stat(join(f.lab.path(id),'task/fixture/input.txt'))).mtimeMs).toBe(timestamp.getTime());
   expect(f.lab.runs.get(id)).toMatchObject({budget:{agentSeconds:900},network:'isolated',model:'fixture'});
   for(let i=0;i<100&&f.lab.runs.get(id)?.state!=='passed';i++)await Bun.sleep(5);
   expect(f.execute).toHaveBeenCalledTimes(1);

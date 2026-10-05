@@ -1,5 +1,5 @@
 import {constants} from 'node:fs';
-import {open, mkdir, realpath, writeFile} from 'node:fs/promises';
+import {open, mkdir, realpath, writeFile, cp, rm, readFile} from 'node:fs/promises';
 import {join,dirname,resolve} from 'node:path';
 import {createHash, randomBytes} from 'node:crypto';
 import {z} from 'zod';
@@ -7,7 +7,9 @@ import {LinuxMachine} from './linux.js';
 import {configSchema, runSchema, done,idSchema,regradeResultSchema} from './types.js';
 import type {Run} from './types.js';
 import {validateFrozenSweTask} from './sweTasks.js';
-import {readJson, save} from './store.js';
+import {readJson, save, exists, evidenceTree, run} from './store.js';
+import {isDeepStrictEqual} from 'node:util';
+import {EVAL_ROOT} from '../paths.js';
 import {lease} from './lease.js';
 
 const patchManifestSchema = z.object({sha256:z.string().regex(/^[a-f0-9]{64}$/), baseCommit:z.string(), baselineCommit:z.string(), revision:z.string(), method:z.literal('host-owned-tree-diff')}).strict();
@@ -37,9 +39,22 @@ export async function regradeRun(data: string, runId: string, verifierProxy?: st
     const taskRoot = join(original,'task',state.task);
     const task = await validateFrozenSweTask(state.task,taskRoot);
     const evidence = join(original,'evidence');
-    const manifest = await readJson(join(evidence,'patch-manifest.json'),patchManifestSchema);
-    const prediction = await readJson(join(evidence,'prediction.json'),predictionSchema,8*1024*1024);
+    const reviewId = randomBytes(8).toString('hex');
+    const output = join(original,'rechecks',reviewId);
+    let manifest:z.infer<typeof patchManifestSchema>,prediction:z.infer<typeof predictionSchema>;
     let patchPath=join(evidence,'tests/model.patch');
+    if(state.grading==='unavailable' && !await exists(join(evidence,'patch-manifest.json')) && !await exists(join(evidence,'prediction.json'))){
+      await mkdir(output,{recursive:true,mode:0o700});
+      patchPath=await recoverCollectedPatch(original,taskRoot,output);
+      const patch=await readFile(patchPath);
+      if(patch.length>8*1024*1024)throw Error('Recovered patch exceeds budget');
+      manifest={sha256:createHash('sha256').update(patch).digest('hex'),baseCommit:task.baseCommit,baselineCommit:task.baselineCommit,revision:task.revision,method:'host-owned-tree-diff'};
+      prediction={instance_id:task.instanceId,model_name_or_path:state.model,model_patch:patch.toString('utf8')};
+      await save(join(output,'patch-manifest.json'),manifest);await save(join(output,'prediction.json'),prediction);
+    }else{
+      manifest=await readJson(join(evidence,'patch-manifest.json'),patchManifestSchema);
+      prediction=await readJson(join(evidence,'prediction.json'),predictionSchema,8*1024*1024);
+    }
     if(await realpath(dirname(patchPath))!==resolve(dirname(patchPath)))throw Error('Symlinked archived patch directory');
     let patch:Buffer;
     let predictionOnly = false;
@@ -57,8 +72,7 @@ export async function regradeRun(data: string, runId: string, verifierProxy?: st
     if(patch.length>8*1024*1024)throw Error('Invalid archived patch size/type');
     const sha256 = createHash('sha256').update(patch).digest('hex');
     if (sha256!==manifest.sha256 || sha256!==createHash('sha256').update(prediction.model_patch).digest('hex') || prediction.instance_id!==task.instanceId || manifest.baseCommit!==task.baseCommit || manifest.baselineCommit!==task.baselineCommit || manifest.revision!==task.revision) throw Error('Archived prediction hash or baseline identity mismatch');
-    const reviewId = randomBytes(8).toString('hex');
-    const output = join(original,'rechecks',reviewId); await mkdir(output,{recursive:true,mode:0o700});
+    await mkdir(output,{recursive:true,mode:0o700});
     // A verifier setup failure can occur after sealing prediction.json but before
     // model.patch is written. Reconstruct only in this independent recheck copy.
     if(predictionOnly){patchPath=join(output,'model.patch');await writeFile(patchPath,patch,{mode:0o600});}
@@ -70,4 +84,24 @@ export async function regradeRun(data: string, runId: string, verifierProxy?: st
     if(result.runId!==runId||result.instanceId!==task.instanceId||result.patchSha256!==sha256||result.originalExecution!==state.execution)throw Error('Regrade result identity mismatch');
     return {...result,reviewId,evidencePath:output};
   } finally {await release();}
+}
+
+
+async function recoverCollectedPatch(original:string,taskRoot:string,output:string):Promise<string>{
+  // The Actor never owns this receipt. Reject altered, missing and added files,
+  // including symlinks, before recovering into an independent recheck copy.
+  const project=join(original,'evidence/project');
+  if(await realpath(project)!==resolve(project))throw Error('Symlinked collected project');
+  const file=z.object({bytes:z.number().int().nonnegative(),sha256:z.string().regex(/^[a-f0-9]{64}$/),symlink:z.string().max(4096).optional()}).strict();
+  const receipt=await readJson(join(original,'collection.json'),z.object({complete:z.literal(true),files:z.record(file)}).strict(),32*1024*1024);
+  const expected=Object.fromEntries(Object.entries(receipt.files).filter(([name])=>name.startsWith('project/')).map(([name,value])=>[name.slice(8),value]));
+  if(!Object.keys(expected).length || !isDeepStrictEqual(await evidenceTree(project),expected))throw Error('Collected project differs from its sealed receipt');
+  const copy=join(output,'recovered-project'),patch=join(output,'model.patch');
+  try{
+    await cp(project,copy,{recursive:true,dereference:false,verbatimSymlinks:true,errorOnExist:true,force:false});
+    if(!isDeepStrictEqual(await evidenceTree(copy),expected))throw Error('Collected project changed during recovery');
+    await run(['python3','-B','-c','import sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);from swe import export_patch;Path(sys.argv[4]).write_text(export_patch(Path(sys.argv[2]),Path(sys.argv[3])))',join(EVAL_ROOT,'src/worker'),join(taskRoot,'repository'),copy,patch],{timeout:180000});
+    await save(join(output,'recovered-from-collection.json'),{method:'verified-collected-project',files:expected});
+    return patch;
+  }finally{await rm(copy,{recursive:true,force:true});}
 }

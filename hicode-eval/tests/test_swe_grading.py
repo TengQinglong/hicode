@@ -119,6 +119,16 @@ class OfficialTestReplay(unittest.TestCase):
             'baseCommit':'a'*40,'describe':'v7.1.2-80-gaa55975','version':'999\nBAD=1'}))
         with self.assertRaises(ValueError):project_environment('pytest-dev/pytest',self.repo)
 
+    def test_astropy_development_tag_keeps_verified_normalized_version(self):
+        from scm import read_source_version
+        receipt={'baseCommit':'a'*40,'describe':'v5.2.dev-64-gaaaaaaa','version':'5.2.dev64+gaaaaaaa'}
+        (self.repo/'.git/hicode-source-version.json').write_text(json.dumps(receipt))
+        self.assertEqual(read_source_version(self.repo,'a'*40),receipt)
+        self.assertEqual(project_environment('astropy/astropy',self.repo),
+                         {'SETUPTOOLS_SCM_PRETEND_VERSION':'5.2.dev64+gaaaaaaa'})
+        with self.assertRaises(ValueError):read_source_version(self.repo,'b'*40)
+        with self.assertRaises(ValueError):project_environment('astropy/astropy')
+
     def test_reviewed_test_dependencies_come_from_frozen_public_declarations(self):
         (self.repo/'setup.py').write_text('install_requires=["wcwidth"]\n')
         (self.repo/'setup.cfg').write_text('install_requires =\n    iniconfig\n    toml\n')
@@ -134,3 +144,27 @@ class OfficialTestReplay(unittest.TestCase):
         self.assertEqual(reviewed_test_dependencies('sphinx-doc/sphinx','3.5',self.repo),['docutils==0.16'])
 
 if __name__=='__main__':unittest.main()
+
+class ReportingContracts(unittest.TestCase):
+    def test_sympy_body_exception_is_failure_but_setup_errors_are_not_rewritten(self):
+        from swe import normalize_sympy_log
+        text = 'test_scalar E\ntest_reshape ok\nERROR collecting test_missing\nImportError: missing module\n'
+        self.assertEqual(normalize_sympy_log(text), 'test_scalar F\ntest_reshape ok\nERROR collecting test_missing\nImportError: missing module\n')
+
+    def test_sphinx_reports_individual_outcomes_without_changing_selection(self):
+        self.assertEqual(project_environment('sphinx-doc/sphinx')['PYTEST_ADDOPTS'], '-rA')
+
+    def test_ephemeral_git_disables_automatic_background_maintenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            git(['init','--template='],root)
+            git(['config','gc.auto','1'],root)
+            git(['config','maintenance.auto','true'],root)
+            self.assertEqual(git(['config','--get','gc.auto'],root).strip(),b'0')
+            self.assertEqual(git(['config','--get','maintenance.auto'],root).strip(),b'false')
+
+class MatplotlibBuildMode(unittest.TestCase):
+    def test_source_version_and_offline_editable_mode_are_explicit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'.git').mkdir();(root/'.git/hicode-source-version.json').write_text(json.dumps({'baseCommit':'a'*40,'describe':'v3.7.0-2-gaaaaaaa','version':'3.8.0.dev2+gaaaaaaa'}))
+            self.assertEqual(project_environment('matplotlib/matplotlib',root),{'SETUPTOOLS_SCM_PRETEND_VERSION':'3.8.0.dev2+gaaaaaaa','SETUPTOOLS_ENABLE_FEATURES':'legacy-editable','MPLBACKEND':'Agg'})

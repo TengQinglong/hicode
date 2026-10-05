@@ -1,5 +1,5 @@
 // Explicit Docker smoke: install only public source offline and import its native dependencies.
-import {mkdtemp,realpath,readFile} from 'node:fs/promises';
+import {mkdtemp,realpath,readFile,cp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomBytes,createHash} from 'node:crypto';
@@ -31,10 +31,12 @@ const store=new EnvironmentStore(config.environments,config.context),binding=awa
 const containers=new RunContainers(config),id=randomBytes(8).toString('hex'),container=containers.name(id);
 try{
   await containers.create(id,(binding.preparation??binding.dependencies).imageId);
-  await run(['docker','--context',config.context,'cp',join(task.source,'repository')+'/.',container+':/testbed']);
+  const staged=join(root,'repository');
+  await cp(join(task.source,'repository'),staged,{recursive:true,verbatimSymlinks:true,preserveTimestamps:true});
+  await run(['docker','--context',config.context,'cp',staged+'/.',container+':/testbed']);
   for(const name of ['swe.py','protocol.py','scm.py','venv_paths.py','preflight.ts','network_entry.py','bootstrap.py'])await run(['docker','--context',config.context,'cp',join(EVAL_ROOT,'src/worker',name),container+':/opt/hicode-eval/'+name]);
   const output=await run(['docker','--context',config.context,'exec',container,'python3','-c',
-    'import os,sys,subprocess,json;from pathlib import Path;sys.path.insert(0,"/opt/hicode-eval");from swe import editable_install_argv,project_environment;py="/opt/hicode-swe/actor/bin/python";env=dict(os.environ,PIP_NO_INDEX="1",PATH="/opt/hicode-swe/actor/bin:"+os.environ["PATH"],**project_environment(sys.argv[1],Path("/testbed")));subprocess.run(editable_install_argv(py,"/testbed",sys.argv[1]),cwd="/testbed",env=env,check=True,timeout=120);subprocess.run([py,"-c","import importlib,sys;[importlib.import_module(n) for n in sys.argv[1:]]",*sys.argv[2:]],cwd="/testbed",env=env,check=True,timeout=120);print("CLEAN_IMPORTS_OK")',metadata.repo,...imports],{timeout:300000,includeStderr:true});
+    'import os,sys,subprocess,json;from pathlib import Path;sys.path.insert(0,"/opt/hicode-eval");from swe import editable_install_argv,project_environment,SOURCE_INSTALL_TIMEOUT_SECONDS;from protocol import public_test_entries;assert public_test_entries({"dataset":"swe-bench-verified","swe":{"repo":sys.argv[1]}});py="/opt/hicode-swe/actor/bin/python";env=dict(os.environ,PIP_NO_INDEX="1",PATH="/opt/hicode-swe/actor/bin:"+os.environ["PATH"],**project_environment(sys.argv[1],Path("/testbed")));subprocess.run(editable_install_argv(py,"/testbed",sys.argv[1]),cwd="/testbed",env=env,check=True,timeout=SOURCE_INSTALL_TIMEOUT_SECONDS);subprocess.run([py,"-c","import importlib,sys;[importlib.import_module(n) for n in sys.argv[1:]]",*sys.argv[2:]],cwd="/testbed",env=env,check=True,timeout=120);print("CLEAN_IMPORTS_OK")',metadata.repo,...imports],{timeout:450000,includeStderr:true});
   if(!output.includes('CLEAN_IMPORTS_OK'))throw Error('Import proof missing');
   await run(['docker','--context',config.context,'cp',join(payload,'source.tar.gz'),container+':/opt/hicode-eval/source.tar.gz']);
   const release=await run(['docker','--context',config.context,'exec',container,'python3','/opt/hicode-eval/bootstrap.py','/opt/hicode-eval/source.tar.gz',sourceHash],{timeout:660000});

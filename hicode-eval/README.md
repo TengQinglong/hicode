@@ -57,6 +57,8 @@ bash hicode-eval/eval.sh prepare --payload ../hicode-eval-data/payload-v1
 
 默认要求工作区干净。测试未提交代码时追加 `--snapshot-worktree`，仅纳入 `src/`、`package.json`、`bun.lock` 和 `tsconfig.json` 的修改。payload 只包含这些运行输入，记录提交号、覆盖文件及归档哈希；每个新版本使用新的输出目录。
 
+原生项目可预编译冻结源码并保存构建产物到题包准备基线，共享依赖镜像保持复用。启动时离线安装本题源码，准备上限为 5 分钟，不占用模型做题预算。
+
 ## 3. 登记、准备与提交
 
 准备好原题输入后，登记到持久台账，再按审定配方构建可复用环境：
@@ -298,3 +300,8 @@ docker --context colima-hicode start hicode-eval-clean
 ```
 
 服务使用 `--machine hicode-eval-clean --environments <干净回执目录>`。已有同名容器先核对镜像与标签，不覆盖其他容器；升级基础配方时另建准备容器并在服务空闲时切换。Docker 引擎/AppArmor 的系统准备仍由 .devcontainer 配置负责。
+
+
+补判会保留独立证据，不调用模型。若首次补丁导出未完成，但完整工作区收集回执仍在，可以校验原工作区后重建补丁；不会修改原答案或静默覆盖首次成绩。Git 临时库禁用自动后台维护；Sphinx 补齐逐项测试报告，SymPy 测试正文抛错计为测试失败。
+
+Matplotlib 3.6/3.7 待测题使用 Python 3.11，依赖配方同时提供原公开测试要求的绘图、字体、TeX、视频及 PDF 工具。固定哈希的原 FreeType/QHull 源码用于离线编译，两个版本可复用同一套依赖镜像。环境检查包含原题公开测试入口生成、原生模块与字体版本及基础绘图，不以可导入替代完整启动核验。

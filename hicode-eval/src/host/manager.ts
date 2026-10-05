@@ -138,7 +138,8 @@ export class Lab {
           const frozen=await readJson(join(this.path(original.id),'task-files.json'),z.record(z.object({bytes:z.number(),sha256:z.string(),symlink:z.string().optional(),mode:z.number().optional()})));
           if(!isDeepStrictEqual(hashes,frozen))throw Error('Original frozen task changed; refusing to rerun');
         }
-        await cp(source, target, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true });
+        // Native build outputs depend on source timestamps as well as bytes.
+        await cp(source, target, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true, preserveTimestamps: true });
         const copied = await datasetTree(target,state.dataset);
         if (!isDeepStrictEqual(copied, hashes)) {
           const changed = [...new Set([...Object.keys(hashes), ...Object.keys(copied)])].find(name => !isDeepStrictEqual(hashes[name],copied[name]));

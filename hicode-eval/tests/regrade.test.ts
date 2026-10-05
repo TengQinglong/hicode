@@ -6,7 +6,7 @@ import {createHash} from 'node:crypto';
 import {regradeRun} from '../src/host/regrade.js';
 import {LinuxMachine} from '../src/host/linux.js';
 import * as leases from '../src/host/lease.js';
-import {save,tree} from '../src/host/store.js';
+import {save,tree,evidenceTree} from '../src/host/store.js';
 
 async function fixture(){
  const data=await realpath(await mkdtemp(join(tmpdir(),'hicode-regrade-'))),run='a'.repeat(16),id='django__django-16877',original=join(data,'runs',run),task=join(original,'task',id),evidence=join(original,'evidence');
@@ -78,5 +78,34 @@ test('sealed prediction recovers a patch missing only because verifier setup nev
   const result=await regradeRun(f.data,f.run);
   expect(result.grading).toBe('passed');expect(execute).toHaveBeenCalledTimes(1);
   await expect(readFile(join(f.evidence,'tests/model.patch'))).rejects.toThrow();
+ }finally{lock.mockRestore();execute.mockRestore();await rm(f.data,{recursive:true,force:true});}
+});
+
+
+async function missingPredictionFixture(){
+ const f=await fixture();
+ await rm(join(f.evidence,'patch-manifest.json'));await rm(join(f.evidence,'prediction.json'));await rm(join(f.evidence,'tests/model.patch'));
+ const state=JSON.parse(await readFile(join(f.original,'state.json'),'utf8'));state.state='error';state.grading='unavailable';await save(join(f.original,'state.json'),state);
+ await mkdir(join(f.evidence,'project'));await writeFile(join(f.evidence,'project/production.py'),'fixed');
+ const files=Object.fromEntries(Object.entries(await evidenceTree(join(f.evidence,'project'))).map(([p,v])=>['project/'+p,v]));
+ await save(join(f.original,'collection.json'),{complete:true,files});return f;
+}
+
+test('failed initial export recovers exactly the collected answer into a separate recheck',async()=>{
+ const f=await missingPredictionFixture();const lock=spyOn(leases,'lease').mockResolvedValue(async()=>{});
+ const execute=spyOn(LinuxMachine.prototype,'regrade').mockImplementation(async(run,_review,_task,patch,_inputTask,input,output)=>{
+  expect(patch).toBe(join(output,'model.patch'));const text=await readFile(patch,'utf8');expect(text).toContain('-original');expect(text).toContain('+fixed');
+  await save(join(output,'result.json'),{version:1,runId:run,instanceId:f.id,patchSha256:input.patchSha256,grading:'passed',reason:null,originalExecution:'completed',modelCalls:0});
+ });
+ try{const before=await readFile(join(f.original,'state.json'),'utf8');const result=await regradeRun(f.data,f.run);expect(result.grading).toBe('passed');expect(await readFile(join(f.original,'state.json'),'utf8')).toBe(before);await expect(readFile(join(f.evidence,'prediction.json'))).rejects.toThrow();}
+ finally{lock.mockRestore();execute.mockRestore();await rm(f.data,{recursive:true,force:true});}
+});
+
+test('recovery rejects modified or added collected files before invoking the grader',async()=>{
+ const f=await missingPredictionFixture();const lock=spyOn(leases,'lease').mockResolvedValue(async()=>{});const execute=spyOn(LinuxMachine.prototype,'regrade').mockRejectedValue(Error('Must not grade'));
+ try{
+  await writeFile(join(f.evidence,'project/production.py'),'different');await expect(regradeRun(f.data,f.run)).rejects.toThrow('sealed receipt');
+  await writeFile(join(f.evidence,'project/production.py'),'fixed');await writeFile(join(f.evidence,'project/extra.py'),'extra');await expect(regradeRun(f.data,f.run)).rejects.toThrow('sealed receipt');
+  expect(execute).not.toHaveBeenCalled();
  }finally{lock.mockRestore();execute.mockRestore();await rm(f.data,{recursive:true,force:true});}
 });

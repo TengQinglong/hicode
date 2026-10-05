@@ -82,9 +82,30 @@ class SweExportTests(unittest.TestCase):
         self.assertEqual(editable_install_argv('/python','/testbed','sphinx-doc/sphinx'),
                          ['/python','-m','pip','install','--no-deps','--no-build-isolation','-e','/testbed[test]'])
 
+    def test_additional_projects_rebuild_only_with_prepared_dependencies(self):
+        from swe import namespace_eval_commands
+        for repo, original in [
+            ('astropy/astropy', 'python -m pip install -e .[test] --verbose'),
+            ('psf/requests', 'python -m pip install .'),
+            ('matplotlib/matplotlib', 'python -m pip install -e .'),
+            ('mwaskom/seaborn', 'python -m pip install -e .[dev]'),
+            ('pylint-dev/pylint', 'python -m pip install -e .'),
+            ('pallets/flask', 'python -m pip install -e .'),
+            ('scikit-learn/scikit-learn', 'python -m pip install -v --no-use-pep517 --no-build-isolation -e .'),
+        ]:
+            with self.subTest(repo=repo):
+                result = namespace_eval_commands([original, 'pytest -rA original/test.py'], repo, 'unused')
+                self.assertIn('--no-deps', result[0])
+                self.assertEqual(result[0].count('--no-build-isolation'), 1)
+                self.assertEqual(result[1], 'pytest -rA original/test.py')
+                self.assertEqual(namespace_eval_commands(['echo pip install .'], repo, 'unused'), ['echo pip install .'])
+        self.assertTrue(editable_install_argv('/python','/testbed','astropy/astropy')[-1].endswith('[test]'))
+        self.assertTrue(editable_install_argv('/python','/testbed','mwaskom/seaborn')[-1].endswith('[dev]'))
+        self.assertIn('--no-use-pep517',editable_install_argv('/python','/testbed','scikit-learn/scikit-learn'))
+
     def test_tox_fake_python_reuses_only_public_source_and_attempt_dependencies(self):
         self.assertEqual(project_environment('sphinx-doc/sphinx'),
-                         {'PYTHONPATH':'/testbed:/opt/hicode-swe/env/lib/python3.9/site-packages'})
+                         {'PYTEST_ADDOPTS':'-rA','PYTHONPATH':'/testbed:/opt/hicode-swe/env/lib/python3.9/site-packages'})
         self.assertEqual(project_environment('django/django'),{})
 
     def test_report_requires_both_official_test_groups_and_consistent_resolution(self):
