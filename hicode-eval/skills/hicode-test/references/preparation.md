@@ -20,7 +20,7 @@
 
 `environmentPrepared` 只是存在准备回执。最终按生产 `EnvironmentStore.resolve(task)` 核对选定题目的源哈希、当前配方与最终镜像标签；还要确认依赖链所引用的镜像存在。底座、依赖或源码变化后不能沿用过期结论。
 
-按依赖组合批量快检必要命令、解释器和关键库。新组合可使用 `tests/cleanEnvironmentSmoke.ts` 在一次性容器中离线安装公开源码并检查导入；已验证且镜像身份不变的组合复用证据。仅发现具体兼容问题时扩大到相关题检查，不逐题跑参考解、完整基线或假模型演练。检查不应用隐藏补丁、不调用真实模型、不改变历史分数。
+按依赖组合批量快检必要命令、解释器和关键库。新组合使用 `tests/cleanEnvironmentSmoke.ts --catalog FILE --environments DIR --payload DIR --task ID` 离线安装公开源码、检查导入，并用实际 Git 工作树和冻结 HiCode payload 执行非 root、无外网 Actor namespace 内的沙箱预检。结果记录镜像身份、源码包 hash 和 `actorSandboxReady`；镜像、题包结构或 payload 变化后重新核验受影响组合。尚未冻结 payload 时只能记录依赖就绪，不声称完整启动已验证。SWE 的 `repository/.git`、`.git/hooks` 必须是真实目录；缺失空目录不影响文件哈希，登记/提交会独立检查并提前拒绝。仅发现具体兼容问题时扩大到相关题检查，不逐题跑参考解或完整基线。检查不应用隐藏补丁、不调用真实模型、不改变历史分数。
 
 声明了 initializer 的题目还需验证初始化本身：在一次性容器的非 root、无网络 namespace 中，使用实际题包输入执行并检查产物。包可导入不代表在线 clone、下载或初始 Git 历史已就绪。外部仓库失效时优先核对原题声明的固定镜像，只提取公开题目材料并校验固定提交/哈希；不要导入旧系统或编造替代仓库。保留初始化证据，未通过不得标记为可提交。
 

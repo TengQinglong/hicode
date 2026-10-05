@@ -38,11 +38,42 @@ function disconnectedResponse(payload: string): Response {
     }));
 }
 const malformed = event({content: "discard this draft", tool_calls: [{index: 0, function: {arguments: "sensitive arguments"}}]}, "tool_calls");
+const invalidArguments = event({tool_calls: [{index: 0, id: "bad-call", function: {name: "bash", arguments: "{}{}"}}]}, "tool_calls");
 const good = event({content: "recovered"}, "stop");
 const caller = createOpenAICompatibleCaller({retryBaseDelayMs: 0});
 function options(cwd: string, storage: LLMCallOptions["storage"]): LLMCallOptions {
     return {cwd, storage, kind: "main", model: "offline", messages: [{role: "user", origin: "user" as const, content: "continue"}], tools: []};
 }
+
+test.each(["{}{}", '{"command":"private-argument"', "", " \n", '{"command":undefined}'])("invalid tool JSON %j is discarded before replay and retries with unchanged history", async args => withTempProject(async (cwd, storage) => {
+    const bodies: string[] = [];
+    mockFetch(async (_url, init) => {
+        bodies.push(String(init?.body));
+        return response(bodies.length === 1
+            ? event({content: "discard this draft", tool_calls: [{index: 0, id: "bad-call", function: {name: "bash", arguments: args}}]}, "tool_calls")
+            : good);
+    });
+    const input = options(cwd, storage);
+    const before = structuredClone(input.messages);
+    const result = await caller(input, endpoint);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toBe(bodies[0]);
+    expect(input.messages).toEqual(before);
+    expect(result.message.content).toBe("recovered");
+    expect(result.toolCalls).toEqual([]);
+    expect(result.usage.total_tokens).toBe(24);
+    expect(result.contextUsage?.tokenCount).toBe(12);
+    const directory = getPromptLogDirectory(storage, cwd);
+    const logs = await Promise.all((await listPromptLogs(directory)).map(async file => JSON.parse(await readFile(join(directory, file), "utf8"))));
+    const failed = logs.find(log => log.response.error);
+    expect(failed.response.rawResponse).toMatchObject({
+        protocolFailure: {code: "invalid_tool_arguments", finishReason: "tool_calls", done: true},
+        recovery: {reason: "protocol", attempt: 1, maxAttempts: 3, willRetry: true},
+    });
+    expect(failed.response.rawMessage).toBeUndefined();
+    expect(JSON.stringify(failed.response)).not.toContain("private-argument");
+    expect(JSON.stringify(failed.response)).not.toContain("discard this draft");
+}));
 
 test("length retries once with a smaller-step request and preserves the caller's history", async () => withTempProject(async (cwd, storage) => {
     const bodies: Array<{messages: unknown[]}> = [];
@@ -131,24 +162,24 @@ test("残缺工具响应只重试模型请求，重置草稿并累加已报告 u
     expect(JSON.stringify(failed.response)).not.toContain("discard this draft");
 }));
 
-test("重复协议失败最多两次；不能无限重试", async () => withTempProject(async (cwd, storage) => {
+test.each([malformed, invalidArguments])("重复协议失败最多两次；不能无限重试", async payload => withTempProject(async (cwd, storage) => {
     let count = 0;
-    mockFetch(async () => {count++; return response(malformed);});
+    mockFetch(async () => {count++; return response(payload);});
     await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("retry budget exhausted");
     expect(count).toBe(2);
 }));
 
-test("协议恢复与 HTTP 重试共享三次总预算", async () => withTempProject(async (cwd, storage) => {
+test.each([malformed, invalidArguments])("协议恢复与 HTTP 重试共享三次总预算", async payload => withTempProject(async (cwd, storage) => {
     let count = 0;
-    mockFetch(async () => ++count === 1 ? new Response("busy", {status: 503}) : response(malformed));
+    mockFetch(async () => ++count === 1 ? new Response("busy", {status: 503}) : response(payload));
     await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("retry budget exhausted");
     expect(count).toBe(3);
 }));
 
-test("协议恢复退避响应取消，不发起下一次请求", async () => withTempProject(async (cwd, storage) => {
+test.each([malformed, invalidArguments])("协议恢复退避响应取消，不发起下一次请求", async payload => withTempProject(async (cwd, storage) => {
     let count = 0;
     const controller = new AbortController();
-    mockFetch(async () => {count++; return response(malformed);});
+    mockFetch(async () => {count++; return response(payload);});
     await expect(caller({...options(cwd, storage), signal: controller.signal, onStreamProgress(progress) {
         if (progress.phase === "retrying") controller.abort("user-cancel");
     }}, endpoint)).rejects.toThrow();
@@ -211,9 +242,9 @@ test.each([
     expect(logs.join("")).not.toContain("private connection details");
 }));
 
-test("不同流故障共享一次恢复额度，不按故障种类叠加", async () => withTempProject(async (cwd, storage) => {
+test.each([malformed, invalidArguments])("不同流故障共享一次恢复额度，不按故障种类叠加", async payload => withTempProject(async (cwd, storage) => {
     let count = 0;
-    mockFetch(async () => ++count === 1 ? disconnectedResponse("") : response(malformed));
+    mockFetch(async () => ++count === 1 ? disconnectedResponse("") : response(payload));
     await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("tools from this response were not executed; retry budget exhausted");
     expect(count).toBe(2);
 }));
@@ -280,18 +311,22 @@ test("重试进度回调抛错时直接退出，不再请求", async () => withT
     expect(count).toBe(1);
 }));
 
-test.each(["identity", "disconnect", "json", "length"] as const)("真实 Agent %s 恢复：既有写入不重放，坏批次零执行且 History 配对完整", async failure => withTempProject(async (cwd) => {
+test.each(["identity", "disconnect", "json", "length", "arguments"] as const)("真实 Agent %s 恢复：既有写入不重放，坏批次零执行且 History 配对完整", async failure => withTempProject(async (cwd) => {
     const write = (id: string, path: string) => ({index: 0, id, function: {name: "write_file", arguments: JSON.stringify({path, content: id})}});
     const responses = [
         event({tool_calls: [write("first-write", "first.txt")]}, "tool_calls"),
         event({content: "uncommitted draft", tool_calls: failure === "identity"
             ? [write("ghost-write", "ghost.txt"), {index: 1}]
+            : failure === "arguments"
+            ? [write("ghost-write", "ghost.txt"), {index: 1, id: "bad-call", function: {name: "bash", arguments: "{}{}"}}]
             : [write("ghost-write", "ghost.txt")]}, failure === "disconnect" ? null : failure === "length" ? "length" : "tool_calls"),
         event({tool_calls: [write("second-write", "second.txt")]}, "tool_calls"),
         good,
     ];
     let count = 0;
-    mockFetch(async () => {
+    mockFetch(async (_url, init) => {
+        expect(String(init?.body)).not.toContain("ghost-write");
+        expect(String(init?.body)).not.toContain("bad-call");
         const payload = responses[count++];
         if (!payload) throw new Error("unexpected request");
         if (count === 2 && failure === "disconnect") return disconnectedResponse(payload);

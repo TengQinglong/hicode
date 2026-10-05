@@ -11,13 +11,19 @@ import {configSchema} from '../src/host/types.js';
 test('SWE bundles freeze original identity and split public code from private grading data',async()=>{
  const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-swe-task-'))),id='django__django-15731',task=join(root,id);
  try {
-  await mkdir(join(task,'repository'),{recursive:true});await mkdir(join(task,'hidden'));
+  await mkdir(join(task,'repository/.git/hooks'),{recursive:true});await mkdir(join(task,'hidden'));
   await writeFile(join(task,'repository/example.py'),'public code');await writeFile(join(task,'instruction.md'),'public problem');
   await writeFile(join(task,'hidden/evaluation.json'),'hidden tests');
   const files=Object.fromEntries(Object.entries(await tree(task)).map(([name,file])=>[name,file.sha256]));
   const descriptor={kind:'swe-bench-verified',instanceId:id,revision:'c'.repeat(40),repo:'django/django',version:'4.2',baseCommit:'a'.repeat(40),harnessVersion:'4.1.0',environment:'/opt/hicode-swe/cache/'+'a'.repeat(64),python:'3.9',verifierSeconds:1800,baselineCommit:'b'.repeat(40),files,evaluationMode:'shared-linux-development'};
   await save(join(task,'swe-task.json'),descriptor);
   expect((await sweCatalog(root))[0]?.id).toBe(id);expect((await validateSweTask(id,task)).baseCommit).toBe('a'.repeat(40));
+  // Directory removal does not alter the frozen file hashes. Reject this before
+  // any batch is scheduled, instead of failing all Actors at their sandbox probe.
+  await rm(join(task,'repository/.git/hooks'),{recursive:true});
+  await expect(validateSweTask(id,task)).rejects.toThrow('repository/.git/hooks');
+  await mkdir(join(task,'repository/.git/hooks'));
+  expect((await validateSweTask(id,task)).baseCommit).toBe('a'.repeat(40));
   await expect(validateSweTask('django__django-99999',task)).rejects.toThrow('identity');
   expect(()=>sweTaskSchema.parse({...descriptor,harnessVersion:'5.0.2'})).toThrow();
   const terminal=join(root,'terminal');await mkdir(terminal);
@@ -60,7 +66,7 @@ test('mixed submission under CLI umask preserves links and executable bits and r
   await mkdir(terminal);await mkdir(registry);await mkdir(payload);await save(join(payload,'manifest.json'),{});
   const ids=['django__django-14725','django__django-14787','django__django-15863','django__django-16136'];
   for(const id of ids){
-   const task=join(registry,id);await mkdir(join(task,'repository'),{recursive:true});await mkdir(join(task,'hidden'));
+   const task=join(registry,id);await mkdir(join(task,'repository/.git/hooks'),{recursive:true});await mkdir(join(task,'hidden'));
    await writeFile(join(task,'repository/script'),'#!/bin/sh\nexit 0\n');await chmod(join(task,'repository/script'),0o755);
    await writeFile(join(task,'instruction.md'),'Public problem');await writeFile(join(task,'hidden/evaluation.json'),'Private fixture');
    await symlink('script',join(task,'repository/link'));
@@ -112,7 +118,7 @@ test('Django 5.0 requires Python 3.11 before catalog or submission',async()=>{
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
-test('SWE catalog ties each repository identity to its original Python version',async()=>{
+test('SWE catalog ties each repository identity to its reviewed Python version',async()=>{
  const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-swe-repos-')));
  try {
   const base={kind:'swe-bench-verified',revision:'c'.repeat(40),baseCommit:'a'.repeat(40),harnessVersion:'4.1.0',
@@ -121,10 +127,18 @@ test('SWE catalog ties each repository identity to its original Python version',
   const django='django__django-14007',sympy='sympy__sympy-12345',pytest='pytest-dev__pytest-10081',xarray='pydata__xarray-3095';
   for(const id of [django,sympy,pytest,xarray])await mkdir(join(root,id));
   await save(join(root,django,'swe-task.json'),{...base,instanceId:django,repo:'django/django',version:'4.0',python:'3.8'});
-  await save(join(root,sympy,'swe-task.json'),{...base,instanceId:sympy,repo:'sympy/sympy',version:'1.4',python:'3.9'});
+  await save(join(root,sympy,'swe-task.json'),{...base,instanceId:sympy,repo:'sympy/sympy',version:'1.4',python:'3.6'});
   await save(join(root,pytest,'swe-task.json'),{...base,instanceId:pytest,repo:'pytest-dev/pytest',version:'7.2',python:'3.9'});
   await save(join(root,xarray,'swe-task.json'),{...base,instanceId:xarray,repo:'pydata/xarray',version:'2022.09',python:'3.10'});
   expect((await sweCatalog(root)).map(entry=>entry.id).sort()).toEqual([django,pytest,sympy,xarray].sort());
+  for(const version of ['1.0','1.1','1.4','1.5','1.6']){
+   await save(join(root,sympy,'swe-task.json'),{...base,instanceId:sympy,repo:'sympy/sympy',version,python:'3.9'});
+   await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
+   await save(join(root,sympy,'swe-task.json'),{...base,instanceId:sympy,repo:'sympy/sympy',version,python:'3.6'});
+   expect((await sweCatalog(root)).some(entry=>entry.id===sympy)).toBe(true);
+  }
+  await save(join(root,sympy,'swe-task.json'),{...base,instanceId:sympy,repo:'sympy/sympy',version:'1.7',python:'3.9'});
+  expect((await sweCatalog(root)).some(entry=>entry.id===sympy)).toBe(true);
   await save(join(root,xarray,'swe-task.json'),{...base,instanceId:xarray,repo:'pydata/xarray',version:'2022.09',python:'3.9'});
   await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
   await save(join(root,xarray,'swe-task.json'),{...base,instanceId:xarray,repo:'pydata/xarray',version:'2022.09',python:'3.10'});
@@ -177,7 +191,7 @@ test('Django 3.0 through 3.2 retain their original Python 3.6 contract',async()=
 test('Xarray submission rejects absent, skipped and wrong-environment public preflight proofs',async()=>{
  const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-xarray-ready-'))),id='pydata__xarray-4094';
  try {
-  await mkdir(join(root,'repository/.git'),{recursive:true});await mkdir(join(root,'hidden'));
+  await mkdir(join(root,'repository/.git/hooks'),{recursive:true});await mkdir(join(root,'hidden'));
   await writeFile(join(root,'repository/public.py'),'# original source');
   await writeFile(join(root,'instruction.md'),'public problem');await writeFile(join(root,'hidden/evaluation.json'),'{}');
   const environment='/opt/hicode-swe/cache/'+'c'.repeat(64),baseCommit='a'.repeat(40);

@@ -45,7 +45,8 @@ describe("OpenAI-compatible stream consumption", () => {
             `data: ${JSON.stringify({choices: [{delta: {role: "assistant"}}]})}\n\n`,
             `data: ${JSON.stringify({choices: [{delta: {reasoning_content: "secret reasoning"}}]})}\n\n`,
             `data: ${JSON.stringify({choices: [{delta: {content: "secret content"}}]})}\n\n`,
-            `data: ${JSON.stringify({choices: [{delta: {tool_calls: [{index: 0, id: "call-1", type: "function", function: {name: "write_file", arguments: "{\\\"path\\\":\\\"x\\\"}"}}]}, finish_reason: "tool_calls"}]})}\n\n`,
+            `data: ${JSON.stringify({choices: [{delta: {tool_calls: [{index: 0, id: "call-1", type: "function", function: {name: "write_file", arguments: '{"path":'}}]}}]})}\n\n`,
+            `data: ${JSON.stringify({choices: [{delta: {tool_calls: [{index: 0, function: {arguments: '"x"}'}}]}, finish_reason: "tool_calls"}]})}\n\n`,
             "data: [DONE]\n\n",
         ].join("");
         const first = Math.floor(payload.length / 3);
@@ -63,6 +64,19 @@ describe("OpenAI-compatible stream consumption", () => {
         expect(result.content).toBe("secret content");
         expect(result.reasoningContent).toBe("secret reasoning");
         expect(result.toolCalls[0]?.function.name).toBe("write_file");
+        expect(result.toolCalls[0]?.function.arguments).toBe(JSON.stringify({path: "x"}));
+    });
+
+    test("合法 JSON 参数原样保留，具体工具字段由 ToolRuntime 校验", async () => {
+        const args = ' {"unknown_field": "quoted \\"value\\""} ';
+        const calls = [args, "{}"].map((argumentsJson, index) => ({index, id: `call-${index}`,
+            function: {name: "read_file", arguments: argumentsJson}}));
+        const result = await consumeOpenAICompatibleSSE({
+            body: streamFromChunks([`data: ${JSON.stringify({choices: [{delta: {tool_calls: calls}, finish_reason: "tool_calls"}]})}\n\n`, "data: [DONE]\n\n"]),
+            signal: new AbortController().signal,
+            onActivity() {},
+        });
+        expect(result.toolCalls.map(call => call.function.arguments)).toEqual([args, "{}"]);
     });
 
     test("finish_reason 后继续读取独立 usage 尾包", async () => {
@@ -111,7 +125,7 @@ describe("OpenAI-compatible stream consumption", () => {
     test("连接在 finish_reason 前结束时拒绝可能截断的工具调用", async () => {
         await expect(consumeOpenAICompatibleSSE({
             body: streamFromChunks([
-                `data: ${JSON.stringify({choices: [{delta: {tool_calls: [{index: 0, id: "call-1", type: "function", function: {name: "write_file", arguments: "{\\\"path\\\":\\\"x\\\"}"}}]}}]})}\n\n`,
+                `data: ${JSON.stringify({choices: [{delta: {tool_calls: [{index: 0, id: "call-1", type: "function", function: {name: "write_file", arguments: JSON.stringify({path: "x"})}}]}}]})}\n\n`,
             ]),
             signal: new AbortController().signal,
             onActivity() {},
@@ -121,7 +135,7 @@ describe("OpenAI-compatible stream consumption", () => {
     test("工具调用必须由 tool_calls 完成原因确认", async () => {
         await expect(consumeOpenAICompatibleSSE({
             body: streamFromChunks([
-                `data: ${JSON.stringify({choices: [{delta: {tool_calls: [{index: 0, id: "call-1", type: "function", function: {name: "read_file", arguments: "{\\\"path\\\":\\\"x\\\"}"}}]}, finish_reason: "stop"}]})}\n\n`,
+                `data: ${JSON.stringify({choices: [{delta: {tool_calls: [{index: 0, id: "call-1", type: "function", function: {name: "read_file", arguments: JSON.stringify({path: "x"})}}]}, finish_reason: "stop"}]})}\n\n`,
                 "data: [DONE]\n\n",
             ]),
             signal: new AbortController().signal,

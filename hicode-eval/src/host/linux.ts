@@ -51,7 +51,7 @@ export class LinuxMachine {
     const remote=`/eval/rechecks/${runId}/${reviewId}`;
     await run(this.docker('exec',container,'mkdir','-p',`/eval/rechecks/${runId}`,'/testbed','/tests','/logs/verifier','/opt/hicode-swe/env'));
     await run(this.docker('exec',container,'mkdir',remote,remote+'/worker'));
-    for(const name of ['regrade.py','swe.py','scm.py','venv_paths.py','protocol.py','xarray_report.py'])await run(this.docker('cp',join(EVAL_ROOT,'src/worker',name),container+':'+remote+'/worker/'+name));
+    for(const name of ['regrade.py','swe.py','scm.py','venv_paths.py','protocol.py','xarray_report.py','django_report.py'])await run(this.docker('cp',join(EVAL_ROOT,'src/worker',name),container+':'+remote+'/worker/'+name));
     await run(this.docker('cp',join(EVAL_ROOT,'src/datasets/reviewed_test_deps.py'),container+':'+remote+'/worker/reviewed_test_deps.py'));
     await run(this.docker('cp',join(taskRoot,'repository'),container+':'+remote+'/baseline'),{timeout:60000});
     await run(this.docker('cp',join(taskRoot,'hidden'),container+':'+remote+'/tests'));
@@ -83,7 +83,7 @@ export class LinuxMachine {
     const hash = createHash('sha256').update(archive).digest('hex');
     if (manifest.files['source.tar.gz'] !== hash) throw Error('Source payload changed');
     await run(this.docker('exec', this.config.machine, 'mkdir', '-p', '/opt/hicode-eval', '/opt/hicode/releases', '/eval/runs'));
-    for (const name of ['runner.py', 'model_proxy.py', 'network_entry.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'scm.py', 'record.py', 'preflight.ts', 'bootstrap.py', 'swe.py', 'venv_paths.py', 'xarray_report.py']) await run(this.docker('cp', join(EVAL_ROOT, 'src/worker', name), this.config.machine + ':/opt/hicode-eval/' + name));
+    for (const name of ['runner.py', 'model_proxy.py', 'network_entry.py', 'cleanup.py', 'recovery.py', 'terminal.py', 'verifier.py', 'protocol.py', 'scm.py', 'record.py', 'preflight.ts', 'bootstrap.py', 'swe.py', 'venv_paths.py', 'xarray_report.py','django_report.py']) await run(this.docker('cp', join(EVAL_ROOT, 'src/worker', name), this.config.machine + ':/opt/hicode-eval/' + name));
     await run(this.docker('cp', join(EVAL_ROOT, 'src/datasets/reviewed_test_deps.py'), this.config.machine + ':/opt/hicode-eval/reviewed_test_deps.py'));
     const target = '/opt/hicode-eval/source-' + hash + '.tar.gz';
     await run(this.docker('cp', join(this.config.payload, 'source.tar.gz'), this.config.machine + ':' + target));
@@ -163,7 +163,7 @@ export class LinuxMachine {
     await save(join(path,'container.json'),{session:state.id,id:container,attach:'docker --context '+this.config.context+' exec -it '+container+' bash'});
     await this.containers.create(state.id,(environment.preparation??environment.dependencies).imageId);
     await run(this.docker('exec',container,'mkdir','-p','/opt/hicode-eval'));
-    for(const name of ['runner.py','model_proxy.py','network_entry.py','cleanup.py','recovery.py','terminal.py','verifier.py','protocol.py','scm.py','record.py','preflight.ts','bootstrap.py','swe.py','venv_paths.py','xarray_report.py'])
+    for(const name of ['runner.py','model_proxy.py','network_entry.py','cleanup.py','recovery.py','terminal.py','verifier.py','protocol.py','scm.py','record.py','preflight.ts','bootstrap.py','swe.py','venv_paths.py','xarray_report.py','django_report.py'])
       await run(this.docker('cp',join(EVAL_ROOT,'src/worker',name),container+':/opt/hicode-eval/'+name));
     await run(this.docker('cp',join(EVAL_ROOT,'src/datasets/reviewed_test_deps.py'),container+':/opt/hicode-eval/reviewed_test_deps.py'));
     const archive='/opt/hicode-eval/source-'+this.release.split('/').at(-1)+'.tar.gz';

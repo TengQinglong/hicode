@@ -183,6 +183,9 @@ def validate_swe_report(data, instance_id, expected_grade):
 def namespace_eval_commands(commands, repo, version):
     result=[]
     for command in commands:
+        if repo == 'django/django' and (command == './tests/runtests.py' or command.startswith('./tests/runtests.py ')):
+            result.append('python /tests/hicode_django_report.py ' + command)
+            continue
         if command.startswith('source /opt/miniconda3/bin/activate') or command.startswith('conda activate '):
             continue
         if repo in ('pydata/xarray','pytest-dev/pytest') and command=='python -m pip install -e .':
@@ -488,6 +491,10 @@ def grade_swe_patch(root, config, uid, gid, cancelled, patch):
                     PASS_TO_PASS=json.loads(row['PASS_TO_PASS']) if isinstance(row['PASS_TO_PASS'],str) else row['PASS_TO_PASS'],
                     language='py',docker_specs={},namespace=None)
     commands = namespace_eval_commands(spec.eval_script_list,row['repo'],row['version'])
+    if row['repo'] == 'django/django':
+        reporter = root/'tests/hicode_django_report.py'
+        shutil.copyfile(Path(__file__).with_name('django_report.py'), reporter)
+        reporter.chmod(0o644)
     if row['repo']=='pydata/xarray' and row['version']=='0.12' and xarray_arm_reporting(root/'baseline'):
         reporter=root/'tests/hicode_platform_report.py'
         shutil.copyfile(Path(__file__).with_name('xarray_report.py'),reporter);reporter.chmod(0o644)

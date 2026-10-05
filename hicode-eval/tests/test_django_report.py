@@ -1,5 +1,6 @@
 import io
 import unittest
+from django_report import stable_subtest_descriptions
 from swe import normalize_django_log, verification_validity
 from types import SimpleNamespace
 
@@ -8,6 +9,39 @@ END = '>>>>> End Test Output'
 
 
 class DjangoLogTest(unittest.TestCase):
+    def test_lazy_subtest_parameters_never_execute_during_error_reporting(self):
+        representations = []
+        class LazyParameter:
+            def __repr__(self):
+                representations.append(True)
+                raise RuntimeError('query executed while formatting a failure')
+        class Cases(unittest.TestCase):
+            def test_failure(self):
+                with self.subTest(query=LazyParameter()):
+                    self.assertEqual(1, 2)
+            def test_exception(self):
+                with self.subTest(query=LazyParameter()):
+                    raise ValueError('original application error')
+            def test_pass(self):
+                pass
+        original = unittest.TextTestResult.getDescription
+        stream = io.StringIO()
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(Cases)
+        names = {test._testMethodName: str(test) for test in suite}
+        with stable_subtest_descriptions():
+            result = unittest.TextTestRunner(stream=stream, verbosity=2).run(suite)
+        self.assertIs(unittest.TextTestResult.getDescription, original)
+        self.assertEqual(representations, [])
+        self.assertEqual(len(result.errors), 1)
+        self.assertEqual(len(result.failures), 1)
+        self.assertFalse(result.wasSuccessful())
+        self.assertIn('original application error', stream.getvalue())
+        self.assertIn('AssertionError: 1 != 2', stream.getvalue())
+        body = stream.getvalue().replace(__file__, '/testbed/tests/test_report.py')
+        self.assertEqual(self.canonical(body, list(names.values())), {
+            names['test_failure']: 'FAIL', names['test_exception']: 'FAIL', names['test_pass']: 'ok',
+        })
+
     def test_body_exception_is_failure_but_setup_error_stays_unavailable(self):
         class Cases(unittest.TestCase):
             def setUp(self):

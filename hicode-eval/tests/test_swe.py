@@ -71,6 +71,13 @@ class SweExportTests(unittest.TestCase):
         self.assertEqual(namespace_eval_commands(['python -m pip install -e .','pytest -rA xarray/tests/test_dataset.py'],
                                                 'pydata/xarray','0.12'),
                          ['python -m pip install --no-deps --no-build-isolation -e .','pytest -rA xarray/tests/test_dataset.py'])
+
+    def test_django_report_wrapper_preserves_original_script_and_test_selection(self):
+        from swe import namespace_eval_commands
+        original = './tests/runtests.py --verbosity 2 --settings=test_sqlite --parallel 1 queries.test_qs_combinators'
+        self.assertEqual(namespace_eval_commands([original], 'django/django', '3.0'),
+                         ['python /tests/hicode_django_report.py ' + original])
+        self.assertEqual(namespace_eval_commands([original], 'sympy/sympy', '1.0'), [original])
     def test_sphinx_install_preserves_official_test_extra_without_new_downloads(self):
         self.assertEqual(editable_install_argv('/python','/testbed','sphinx-doc/sphinx'),
                          ['/python','-m','pip','install','--no-deps','--no-build-isolation','-e','/testbed[test]'])
@@ -108,7 +115,9 @@ class SweLocaleAdaptationTest(unittest.TestCase):
                   'export LANG=en_US.UTF-8','git apply model.patch','./tests/runtests.py']
         for version in ['3.0', '3.1', '3.2']:
             self.assertEqual(namespace_eval_commands(original,'django/django',version),
-                             ['locale -a | grep -Fxq en_US.utf8 || exit 1',*original[3:]])
-        self.assertEqual(namespace_eval_commands(original,'django/django','4.2'),original[2:])
+                             ['locale -a | grep -Fxq en_US.utf8 || exit 1',*original[3:-1],
+                              'python /tests/hicode_django_report.py ./tests/runtests.py'])
+        self.assertEqual(namespace_eval_commands(original,'django/django','4.2'),
+                         [*original[2:-1],'python /tests/hicode_django_report.py ./tests/runtests.py'])
         self.assertEqual(namespace_eval_commands(['locale-gen','sed -i x /etc/other'],'django/django','3.2'),
                          ['locale-gen','sed -i x /etc/other'])

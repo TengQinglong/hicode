@@ -21,7 +21,8 @@ function checkPythonVersion(task: SweTask): void {
       : task.version === '4.1' || task.version === '4.2' ? '3.9'
       : task.version === '5.0' ? '3.11' : undefined
     : task.repo === 'sympy/sympy'
-      ? ['1.0', '1.1', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '1.10', '1.11', '1.12'].includes(task.version) ? '3.9' : undefined
+      ? ['1.0', '1.1', '1.4', '1.5', '1.6'].includes(task.version) ? '3.6'
+        : ['1.7', '1.8', '1.9', '1.10', '1.11', '1.12'].includes(task.version) ? '3.9' : undefined
       : task.repo === 'pytest-dev/pytest'
         ? ['5.0', '5.1', '5.2', '5.4', '6.0', '6.2', '7.2'].includes(task.version) ? '3.9' : undefined
         : task.repo === 'sphinx-doc/sphinx'
@@ -57,6 +58,17 @@ export async function validateFrozenSweTask(id: string, path: string): Promise<S
 }
 export async function validateSweTask(id: string, path: string): Promise<SweTask> {
   const task = await validateFrozenSweTask(id,path);
+  // Empty directories are absent from file hashes, but bubblewrap cannot create
+  // a missing hooks mount point after the parent .git is made read-only.
+  for (const name of ['.git', '.git/hooks']) {
+    const info = await lstat(join(path,'repository',name)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (!info?.isDirectory() || info.isSymbolicLink()) {
+      throw Error(`SWE source requires a real repository/${name} directory before registration or submission; prepare the Git workspace and run the Actor sandbox preflight`);
+    }
+  }
   if (task.repo === 'pytest-dev/pytest' || task.repo === 'pydata/xarray') {
     await readJson(join(path,'repository/.git/hicode-source-version.json'),z.object({
       baseCommit:z.literal(task.baseCommit),

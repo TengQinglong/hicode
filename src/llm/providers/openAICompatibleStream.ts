@@ -11,7 +11,7 @@ const MAX_STREAM_OUTPUT_CHARACTERS = 64 * 1024 * 1024;
 const MAX_DATA_EVENTS = 200_000;
 
 type ProtocolFailureCode = "missing_completion" | "inconsistent_completion" | "missing_tool_identity" | "duplicate_tool_id"
-    | "stream_disconnected" | "empty_stream" | "invalid_json" | "output_truncated";
+    | "stream_disconnected" | "empty_stream" | "invalid_json" | "invalid_tool_arguments" | "output_truncated";
 interface ToolFragmentDiagnostic {
     event: number;
     index: number;
@@ -334,6 +334,13 @@ export async function consumeOpenAICompatibleSSE({
             throw protocolError("duplicate_tool_id", "OpenAI-compatible stream returned duplicate tool call IDs");
         }
         toolCallIds.add(toolCall.id);
+        // Validate the assembled arguments before the candidate can enter replayable History.
+        // Tool-specific schemas and permissions remain owned by ToolRuntime.
+        try {
+            JSON.parse(toolCall.function.arguments);
+        } catch {
+            throw protocolError("invalid_tool_arguments", "OpenAI-compatible stream returned tool arguments that are not valid JSON");
+        }
     }
 
     return {

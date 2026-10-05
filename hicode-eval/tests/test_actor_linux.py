@@ -31,6 +31,9 @@ class ActorBoundaryTest(unittest.TestCase):
                 (store/'result.txt').write_text('TOOL_RESULT_OK')
                 (store/'requests.json').write_text('OWN_REQUEST_LOG')
                 (project/'task.txt').write_text('WORKSPACE_OK')
+                subprocess.run(['git','init','--template=',str(project)],check=True,capture_output=True)
+                (project/'.git/hooks').mkdir()
+                subprocess.run(['chown','-R','65534:65534',str(project)],check=True)
                 env=None
                 if workspace=='/testbed':
                     env=root/'environment';shutil.copytree(env_cache,env,symlinks=True);relocate_environment(env,env_cache)
