@@ -9,8 +9,11 @@ const task: TaskSnapshot = {id: "task", kind: "shell", phase: "finished", execut
 test("Shell 通知保留结构化终止原因，供 UI 区分命令退出和任务故障", () => {
     const exited = notificationFor({...task, status: "failed", termination: {kind: "exit", code: 1, signal: null}, output: "1 failed"});
     expect(exited).toMatchObject({shellTermination: "exit", summary: "exit 1 · 1 failed"});
+    expect(exited.message).toContain("echo done exited with code 1 · 1 failed");
+    expect(exited.message).not.toContain("echo done is failed");
     const broken = notificationFor({...task, status: "failed", termination: {kind: "spawn_error", error: new Error("spawn denied")}, output: ""});
     expect(broken).toMatchObject({shellTermination: "spawn_error"});
+    expect(broken.message).toContain("echo done is failed");
 });
 
 test("读取待交付通知不能提前持久化 ACK", async () => {

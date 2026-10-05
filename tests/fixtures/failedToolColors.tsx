@@ -9,6 +9,9 @@ const threads: UIThread[] = [{
 }, {
     id: "failed-task", role: "task_notification", kind: "shell", taskId: "t_123456789abc",
     status: "failed", shellTermination: "exit", label: "pytest -q", summary: "exit 1 · FAILED example.py::test_case",
+}, {
+    id: "runtime-failure", role: "task_notification", kind: "shell", taskId: "t_987654321abc",
+    status: "failed", shellTermination: "spawn_error", label: "pytest -q", summary: "spawn error · permission denied",
 }];
 
 const view = render(<MessageList threads={threads}/>);

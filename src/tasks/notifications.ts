@@ -63,6 +63,15 @@ function notificationSummary(task: TaskSnapshot): string {
     return task.kind==="agent"?task.reason ?? task.status:task.status;
 }
 
+function shellCommandExitMessage(task: TaskSnapshot, label: string, output: string): string | undefined {
+    if (task.kind !== "shell" || task.status !== "failed" || task.outputIssue || task.termination?.kind !== "exit") return undefined;
+    const result = task.termination.signal
+        ? `terminated by signal ${task.termination.signal}`
+        : `exited with code ${task.termination.code}`;
+    const detail = shellOutputSummary(task.output);
+    return `${formatTaskHeader(task)}\n${compactLine(label)} ${result}${detail ? ` · ${detail}` : ""}${output}.`;
+}
+
 export function notificationFor(task: TaskSnapshot): TaskNotification {
     const label = task.kind === "review" ? `Task review: rounds ${task.fromRound}-${task.toRound}` : task.kind === "memory"?"Memory maintenance":task.kind === "shell"
         ? task.command
@@ -76,6 +85,16 @@ export function notificationFor(task: TaskSnapshot): TaskNotification {
         ? `; full output saved at ${JSON.stringify(result?.path)}; read with read_file`
         : "";
     const summary = notificationSummary(task);
+    const message = shellCommandExitMessage(task, messageLabel, output) ??
+        `${formatTaskHeader(task)}\n${compactLine(messageLabel)} is ${
+            task.status === "completed"
+                ? "completed"
+                : task.status === "interrupted"
+                    ? "interrupted"
+                    : task.status === "cancelled"
+                    ? "cancelled"
+                    : "failed"
+        }: ${summary}${output}.`;
     return {
         notificationId: taskNotificationId(task.id, task.kind === "agent" ? task.progress.runCount : 1),
         taskId: task.id,
@@ -88,15 +107,7 @@ export function notificationFor(task: TaskSnapshot): TaskNotification {
         ...(task.kind === "shell" && task.termination ? {shellTermination: task.termination.kind} : {}),
         ...(task.kind === "shell" && task.outputIssue ? {shellOutputIssue: true} : {}),
         ...(resultId ? {resultId} : {}),
-        message: `${formatTaskHeader(task)}\n${compactLine(messageLabel)} is ${
-            task.status === "completed"
-                ? "completed"
-                : task.status === "interrupted"
-                    ? "interrupted"
-                    : task.status === "cancelled"
-                    ? "cancelled"
-                    : "failed"
-        }:${summary}${output}.`,
+        message,
     };
 }
 

@@ -36,7 +36,7 @@ for (const level of [0, 1, 2, 3]) test(`status and diff remain readable at color
     }
 }, 10000);
 
-test("failed command colors only the failure markers, not the whole output", async () => {
+test("nonzero command exit is neutral while tool and task runtime failures stay red", async () => {
     const child = Bun.spawn([process.execPath, fileURLToPath(new URL("../fixtures/failedToolColors.tsx", import.meta.url))], {
         env: {PATH: process.env.PATH ?? "/usr/bin:/bin", TERM: "xterm", FORCE_COLOR: "1"},
         stdout: "pipe", stderr: "pipe",
@@ -47,6 +47,7 @@ test("failed command colors only the failure markers, not the whole output", asy
     const frame: unknown = JSON.parse(output);
     if (typeof frame !== "string") throw new Error("Missing terminal frame");
     expect(frame).toContain("\x1b[31m⎿\x1b[39m");
-    expect(frame).toContain("\x1b[31m●");
+    expect(frame).not.toContain("\x1b[31m●\x1b[1m\x1b[36m Background command exited");
+    expect(frame).toContain("\x1b[31m●\x1b[1m\x1b[36m Background task failed");
     expect(frame).toContain("\x1b[90mFAILED example.py::test_case\x1b[39m");
 }, 10000);

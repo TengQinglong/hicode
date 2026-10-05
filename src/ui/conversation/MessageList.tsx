@@ -153,7 +153,7 @@ function TaskNotificationView({
     const label = thread.kind === "shell"
         ? describeToolCall("bash", JSON.stringify({command: thread.label})).detail
         : thread.label;
-    const color = thread.status === "failed" ? COLORS.error : COLORS.toolName;
+    const color = thread.status === "failed" && !commandExit ? COLORS.error : COLORS.toolName;
     if (thread.kind === "agent") return <Box marginTop={1}><Text color={color} wrap="truncate-end">{`${thread.status === "completed" ? "✓" : "●"} ${label} · ${state} · /tasks`}</Text></Box>;
     return (
         <Box flexDirection="column" marginTop={1}>
