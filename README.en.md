@@ -31,6 +31,8 @@ Runs locally on **macOS and Linux**. Connect your own model API key to get start
 
 ### Recent improvements
 
+- 🧱 **10-04 · Test environment isolation**: shared Linux base, reusable images by dependency version, and a separate container per task to reduce repeated setup and interference.
+
 - 🛠️ **10-01 · Agent execution**: public benchmark findings drove unified background task queuing, status, and notifications, with continuation for long-running tasks and complete cleanup on cancellation or failure.
 
 - 🐧 **09-26 · Linux support**: added Linux support with a unified installer for both platforms, improved sandbox isolation, and terminal display fixes.
@@ -45,7 +47,7 @@ Runs locally on **macOS and Linux**. Connect your own model API key to get start
 
 ### Public benchmarks
 
-- 🔥 **Evaluation in progress**: as of October 1, 2026, HiCode has passed **41 Terminal-Bench 2.0 tasks** and **65 SWE-bench Verified tasks**.
+- 🔥 **Evaluation in progress**: as of October 4, 2026, HiCode has passed **30 Terminal-Bench 2.0 tasks** and **150 SWE-bench Verified tasks**.
 
 ## Quick start
 
