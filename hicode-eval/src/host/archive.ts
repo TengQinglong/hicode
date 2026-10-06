@@ -9,9 +9,10 @@ import type {Run} from './types.js';
 import {readJson,save,exists} from './store.js';
 import {lease} from './lease.js';
 
+const MAX_ARCHIVE_METADATA_BYTES=32*1024*1024;
 const journalSchema=z.object({version:z.literal(1),catalog:z.string(),runs:z.array(idSchema).max(10000),batches:z.array(idSchema).max(10000)}).strict();
 const archiveSchema=z.object({version:z.literal(1),runId:idSchema,task:z.string(),originalPath:z.string(),
-  files:z.record(z.object({sha256:z.string().regex(/^[a-f0-9]{64}$/),bytes:z.number().int().nonnegative().max(16*1024*1024),originalBytes:z.number().nonnegative()}))}).strict();
+  files:z.record(z.object({sha256:z.string().regex(/^[a-f0-9]{64}$/),bytes:z.number().int().nonnegative().max(MAX_ARCHIVE_METADATA_BYTES),originalBytes:z.number().nonnegative()}))}).strict();
 
 /** Archive compact results before removing only fully finished batches. */
 export async function archiveRuns(data:string,catalogPath:string,apply:boolean){
@@ -80,7 +81,7 @@ export async function archiveRuns(data:string,catalogPath:string,apply:boolean){
         const fd=await open(source,constants.O_RDONLY|constants.O_NOFOLLOW);
         try {
           const stat=await fd.stat();if(!stat.isFile())throw Error('Result archive requires regular files');
-          const max=relative.endsWith('output.txt')?1024*1024:16*1024*1024;
+          const max=relative.endsWith('output.txt')?1024*1024:MAX_ARCHIVE_METADATA_BYTES;
           if(stat.size>max&&!relative.endsWith('output.txt'))throw Error('Result metadata exceeds archive budget');
           const buffer=Buffer.alloc(Math.min(stat.size,max));const {bytesRead}=await fd.read(buffer,0,buffer.length,Math.max(0,stat.size-max));
           if(bytesRead!==buffer.length)throw Error('Result changed while archiving');

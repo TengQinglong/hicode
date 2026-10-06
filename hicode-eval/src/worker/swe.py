@@ -412,6 +412,11 @@ def normalize_django_log(log, expected):
     return log[:end] + '\n\n' + '\n'.join(recovered) + '\n' + log[end:] if recovered else log
 
 
+def read_verifier_log(path):
+    """Decode verifier output for the upstream parser without changing raw evidence."""
+    return Path(path).read_bytes().decode('utf-8', errors='replace')
+
+
 def normalize_sympy_log(text):
     # SymPy's runner emits E after executing a test body that raised. Unlike
     # pytest collection/setup ERROR, this is a completed failing test.
@@ -533,14 +538,15 @@ def grade_swe_patch(root, config, uid, gid, cancelled, patch):
     argv = namespace_argv(['bash','/tests/eval.sh'], work, grade_home, root/'logs', root/'control-placeholder',
                           root/'tests', workdir='/testbed', environment=grade_env, readonly_logs=True)
     code = supervise(argv, output=logs/'output.txt', timeout=config['verifierSeconds'], env=env, cwd=work, demote=demote, cancelled=cancelled)
-    parsed_output = logs/'output.txt'
+    parsed_output = logs/'parsed-output.txt'
+    raw_log = read_verifier_log(logs/'output.txt')
     if row['repo'] == 'django/django':
-        parsed_output = logs/'parsed-output.txt'
-        parsed_output.write_text(normalize_django_log((logs/'output.txt').read_text(),
+        parsed_output.write_text(normalize_django_log(raw_log,
                                                      [*spec.FAIL_TO_PASS, *spec.PASS_TO_PASS]))
     elif row['repo'] == 'sympy/sympy':
-        parsed_output = logs/'parsed-output.txt'
-        parsed_output.write_text(normalize_sympy_log((logs/'output.txt').read_text()))
+        parsed_output.write_text(normalize_sympy_log(raw_log))
+    else:
+        parsed_output.write_text(raw_log)
     statuses, parsed = get_logs_eval(spec, str(parsed_output))
     valid, reason = verification_validity(spec, statuses, parsed, code)
     atomic_json(logs/'validity.json', {'valid': valid, 'reason': reason, 'exitCode': code,

@@ -6,7 +6,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from swe import git,restore_official_test_paths,controlled_eval_script,verification_validity,project_environment,namespace_eval_commands,verifier_log_directory
+from swe import git,restore_official_test_paths,controlled_eval_script,verification_validity,project_environment,namespace_eval_commands,verifier_log_directory,read_verifier_log
 from reviewed_test_deps import reviewed_test_dependencies
 
 class OfficialTestReplay(unittest.TestCase):
@@ -27,6 +27,11 @@ class OfficialTestReplay(unittest.TestCase):
         logs.symlink_to(self.repo, target_is_directory=True)
         with self.assertRaisesRegex(ValueError,'not a directory'):
             verifier_log_directory(self.root)
+    def test_verifier_log_parser_gets_utf8_safe_copy_without_rewriting_raw_evidence(self):
+        path=self.root/'logs/verifier/output.txt';path.parent.mkdir(parents=True)
+        path.write_bytes(b'header\n\xfc\xac\nfooter')
+        self.assertEqual(read_verifier_log(path),'header\n\ufffd\ufffd\nfooter')
+        self.assertEqual(path.read_bytes(),b'header\n\xfc\xac\nfooter')
     def official_patch(self):
         (self.repo/'tests/old.py').write_text('official\n');(self.repo/'tests/new.py').write_text('official new\n')
         git(['add','-A'],self.repo)

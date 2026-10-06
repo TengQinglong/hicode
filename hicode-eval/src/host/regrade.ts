@@ -14,6 +14,7 @@ import {lease} from './lease.js';
 
 const patchManifestSchema = z.object({sha256:z.string().regex(/^[a-f0-9]{64}$/), baseCommit:z.string(), baselineCommit:z.string(), revision:z.string(), method:z.literal('host-owned-tree-diff')}).strict();
 const predictionSchema = z.object({instance_id:z.string(), model_name_or_path:z.string(), model_patch:z.string()}).strict();
+const MAX_REGRADE_PATCH_BYTES=32*1024*1024;
 const verifierProxySchema = z.string().max(2048).url().refine(value => {
   const url = new URL(value);
   return !/[\s\x00-\x1f\x7f]/.test(value) && ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password &&
@@ -47,13 +48,13 @@ export async function regradeRun(data: string, runId: string, verifierProxy?: st
       await mkdir(output,{recursive:true,mode:0o700});
       patchPath=await recoverCollectedPatch(original,taskRoot,output);
       const patch=await readFile(patchPath);
-      if(patch.length>8*1024*1024)throw Error('Recovered patch exceeds budget');
+      if(patch.length>MAX_REGRADE_PATCH_BYTES)throw Error('Recovered patch exceeds budget');
       manifest={sha256:createHash('sha256').update(patch).digest('hex'),baseCommit:task.baseCommit,baselineCommit:task.baselineCommit,revision:task.revision,method:'host-owned-tree-diff'};
       prediction={instance_id:task.instanceId,model_name_or_path:state.model,model_patch:patch.toString('utf8')};
       await save(join(output,'patch-manifest.json'),manifest);await save(join(output,'prediction.json'),prediction);
     }else{
       manifest=await readJson(join(evidence,'patch-manifest.json'),patchManifestSchema);
-      prediction=await readJson(join(evidence,'prediction.json'),predictionSchema,8*1024*1024);
+      prediction=await readJson(join(evidence,'prediction.json'),predictionSchema,MAX_REGRADE_PATCH_BYTES);
     }
     if(await realpath(dirname(patchPath))!==resolve(dirname(patchPath)))throw Error('Symlinked archived patch directory');
     let patch:Buffer;
@@ -65,11 +66,11 @@ export async function regradeRun(data: string, runId: string, verifierProxy?: st
     });
     if(fd){
       try {
-        const stat = await fd.stat(); if(!stat.isFile()||stat.size>8*1024*1024)throw Error('Invalid archived patch size/type');
+        const stat = await fd.stat(); if(!stat.isFile()||stat.size>MAX_REGRADE_PATCH_BYTES)throw Error('Invalid archived patch size/type');
         patch = await fd.readFile();
       } finally {await fd.close();}
     } else patch=Buffer.from(prediction.model_patch,'utf8');
-    if(patch.length>8*1024*1024)throw Error('Invalid archived patch size/type');
+    if(patch.length>MAX_REGRADE_PATCH_BYTES)throw Error('Invalid archived patch size/type');
     const sha256 = createHash('sha256').update(patch).digest('hex');
     if (sha256!==manifest.sha256 || sha256!==createHash('sha256').update(prediction.model_patch).digest('hex') || prediction.instance_id!==task.instanceId || manifest.baseCommit!==task.baseCommit || manifest.baselineCommit!==task.baselineCommit || manifest.revision!==task.revision) throw Error('Archived prediction hash or baseline identity mismatch');
     await mkdir(output,{recursive:true,mode:0o700});
