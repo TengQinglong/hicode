@@ -47,7 +47,7 @@ HiCode 是一个基于 TypeScript 自研的轻量级终端 Code Agent，核心�
 
 ### 公开评测
 
-- 🔥 **持续评测中**：截至 2026 年 10 月 4 日，Terminal-Bench 2.0 已通过 **30 题**，SWE-bench Verified 已通过 **150 题**。
+- 🔥 **持续评测中**：截至 2026 年 10 月 6 日，Terminal-Bench 2.0 已通过 **37 题**，SWE-bench Verified 已通过 **255 题**。
 
 ## 快速开始
 
