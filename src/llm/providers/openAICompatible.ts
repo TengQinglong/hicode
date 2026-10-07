@@ -379,7 +379,10 @@ async function callOpenAICompatibleCore(
         }): Promise<void> => {
             const canRetry = failure.allowed && attempt < LLM_MAX_ATTEMPTS;
             requestSignal.cleanup();
-            const message = `${failure.message} (attempted ${attempt}/${LLM_MAX_ATTEMPTS} times); tools from this response were not executed${canRetry ? "; retrying the model request" : "; retry budget exhausted"}`;
+            const retryStatus = canRetry ? "; retrying the model request"
+                : attempt < LLM_MAX_ATTEMPTS ? "; retry limit for this error reached"
+                : "; retry budget exhausted";
+            const message = `${failure.message} (attempted ${attempt}/${LLM_MAX_ATTEMPTS} times); tools from this response were not executed${retryStatus}`;
             finishPromptLog({
                 ...failure.details,
                 error: message,

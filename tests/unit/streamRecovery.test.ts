@@ -94,7 +94,7 @@ test("length retries once with a smaller-step request and preserves the caller's
 test("persistent truncation exhausts its single recovery without executing partial calls", async () => withTempProject(async (cwd, storage) => {
     let count = 0;
     mockFetch(async () => {count++; return response(event({content: "partial"}, "length"));});
-    await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("retry budget exhausted");
+    await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("attempted 2/3 times); tools from this response were not executed; retry limit for this error reached");
     expect(count).toBe(2);
 }));
 
@@ -123,7 +123,7 @@ test.each(["rate_limit_exceeded", "data_inspection_failed", "vendor_unknown"])("
 test("repeated provider stream errors stop after one retry", async () => withTempProject(async (cwd, storage) => {
     let count = 0;
     mockFetch(async () => {count++; return response(`data: ${JSON.stringify({error: {code: "vendor_unknown", message: "fixture rejection"}})}\n\n`);});
-    await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("retry budget exhausted");
+    await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("attempted 2/3 times); tools from this response were not executed; retry limit for this error reached");
     expect(count).toBe(2);
 }));
 
@@ -165,7 +165,7 @@ test("残缺工具响应只重试模型请求，重置草稿并累加已报告 u
 test.each([malformed, invalidArguments])("重复协议失败最多两次；不能无限重试", async payload => withTempProject(async (cwd, storage) => {
     let count = 0;
     mockFetch(async () => {count++; return response(payload);});
-    await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("retry budget exhausted");
+    await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("attempted 2/3 times); tools from this response were not executed; retry limit for this error reached");
     expect(count).toBe(2);
 }));
 
@@ -245,7 +245,7 @@ test.each([
 test.each([malformed, invalidArguments])("不同流故障共享一次恢复额度，不按故障种类叠加", async payload => withTempProject(async (cwd, storage) => {
     let count = 0;
     mockFetch(async () => ++count === 1 ? disconnectedResponse("") : response(payload));
-    await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("tools from this response were not executed; retry budget exhausted");
+    await expect(caller(options(cwd, storage), endpoint)).rejects.toThrow("tools from this response were not executed; retry limit for this error reached");
     expect(count).toBe(2);
 }));
 

@@ -109,7 +109,7 @@ bun test          # 自动化测试
 bun run check     # TypeScript 检查
 ```
 
-完整验证：`bun run verify`，额外包含 SDK 打包验证，需要 Node.js 22.12+。
+日常小改动使用 `bun run verify:quick tests/unit/相关文件.test.ts`，运行相关测试和 TypeScript 检查。大范围改造准备推送或发布时使用 `bun run verify` 做完整验证（含全部测试和 SDK 打包），需要 Node.js 22.12+。
 
 公开题批量评测、TUI 观察和自动判题见 [HiCode Eval](hicode-eval/README.md)。
 

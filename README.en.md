@@ -109,7 +109,7 @@ bun test          # Automated tests
 bun run check     # TypeScript checks
 ```
 
-Full validation: `bun run verify` adds SDK package verification and requires Node.js 22.12+.
+For small daily changes, run `bun run verify:quick tests/unit/relevant-file.test.ts` for the relevant tests and TypeScript checks. Run the full `bun run verify` suite before pushing or releasing substantial changes; it includes all tests and SDK package verification and requires Node.js 22.12+.
 
 To run public benchmark tasks with a live TUI and automatic grading, see [HiCode Eval](hicode-eval/README.en.md).
 

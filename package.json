@@ -38,6 +38,7 @@
     "check:tests": "tsc -p tsconfig.test.json",
     "check:tooling": "tsc -p tsconfig.tooling.json",
     "check": "bun run check:production && bun run check:tests && bun run check:tooling",
+    "verify:quick": "bun tooling/scripts/verify-quick.ts",
     "verify": "bun test && bun run check && bun run verify:sdk-package"
   },
   "engines": {
