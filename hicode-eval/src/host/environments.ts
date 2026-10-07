@@ -28,7 +28,7 @@ const digest=(value:string)=>createHash('sha256').update(value).digest('hex');
 function aptInstall(packages:readonly string[]):string {
   return packages.length?'RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends '+packages.join(' ')+' && rm -rf /var/lib/apt/lists/*\n':'';
 }
-const commandPackages:Record<string,string>={gcc:'build-essential','g++':'build-essential',rustc:'rustc',bc:'bc',openssl:'openssl',vim:'vim',sqlite3:'sqlite3',ffmpeg:'ffmpeg',chromium:'chromium',chromedriver:'chromium-driver',oligotm:'primer3',Rscript:'r-base',cobc:'gnucobol3',screen:'screen',expect:'expect',gfortran:'gfortran',h5cc:'libhdf5-dev','pkg-config':'pkg-config',gcov:'gcc',tclsh:'tcl',pdflatex:'texlive-latex-base=2023.20240207-1'};
+const commandPackages:Record<string,string>={gcc:'build-essential','g++':'build-essential',rustc:'rustc',bc:'bc',openssl:'openssl',vim:'vim',sqlite3:'sqlite3',ffmpeg:'ffmpeg',chromium:'chromium',chromedriver:'chromium-driver',oligotm:'primer3',Rscript:'r-base',cobc:'gnucobol3',screen:'screen',expect:'expect',gfortran:'gfortran',h5cc:'libhdf5-dev','pkg-config':'pkg-config',gcov:'gcc',tclsh:'tcl',pdflatex:'texlive-latex-base=2023.20240207-1',coqc:'coq',zip:'zip',unzip:'unzip',strings:'binutils',extundelete:'extundelete',foremost:'foremost',fls:'sleuthkit',e2fsck:'e2fsprogs',pmars:'pmars'};
 function environmentBuilder(definition?:DependencyRecipe){
   return definition?.python==='3.6.15'?'prepare_source_environment.py':'prepare_environment.py';
 }
@@ -154,6 +154,7 @@ export class EnvironmentStore {
               const value=commandPackages[command];if(!value)throw Error('No system package recipe for command '+command);return value;
             }))];
             body=aptInstall(packages);
+            if(metadata.commands.includes('pmars'))body+='ENV PATH="/usr/games:${PATH}"\n';
             for(const [name,pins] of [['actor',metadata.packages],['verifier',metadata.verifierPackages]] as const){
               if(pins.length)body+='RUN '+JSON.stringify(['/opt/python313/bin/python3.13','-m','pip','install','--no-cache-dir','--no-compile','--target','/opt/hicode-terminal/'+name,...pins])+'\n';
             }
