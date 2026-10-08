@@ -282,7 +282,9 @@ bun hicode-eval/tests/containerSmoke.ts --catalog CATALOG --environments ENVIRON
 
 干净构建回执使用 version 2，记录 `recipeSha256`、父镜像和不可变 imageId。每层保留 `context/` 与 `build.log`；旧 version 1 环境不会被新准备器当作干净环境使用。准备阶段可联网下载公开依赖，作答与判题仍按批次的 isolated/open 设置执行，真实模型凭据不进入构建上下文。
 
-依赖配方同时声明 requirements（运行版本）、buildRequirements（通用编译工具）、buildGroups（需要不同工具版本的编译顺序）和 buildEnvironment（编译变量）。分组只能构建已锁定的运行包；编译专用包在镜像发布前移除，最终重新核对运行版本。独立的 BuildKit 下载缓存仅保存新构建下载的公开包，不进入作答容器。 Django 3.0–3.2 的 Python 3.6 环境使用固定的 CPython 3.6.15/OpenSSL 1.1.1w 公开源码和 SHA256 构建，源码运行时配方仅支持固定运行依赖，不接受自定义编译变量或分组；现代 Python 镜像保持原构建方式。
+依赖配方同时声明 requirements（运行版本）、buildRequirements（通用编译工具）、buildGroups（需要不同工具版本的编译顺序）和 buildEnvironment（编译变量）。分组只能构建已锁定的运行包；编译专用包在镜像发布前移除，最终重新核对运行版本。独立的 BuildKit 下载缓存仅保存新构建下载的公开包，不进入作答容器。Python 3.6 环境使用固定的 CPython 3.6.15/OpenSSL 1.1.1w 公开源码和 SHA256 构建：先将官方归档放入 `<environments>/runtime-sources/`，构建时复制进临时上下文并再次校验哈希，避免容器内下载超时。源码运行时配方仅支持固定运行依赖，不接受自定义编译变量或分组；现代 Python 镜像保持原构建方式。
+
+这两个缓存文件分别为 `Python-3.6.15.tar.xz`（[python.org](https://www.python.org/ftp/python/3.6.15/Python-3.6.15.tar.xz)，SHA256 `6e28d7cdd6dd513dd190e49bca3972e20fcf455090ccf2ef3f1a227614135d91`）和 `openssl-1.1.1w.tar.gz`（[OpenSSL](https://www.openssl.org/source/old/1.1.1/openssl-1.1.1w.tar.gz)，SHA256 `cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8`）。源码包只用于构建镜像，不进入 Actor 工作区。
 
 ## 重建准备容器
 

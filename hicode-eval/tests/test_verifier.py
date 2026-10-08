@@ -10,7 +10,9 @@ from verifier import verify, display_output, verifier_environment
 class VerifierTest(unittest.TestCase):
     def test_verifier_keeps_its_pins_first_and_sees_task_installed_dependencies(self):
         env=verifier_environment({'packages':['x==1'],'verifierPackages':['x==2']},Path('/task/home'))
-        self.assertEqual(env['PYTHONPATH'].split(os.pathsep),['/app/.eval-verifier-python','/app/.eval-python','/task/home/.local/lib/python3.13/site-packages'])
+        self.assertEqual(env['PYTHONPATH'].split(os.pathsep),['/opt/hicode-terminal/verifier','/opt/hicode-terminal/actor','/task/home/.local/lib/python3.13/site-packages'])
+        sealed=verifier_environment({'packages':[],'verifierPackages':['x==2'],'verifierChroot':True},Path('/task/home'))
+        self.assertEqual(sealed['PYTHONPATH'].split(os.pathsep)[0],'/app/.eval-verifier-python')
         self.assertEqual(env['PATH'].split(os.pathsep)[:4],['/opt/hicode-verifier/bin','/opt/python313/bin','/task/home/.local/bin','/task/home/bin'])
         self.assertEqual(verifier_environment({},Path('/task/home'))['PYTHONPATH'],'/task/home/.local/lib/python3.13/site-packages')
     def run_check(self, code, timeout=5, cancel=False, failed=False, report=True):

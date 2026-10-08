@@ -60,7 +60,10 @@ test('manifest refuses path escapes, undeclared files, hidden test sources, and 
 
 test('catalog includes reviewed tasks with the exact newly required inputs', async () => {
   const available = await profiles();
-  expect(Object.keys(available)).toHaveLength(52);
+  expect(Object.keys(available)).toHaveLength(55);
+  expect(available['torch-tensor-parallelism']!.packages).toEqual(['torch==2.7.0']);
+  expect(available['torch-pipeline-parallelism']!.verifierPackages).toEqual(['torch==2.7.0','transformers==4.55.0']);
+  expect(available['pytorch-model-recovery']!.inputs.map(file=>file.target)).toEqual(['dataset.pt','weights.pt']);
   expect(available['sqlite-db-truncate']!.inputs.map(file => file.target)).toEqual(['trunc.db']);
   expect(available['code-from-image']!.inputs.map(file => file.target)).toEqual(['code.png']);
   expect(available['constraints-scheduling']!.inputs.map(file => file.target)).toEqual(['alice_calendar.ics', 'bob_calendar.ics', 'carol_calendar.ics']);

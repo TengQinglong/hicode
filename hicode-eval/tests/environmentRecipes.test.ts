@@ -42,6 +42,10 @@ test('dependency recipe rejects unpinned dependencies, direct references and she
   expect(dependencyRecipeSchema.safeParse({...recipe,systemPackages:['gcc;id']}).success).toBe(false);
   expect(dependencyRecipeSchema.safeParse({...recipe,requirements:['pkg==1','PKG==2']}).success).toBe(false);
   expect(dependencyRecipeSchema.safeParse({...recipe,buildGroups:[{packages:['other==1'],requirements:[]}]}).success).toBe(false);
+  const sourceArchives=[{namespace:'matplotlib',sha256:'a'.repeat(64)}];
+  expect(dependencyRecipeSchema.safeParse({...recipe,sourceArchives}).success).toBe(true);
+  expect(dependencyRecipeSchema.safeParse({...recipe,sourceArchives:[{namespace:'../escape',sha256:'a'.repeat(64)}]}).success).toBe(false);
+  expect(dependencyRecipeSchema.safeParse({...recipe,sourceArchives:[{namespace:'matplotlib',sha256:'wrong'}]}).success).toBe(false);
   expect(baseImagesSchema.safeParse({system:'ubuntu:latest'}).success).toBe(false);
 });
 
@@ -49,7 +53,11 @@ test('dependency recipe rejects unpinned dependencies, direct references and she
 test('source Python recipes accept only the reviewed release without custom build injection',()=>{
   const recipe={version:1,python:'3.6.15',requirements:['pip==21.3.1'],buildRequirements:[],buildEnvironment:{},buildGroups:[],systemPackages:['build-essential'],provenance:'reviewed'};
   expect(dependencyRecipeSchema.safeParse(recipe).success).toBe(true);
-  for(const python of ['3.6','3.6.14','3.7.17'])expect(dependencyRecipeSchema.safeParse({...recipe,python}).success).toBe(false);
-  for(const changes of [{buildRequirements:['other==1']},{buildEnvironment:{LD_PRELOAD:'/tmp/library'}},{buildGroups:[{packages:['pip==21.3.1'],requirements:[]}]}])
+  for(const python of ['3.6','3.6.14'])expect(dependencyRecipeSchema.safeParse({...recipe,python}).success).toBe(false);
+  expect(dependencyRecipeSchema.safeParse({...recipe,python:'3.7.17'}).success).toBe(true);
+  expect(dependencyRecipeSchema.safeParse({...recipe,python:'3.7.17',buildEnvironment:{LD_PRELOAD:'/tmp/library'}}).success).toBe(false);
+  for(const changes of [{buildRequirements:['other==1']},{buildEnvironment:{LD_PRELOAD:'/tmp/library'}},{buildGroups:[{packages:['pip==21.3.1'],requirements:['other==1']}]}])
     expect(dependencyRecipeSchema.safeParse({...recipe,...changes}).success).toBe(false);
+  expect(dependencyRecipeSchema.safeParse({...recipe,buildGroups:[{packages:['pip==21.3.1'],requirements:[]}]}).success).toBe(true);
+  expect(dependencyRecipeSchema.safeParse({...recipe,sourceArchives:[{namespace:'matplotlib',sha256:'a'.repeat(64)}]}).success).toBe(true);
 });

@@ -1,4 +1,4 @@
-"""Build the reviewed CPython 3.6 dependency image from checksum-pinned public source."""
+"""Build reviewed legacy CPython dependency images from checksum-pinned public source."""
 import hashlib
 import json
 import os
@@ -12,12 +12,15 @@ import tempfile
 from venv_paths import relocate_environment
 
 PYTHON_SHA256 = '6e28d7cdd6dd513dd190e49bca3972e20fcf455090ccf2ef3f1a227614135d91'
+PYTHON37_SHA256 = '7911051ed0422fd54b8f59ffc030f7cf2ae30e0f61bda191800bb040dce4f9d2'
 OPENSSL_SHA256 = 'cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8'
+PYTHON_SOURCES = {'3.6.15': ('Python-3.6.15.tar.xz', PYTHON_SHA256),
+                  '3.7.17': ('Python-3.7.17.tar.xz', PYTHON37_SHA256)}
 
 
 def validate_recipe(value):
     fields = {'version', 'python', 'requirements', 'buildRequirements', 'buildEnvironment', 'buildGroups', 'systemPackages', 'provenance'}
-    if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - {'sourceArchives'} or value['version'] != 1 or value['python'] != '3.6.15':
+    if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - {'sourceArchives'} or value['version'] != 1 or value['python'] not in PYTHON_SOURCES:
         raise ValueError('Unsupported source-runtime recipe')
     if value['buildRequirements'] != [] or value['buildEnvironment'] != {}:
         raise ValueError('Source-runtime recipes do not accept custom build steps or variables')
@@ -63,15 +66,16 @@ def stage_runtime_archive(source, target, checksum):
         raise ValueError('Runtime source hash mismatch')
 
 
-def build_runtime(root):
-    prefix = root/'python/cpython-3.6.15-source'
+def build_runtime(root, version):
+    source_file, source_hash = PYTHON_SOURCES[version]
+    prefix = root/('python/cpython-'+version+'-source')
     ssl_prefix = root/'python/openssl-1.1.1w'
     if prefix.exists() or ssl_prefix.exists():
         raise ValueError('Source runtime already exists')
     with tempfile.TemporaryDirectory(prefix='python36-build-', dir=root) as tmp:
         build = Path(tmp)
         for filename, checksum in [
-            ('Python-3.6.15.tar.xz', PYTHON_SHA256),
+            (source_file, source_hash),
             ('openssl-1.1.1w.tar.gz', OPENSSL_SHA256),
         ]:
             archive = build/filename
@@ -84,13 +88,16 @@ def build_runtime(root):
         # These flags avoid modern-compiler assumptions unsupported by the original interpreter.
         env = dict(os.environ, CFLAGS='-O0 -fwrapv -fcommon', CPPFLAGS='-I'+str(ssl_prefix/'include'),
                    LDFLAGS='-L'+str(ssl_prefix/'lib')+' -Wl,-rpath,'+str(ssl_prefix/'lib'))
-        py_source = build/'Python-3.6.15'
-        run(['./configure', '--prefix='+str(prefix), '--with-ensurepip=install'], cwd=py_source, env=env)
+        py_source = build/('Python-'+version)
+        configure=['./configure', '--prefix='+str(prefix), '--with-ensurepip=install']
+        if version=='3.7.17':configure.append('--with-openssl='+str(ssl_prefix))
+        run(configure, cwd=py_source, env=env)
         run(['make', '-s', '-j2'], cwd=py_source, env=env)
         run(['make', '-s', 'install'], cwd=py_source, env=env)
-    python = prefix/'bin/python3.6'
-    run([str(python), '-c', 'import sys,ssl,sqlite3,ctypes,zlib,bz2,lzma;assert sys.version_info[:3]==(3,6,15)'])
-    (prefix/'.runtime-ready.json').write_text(json.dumps({'python': '3.6.15', 'pythonSha256': PYTHON_SHA256,
+    python = prefix/('bin/python'+'.'.join(version.split('.')[:2]))
+    expected=tuple(int(piece) for piece in version.split('.'))
+    run([str(python), '-c', 'import sys,ssl,sqlite3,ctypes,zlib,bz2,lzma;assert sys.version_info[:3]=='+repr(expected)])
+    (prefix/'.runtime-ready.json').write_text(json.dumps({'python': version, 'pythonSha256': source_hash,
         'opensslSha256': OPENSSL_SHA256, 'compilerFlags': '-O0 -fwrapv -fcommon'}))
     return python
 
@@ -101,7 +108,7 @@ def main():
     for name in ['seed', 'actor', 'verifier']:
         if (root/name).exists():
             raise ValueError('Dependency view already exists')
-    python = build_runtime(root)
+    python = build_runtime(root, recipe['python'])
     seed = root/'seed'
     run([str(python), '-m', 'venv', str(seed)])
     pip = [str(seed/'bin/python'), '-m', 'pip', '--disable-pip-version-check']

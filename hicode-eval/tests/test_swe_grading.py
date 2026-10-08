@@ -6,7 +6,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from swe import git,restore_official_test_paths,controlled_eval_script,verification_validity,project_environment,namespace_eval_commands,verifier_log_directory,read_verifier_log
+from swe import git,restore_official_test_paths,controlled_eval_script,verification_validity,project_environment,materialize_versioneer_source,namespace_eval_commands,verifier_log_directory,read_verifier_log
 from reviewed_test_deps import reviewed_test_dependencies
 
 class OfficialTestReplay(unittest.TestCase):
@@ -133,6 +133,23 @@ class OfficialTestReplay(unittest.TestCase):
                          {'SETUPTOOLS_SCM_PRETEND_VERSION':'5.2.dev64+gaaaaaaa'})
         with self.assertRaises(ValueError):read_source_version(self.repo,'b'*40)
         with self.assertRaises(ValueError):project_environment('astropy/astropy')
+        self.assertEqual(project_environment('astropy/astropy',self.repo,'3.1'),{})
+        self.assertEqual(project_environment('astropy/astropy',self.repo,'1.3'),{})
+
+    def test_original_matplotlib_versioneer_uses_verified_commit_version(self):
+        import runpy
+        path=self.repo/'lib/matplotlib/_version.py';path.parent.mkdir(parents=True)
+        path.write_text('git_refnames = ""\n\ndef get_versions(): pass\n')
+        receipt={'baseCommit':'a'*40,'describe':'v3.1.0-257-gaaaaaaa',
+                 'version':'3.1.0+257.gaaaaaaa'}
+        (self.repo/'.git/hicode-source-version.json').write_text(json.dumps(receipt))
+        materialize_versioneer_source(self.repo,'matplotlib/matplotlib','3.1')
+        self.assertEqual(runpy.run_path(str(path))['get_versions']()['version'],receipt['version'])
+        path.write_text('git_refnames = ""\ndef get_versions(): pass\n')
+        receipt['version']='3.1.1.dev257+gaaaaaaa'
+        (self.repo/'.git/hicode-source-version.json').write_text(json.dumps(receipt))
+        with self.assertRaises(ValueError):
+            materialize_versioneer_source(self.repo,'matplotlib/matplotlib','3.1')
 
     def test_reviewed_test_dependencies_come_from_frozen_public_declarations(self):
         (self.repo/'setup.py').write_text('install_requires=["wcwidth"]\n')

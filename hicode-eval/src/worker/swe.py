@@ -20,7 +20,33 @@ from venv_paths import ENV_MOUNT
 # Native editable installs can validate existing build outputs for over a minute.
 SOURCE_INSTALL_TIMEOUT_SECONDS = 300
 
-def editable_install_argv(python, project, repo):
+
+def materialize_versioneer_source(project, repo, version):
+    if repo != 'matplotlib/matplotlib' or version not in {'3.0', '3.1'}:
+        return
+    from scm import read_source_version
+    receipt = read_source_version(project)
+    match = re.fullmatch(r'v([0-9]+(?:\.[0-9]+)+)-([0-9]+)-g([a-f0-9]+)', receipt['describe'])
+    if not match:
+        raise ValueError('Unsupported original Versioneer description')
+    tag, distance, short = match.groups()
+    expected = f'{tag}+{distance}.g{short}'
+    if receipt['version'] != expected or not receipt['baseCommit'].startswith(short):
+        raise ValueError('Versioneer receipt differs from the original source commit')
+    path = Path(project)/'lib/matplotlib/_version.py'
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 100_000:
+        raise ValueError('Missing original Versioneer source file')
+    original = path.read_text()
+    if 'git_refnames' not in original or 'get_versions' not in original:
+        raise ValueError('Unexpected original Versioneer source file')
+    payload = json.dumps({'version': expected, 'full-revisionid': receipt['baseCommit'],
+                          'dirty': False, 'error': None}, sort_keys=True)
+    path.write_text("import json\nversion_json = '''\n"+payload+"\n'''  # END VERSION_JSON\n\n"
+                    "def get_versions():\n    return json.loads(version_json)\n")
+
+def editable_install_argv(python, project, repo, version=None):
+    if repo == 'astropy/astropy' and version in {'1.3', '3.1'}:
+        return [str(python), 'setup.py', '--offline', 'develop']
     args = [str(python), '-m', 'pip', 'install', '--no-deps', '--no-build-isolation']
     extra = '[test]' if repo in ('sphinx-doc/sphinx', 'astropy/astropy') else '[dev]' if repo == 'mwaskom/seaborn' else ''
     if repo == 'scikit-learn/scikit-learn':
@@ -28,11 +54,13 @@ def editable_install_argv(python, project, repo):
     return [*args, '-e', str(project) + extra]
 
 
-def project_environment(repo, project=None):
+def project_environment(repo, project=None, version=None):
     # tox-current-env's fake Python links bypass venv discovery. Keep the same
     # public source and cached packages visible without changing test commands.
     if repo == 'sphinx-doc/sphinx':
         return {'PYTEST_ADDOPTS': '-rA', 'PYTHONPATH':'/testbed:'+ENV_MOUNT+'/lib/python3.9/site-packages'}
+    if repo == 'astropy/astropy' and version in {'1.3', '3.1'}:
+        return {}
     if repo in ('pydata/xarray', 'pytest-dev/pytest', 'astropy/astropy', 'matplotlib/matplotlib'):
         if project is None: raise ValueError('SCM project requires verified upstream version metadata')
         from scm import read_source_version
@@ -196,6 +224,9 @@ def namespace_eval_commands(commands, repo, version):
     for command in commands:
         if repo == 'django/django' and (command == './tests/runtests.py' or command.startswith('./tests/runtests.py ')):
             result.append('python /tests/hicode_django_report.py ' + command)
+            continue
+        if repo == 'astropy/astropy' and version in {'1.3','3.1'} and command == 'python -m pip install -e .[test] --verbose':
+            result.append('python setup.py --offline develop')
             continue
         if command.startswith('source /opt/miniconda3/bin/activate') or command.startswith('conda activate '):
             continue
@@ -487,7 +518,7 @@ def grade_swe_patch(root, config, uid, gid, cancelled, patch):
     def demote(): os.setgroups([]); os.setgid(gid); os.setuid(uid)
     env = {'PATH': ENV_MOUNT+'/bin:'+os.environ['PATH'], 'HOME': str(grade_home), 'LANG': 'C.UTF-8',
            'VIRTUAL_ENV': ENV_MOUNT, 'PYTHONDONTWRITEBYTECODE':'1', 'PIP_DISABLE_PIP_VERSION_CHECK':'1'}
-    env.update(project_environment(config['swe']['repo'],root/'baseline'))
+    env.update(project_environment(config['swe']['repo'],root/'baseline',config['swe']['version']))
     env.update(verifier_proxy_environment(config.get('verifierProxy')))
     if config['swe']['repo'] in {'pydata/xarray', 'pytest-dev/pytest', 'astropy/astropy', 'matplotlib/matplotlib'}:
         from scm import read_source_version

@@ -10,8 +10,10 @@ import re
 
 def verifier_environment(config, home):
     paths=[]
-    if config.get('verifierPackages'):paths.append('/app/.eval-verifier-python')
-    if config.get('packages'):paths.append('/app/.eval-python')
+    if config.get('verifierPackages'):
+        paths.append('/app/.eval-verifier-python' if config.get('verifierChroot') else '/opt/hicode-terminal/verifier')
+    if config.get('packages'):
+        paths.append('/app/.eval-python' if config.get('verifierChroot') else '/opt/hicode-terminal/actor')
     paths.append(str(home / '.local/lib/python3.13/site-packages'))
     return {'PATH':'/opt/hicode-verifier/bin:/opt/python313/bin:'+str(home / '.local/bin')+':'+str(home / 'bin')+':'+os.environ['PATH'],
             'HOME':str(home),'LANG':'C.UTF-8','PYTHONPATH':os.pathsep.join(paths)}

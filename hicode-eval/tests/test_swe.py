@@ -100,6 +100,12 @@ class SweExportTests(unittest.TestCase):
                 self.assertEqual(result[1], 'pytest -rA original/test.py')
                 self.assertEqual(namespace_eval_commands(['echo pip install .'], repo, 'unused'), ['echo pip install .'])
         self.assertTrue(editable_install_argv('/python','/testbed','astropy/astropy')[-1].endswith('[test]'))
+        self.assertEqual(editable_install_argv('/python','/testbed','astropy/astropy','3.1'),
+                         ['/python','setup.py','--offline','develop'])
+        self.assertEqual(editable_install_argv('/python','/testbed','astropy/astropy','1.3'),
+                         ['/python','setup.py','--offline','develop'])
+        self.assertEqual(namespace_eval_commands(['python -m pip install -e .[test] --verbose'],'astropy/astropy','3.1'),
+                         ['python setup.py --offline develop'])
         self.assertTrue(editable_install_argv('/python','/testbed','mwaskom/seaborn')[-1].endswith('[dev]'))
         self.assertIn('--no-use-pep517',editable_install_argv('/python','/testbed','scikit-learn/scikit-learn'))
 

@@ -96,8 +96,9 @@ test('SWE version contract accepts only reviewed repository versions',()=>{
  expect(sweTaskSchema.shape.version.parse('4.1')).toBe('4.1');
  expect(sweTaskSchema.shape.version.parse('4.2')).toBe('4.2');
  expect(sweTaskSchema.shape.version.parse('5.0')).toBe('5.0');
- for(const version of ['3.6','3.7','1.0','1.1','1.2','1.4','1.5','1.6','1.7','1.8','1.9','1.10','1.11','1.12','0.12','4.5','4.6','5.1','5.2','5.4','6.0','6.2','6.3','7.2','2022.03','2022.06','2022.09'] as const)expect(sweTaskSchema.shape.version.parse(version)).toBe(version);
+ for(const version of ['0.20','0.21','0.22','3.5','3.6','3.7','1.0','1.1','1.2','1.4','1.5','1.6','1.7','1.8','1.9','1.10','1.11','1.12','0.12','4.5','4.6','5.1','5.2','5.4','6.0','6.2','6.3','7.2','2022.03','2022.06','2022.09'] as const)expect(sweTaskSchema.shape.version.parse(version)).toBe(version);
  expect(sweTaskSchema.shape.python.parse('3.8')).toBe('3.8');
+ expect(sweTaskSchema.shape.python.parse('3.7')).toBe('3.7');
  expect(sweTaskSchema.shape.python.parse('3.11')).toBe('3.11');
  expect(sweTaskSchema.shape.python.parse('3.10')).toBe('3.10');
  expect(sweTaskSchema.shape.version.safeParse('5.3').success).toBe(false);
@@ -197,11 +198,12 @@ test('Django 3.0 through 3.2 retain their original Python 3.6 contract',async()=
 test('additional repositories accept only reviewed repo/version/Python combinations',async()=>{
  const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-additional-repos-')));
  const pairs=[
-  ['astropy/astropy','5.0','3.9'],['astropy/astropy','5.1','3.9'],['astropy/astropy','5.2','3.9'],
+  ['astropy/astropy','1.3','3.6'],['astropy/astropy','3.1','3.9'],['astropy/astropy','4.3','3.9'],['astropy/astropy','5.0','3.9'],['astropy/astropy','5.1','3.9'],['astropy/astropy','5.2','3.9'],
+  ...['0.20','0.21','0.22'].map(version=>['scikit-learn/scikit-learn',version,'3.6']),
   ['scikit-learn/scikit-learn','1.3','3.9'],['mwaskom/seaborn','0.12','3.9'],
   ['pallets/flask','2.3','3.11'],
   ...['2.9','2.10','2.14','2.15','3.0'].map(version=>['pylint-dev/pylint',version,'3.9']),
-  ...['2.0','2.3','2.4','2.9','2.26','2.27'].map(version=>['psf/requests',version,'3.9']),
+  ...['1.1','2.0','2.3','2.4','2.9','2.26','2.27'].map(version=>['psf/requests',version,'3.9']),
  ];
  try{
   for(const [repo,version,python] of pairs){
@@ -212,7 +214,7 @@ test('additional repositories accept only reviewed repo/version/Python combinati
     baselineCommit:'b'.repeat(40),files:{},evaluationMode:'shared-linux-development'};
    await save(join(path,'swe-task.json'),base);
    expect((await sweCatalog(root)).some(task=>task.id===id)).toBe(true);
-   await save(join(path,'swe-task.json'),{...base,python:'3.6'});
+   await save(join(path,'swe-task.json'),{...base,python:python==='3.6'?'3.9':'3.6'});
    await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
    await save(join(path,'swe-task.json'),{...base,version:'7.2'});
    await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
@@ -250,12 +252,15 @@ test('Xarray submission rejects absent, skipped and wrong-environment public pre
 });
 
 
-test('Matplotlib requires the reviewed Python 3.11 environment',async()=>{
+test('Matplotlib 3.5 requires the reviewed Python 3.11 environment',async()=>{
  const root=await realpath(await mkdtemp(join(tmpdir(),'hicode-matplotlib-contract-'))),id='matplotlib__matplotlib-24026';
  try{
   const path=join(root,id);await mkdir(path);
-  const descriptor={kind:'swe-bench-verified',instanceId:id,revision:'c'.repeat(40),repo:'matplotlib/matplotlib',version:'3.6',baseCommit:'a'.repeat(40),harnessVersion:'4.1.0',environment:'/opt/hicode-swe/cache/'+'a'.repeat(64),python:'3.9',verifierSeconds:1800,baselineCommit:'b'.repeat(40),files:{},evaluationMode:'shared-linux-development'};
+  const descriptor={kind:'swe-bench-verified',instanceId:id,revision:'c'.repeat(40),repo:'matplotlib/matplotlib',version:'3.5',baseCommit:'a'.repeat(40),harnessVersion:'4.1.0',environment:'/opt/hicode-swe/cache/'+'a'.repeat(64),python:'3.9',verifierSeconds:1800,baselineCommit:'b'.repeat(40),files:{},evaluationMode:'shared-linux-development'};
   await save(join(path,'swe-task.json'),descriptor);await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
   await save(join(path,'swe-task.json'),{...descriptor,python:'3.11'});expect((await sweCatalog(root))[0]!.id).toBe(id);
+  await save(join(path,'swe-task.json'),{...descriptor,version:'3.4',python:'3.8'});expect((await sweCatalog(root))[0]!.id).toBe(id);
+  await save(join(path,'swe-task.json'),{...descriptor,version:'3.4',python:'3.11'});await expect(sweCatalog(root)).rejects.toThrow('supported repository environment');
+  await save(join(path,'swe-task.json'),{...descriptor,version:'3.0',python:'3.7'});expect((await sweCatalog(root))[0]!.id).toBe(id);
  }finally{await rm(root,{recursive:true,force:true});}
 });

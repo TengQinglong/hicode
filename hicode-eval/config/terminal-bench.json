@@ -1875,5 +1875,79 @@
     "commands": [
       "pmars"
     ]
+  },
+  "torch-tensor-parallelism": {
+    "hashes": {
+      "environment/Dockerfile": "5f264ff0bf62a49aee3c6398447de5108df141e7a2ad35c6de8ef39fa62049c6",
+      "instruction.md": "121d36637699e55f88943be97ec22aaefc287abf072d8d3acaa42718ea72f7e1",
+      "solution/solve.sh": "d083b7cbf9dbb6cc2ff38c8f2acc150f0059c04aea42d6c2183aeaecc5a19385",
+      "task.toml": "60720f55f91254706ff01852d20d579d564ae471204c9eaeb09294d4c322ae9f",
+      "tests/test.sh": "a7e6c9408b2401e4e7448371f7ddc72f3284caccfb56277d3cd4e98051868cdf",
+      "tests/test_outputs.py": "4ae4285e15fba1fcf13d7b7c0638ac8c2e2b0797c937abab1fb6b136fd508290"
+    },
+    "initializer": null,
+    "verifierPrelude": "none",
+    "inputs": [],
+    "directories": [],
+    "packages": [
+      "torch==2.7.0"
+    ],
+    "verifierPackages": [
+      "torch==2.7.0"
+    ]
+  },
+  "torch-pipeline-parallelism": {
+    "hashes": {
+      "environment/Dockerfile": "c357ea41e4a4013c5c5980b8fef04af6a5ae250ccc6697cf3bad3127401a931f",
+      "instruction.md": "989bfcf0c54baf6c8cdc391743dbb2f9e858c5779dd85112536875d4d1b2dcd2",
+      "solution/solve.sh": "787198e4178d88b887697aefdd29819f29435ffdfe356545d92f58a30fb38b70",
+      "task.toml": "e88d3f1422a594c5fedac69ffde0be35019bf90f2c6aa1ee7cedec2403688b59",
+      "tests/test.sh": "cc9fd28b6590993fc37e4a99da771cbf04726c8c62fe308e802612241da69dea",
+      "tests/test_outputs.py": "23574246a407163a8e6581c84287cc2f1eb745efbaad2a317a5a28c39958c64f"
+    },
+    "initializer": null,
+    "verifierPrelude": "none",
+    "inputs": [],
+    "directories": [],
+    "packages": [
+      "torch==2.7.0",
+      "transformers==4.55.0"
+    ],
+    "verifierPackages": [
+      "torch==2.7.0",
+      "transformers==4.55.0"
+    ]
+  },
+  "pytorch-model-recovery": {
+    "hashes": {
+      "environment/Dockerfile": "35851b7561b3ab959ec9f5da34306264f5ab3ddd4c5755be397b7e7a9d13d06e",
+      "environment/dataset.pt": "6db65e4ec1c0760209c2dd997ef582e4a1519ab38e0312339999c460a696960d",
+      "environment/weights.pt": "71471e71c5a311a897362dd5b77413e7ca2ca59abd00a110bdc2cd3f8584d080",
+      "instruction.md": "2bef07dc28be3ab2c35ae389584034c2e4dde92c2c31b3eb6bd829628c8c3f4a",
+      "solution/solve.sh": "175a7802777b43e0fa4f629d71f7c68fb40706813c342aaddc72108d89bd5b2c",
+      "task.toml": "b963c8b3ca627ec38b6934dc9a93373678cd5b0e85800efa3d431f937c87b6e5",
+      "tests/test.sh": "6005f3a75ccfe00d7bed1005264b4a84a1f8e30cd780f8a97b3a804be7cc7a8e",
+      "tests/test_outputs.py": "5d4d57c43e6913bf3d0081da764ad36d1b7275e3bb114a05abda529afe563905",
+      "tests/weights_gtruth.pt": "71471e71c5a311a897362dd5b77413e7ca2ca59abd00a110bdc2cd3f8584d080"
+    },
+    "initializer": null,
+    "verifierPrelude": "none",
+    "inputs": [
+      {
+        "source": "environment/dataset.pt",
+        "target": "dataset.pt"
+      },
+      {
+        "source": "environment/weights.pt",
+        "target": "weights.pt"
+      }
+    ],
+    "directories": [],
+    "packages": [
+      "torch==2.7.1"
+    ],
+    "verifierPackages": [
+      "torch==2.7.1"
+    ]
   }
 }

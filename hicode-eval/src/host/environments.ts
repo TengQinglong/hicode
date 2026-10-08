@@ -1,5 +1,5 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {mkdir,rm,writeFile,cp,realpath,readFile} from 'node:fs/promises';
+import {mkdir,rm,writeFile,cp,realpath,readFile,copyFile,lstat} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {z} from 'zod';
 import {EVAL_ROOT,REPOSITORY_ROOT} from '../paths.js';
@@ -30,7 +30,9 @@ function aptInstall(packages:readonly string[]):string {
 }
 const commandPackages:Record<string,string>={gcc:'build-essential','g++':'build-essential',rustc:'rustc',bc:'bc',openssl:'openssl',vim:'vim',sqlite3:'sqlite3',ffmpeg:'ffmpeg',chromium:'chromium',chromedriver:'chromium-driver',oligotm:'primer3',Rscript:'r-base',cobc:'gnucobol3',screen:'screen',expect:'expect',gfortran:'gfortran',h5cc:'libhdf5-dev','pkg-config':'pkg-config',gcov:'gcc',tclsh:'tcl',pdflatex:'texlive-latex-base=2023.20240207-1',coqc:'coq',zip:'zip',unzip:'unzip',strings:'binutils',extundelete:'extundelete',foremost:'foremost',fls:'sleuthkit',e2fsck:'e2fsprogs',pmars:'pmars'};
 function environmentBuilder(definition?:DependencyRecipe){
-  return definition?.python==='3.6.15'?'prepare_source_environment.py':'prepare_environment.py';
+  if(definition?.python==='3.6.15')return 'prepare_source_environment.py';
+  if(definition?.python==='3.7.17')return 'prepare_source_environment37.py';
+  return 'prepare_environment.py';
 }
 
 
@@ -148,7 +150,33 @@ export class EnvironmentStore {
             await mkdir(join(stage,'worker'));
             const builder=environmentBuilder(definition);
             for(const name of [builder,'venv_paths.py'])await cp(join(EVAL_ROOT,'src/worker',name),join(stage,'worker',name));
-            body=aptInstall(definition.systemPackages)+'COPY recipe.json /opt/hicode-environment/dependencies.json\nCOPY worker /opt/hicode-eval\nRUN --mount=type=cache,id=hicode-clean-uv-v1,target=/root/.cache/uv,sharing=locked python3 /opt/hicode-eval/'+builder+' /opt/hicode-environment/dependencies.json\n';
+            if(definition.python==='3.6.15'||definition.python==='3.7.17'){
+              const sourceRoot=join(this.root,'runtime-sources');
+              if(await realpath(sourceRoot)!==resolve(sourceRoot))throw Error('Symlinked runtime source cache');
+              await mkdir(join(stage,'runtime-sources'));
+              for(const name of [`Python-${definition.python}.tar.xz`,'openssl-1.1.1w.tar.gz']){
+                const source=join(sourceRoot,name),stat=await lstat(source);
+                if(!stat.isFile()||stat.isSymbolicLink()||stat.size>100_000_000)throw Error('Invalid runtime source archive');
+                await copyFile(source,join(stage,'runtime-sources',name));
+              }
+            }
+            if(definition.sourceArchives?.length){
+              const sourceRoot=join(this.root,'runtime-sources');
+              if(await realpath(sourceRoot)!==resolve(sourceRoot))throw Error('Symlinked source archive cache');
+              for(const archive of definition.sourceArchives){
+                const source=join(sourceRoot,archive.sha256),stat=await lstat(source);
+                if(!stat.isFile()||stat.isSymbolicLink()||stat.size>100_000_000||
+                  createHash('sha256').update(await readFile(source)).digest('hex')!==archive.sha256)
+                  throw Error('Invalid reviewed source archive');
+                const target=join(stage,'source-cache',archive.namespace);
+                await mkdir(target,{recursive:true});
+                await copyFile(source,join(target,archive.sha256));
+              }
+            }
+            body=aptInstall(definition.systemPackages)+'COPY recipe.json /opt/hicode-environment/dependencies.json\nCOPY worker /opt/hicode-eval\n'+
+              (definition.python==='3.6.15'||definition.python==='3.7.17'?'COPY runtime-sources /opt/hicode-eval/runtime-sources\n':'')+
+              (definition.sourceArchives?.length?'COPY source-cache /opt/hicode-swe/source-cache\nENV XDG_CACHE_HOME=/opt/hicode-swe/source-cache\n':'')+
+              'RUN --mount=type=cache,id=hicode-clean-uv-v1,target=/root/.cache/uv,sharing=locked python3 /opt/hicode-eval/'+builder+' /opt/hicode-environment/dependencies.json\n';
           }else if('packages' in metadata){
             const packages=[...new Set(metadata.commands.map(command=>{
               const value=commandPackages[command];if(!value)throw Error('No system package recipe for command '+command);return value;

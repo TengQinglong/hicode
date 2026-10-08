@@ -66,6 +66,8 @@ class RunnerFailureTest(unittest.TestCase):
                     value = PosixPath(*args)
                     if value == PosixPath('/eval') or value.is_relative_to('/eval') or value.is_relative_to('/run/hicode-eval'):
                         value = base / str(value).lstrip('/')
+                    elif value == PosixPath('/opt/hicode-terminal/verifier'):
+                        value = prepared
                     return super().__new__(cls, value)
 
             def execute(argv, **kwargs):
@@ -84,7 +86,7 @@ class RunnerFailureTest(unittest.TestCase):
                 return handoff
 
             def grade(*args, **kwargs):
-                self.assertIn('install-verifier', calls)
+                self.assertIn('handoff', calls)
                 calls.append('verify')
                 return 'failed', 'Original verifier: missing output'
 
@@ -156,7 +158,7 @@ class RunnerFailureTest(unittest.TestCase):
     def test_completed_attempt_installs_verifier_only_after_sealing(self):
         result, calls, _ = self.run_attempt(completed=True)
         self.assertEqual(result['execution'], 'completed')
-        self.assertEqual(calls, ['stop', 'handoff', 'install-verifier', 'verify', 'finalize'])
+        self.assertEqual(calls, ['stop', 'handoff', 'verify', 'finalize'])
 
     def test_saved_shutdown_still_records_execution_timeout_without_false_cleanup_error(self):
         result,calls,receipt=self.run_attempt(timed_out=True)
@@ -171,7 +173,7 @@ class RunnerFailureTest(unittest.TestCase):
         result, calls, receipt = self.run_attempt()
         self.assertEqual(result['execution'], 'failed')
         self.assertEqual(result['grading'], 'failed')
-        self.assertEqual(calls, ['shutdown', 'stop', 'handoff', 'install-verifier', 'verify', 'finalize'])
+        self.assertEqual(calls, ['shutdown', 'stop', 'handoff', 'verify', 'finalize'])
         self.assertTrue(receipt['turnSaved'])
 
     def test_incomplete_shutdown_never_uploads_tests_or_installs_verifier(self):

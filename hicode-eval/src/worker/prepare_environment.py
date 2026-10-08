@@ -10,9 +10,10 @@ from venv_paths import relocate_environment
 
 
 def validate_recipe(value):
-    if not isinstance(value, dict) or set(value) != {'version', 'python', 'requirements', 'buildRequirements', 'buildEnvironment', 'buildGroups', 'systemPackages', 'provenance'} or value['version'] != 1:
+    required = {'version', 'python', 'requirements', 'buildRequirements', 'buildEnvironment', 'buildGroups', 'systemPackages', 'provenance'}
+    if not isinstance(value, dict) or not required <= set(value) or set(value) - required - {'sourceArchives'} or value['version'] != 1:
         raise ValueError('Invalid dependency recipe')
-    if not isinstance(value['python'], str) or not re.fullmatch(r'3\.(8|9|10|11)\.\d+', value['python']):
+    if not isinstance(value['python'], str) or not re.fullmatch(r'3\.(7|8|9|10|11)\.\d+', value['python']):
         raise ValueError('Unsupported interpreter')
     pins = value['requirements']
     if not isinstance(pins, list) or not 0 < len(pins) <= 500 or any(not isinstance(pin, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.!+_-]*', pin) for pin in pins):

@@ -65,10 +65,10 @@ def command(args,timeout=15,extra=None,cwd=None,output_path=None):
     env={'PATH':'/opt/python313/bin:'+str(home/'.local/bin')+':'+str(home/'bin')+':'+os.environ['PATH'],'HOME':str(home),'TERM':'xterm-256color','COLORTERM':'truecolor','LANG':'C.UTF-8'}
     if is_swe:
         from swe import project_environment
-        env.update(project_environment(config['swe']['repo'],root/'baseline'))
+        env.update(project_environment(config['swe']['repo'],root/'baseline',config['swe']['version']))
         env.update(PATH='/opt/hicode-swe/env/bin:'+str(home/'.local/bin')+':'+str(home/'bin')+':'+os.environ['PATH'],VIRTUAL_ENV='/opt/hicode-swe/env',PYTHONDONTWRITEBYTECODE='1')
     if config.get('packages'):
-        env['PYTHONPATH']='/app/.eval-python'
+        env['PYTHONPATH']='/opt/hicode-terminal/actor'
         env['PIP_CACHE_DIR']='/tmp/pip-cache'
     env.update(config.get('environment',{}))
     if extra:env.update(extra)
@@ -125,14 +125,15 @@ try:
     extra={'HICODE_EVAL_SOURCE':release,'HICODE_EVAL_HOME':str(conf)}
     if is_swe:
         if not (swe_environment/'.ready.json').is_file():raise ValueError('Prepared actor environment is missing')
-        from swe import editable_install_argv, SOURCE_INSTALL_TIMEOUT_SECONDS
-        command(namespace(editable_install_argv('/opt/hicode-swe/env/bin/python','/testbed',config['swe']['repo'])),timeout=SOURCE_INSTALL_TIMEOUT_SECONDS,output_path=logs/'repo-install.txt')
+        from swe import editable_install_argv, materialize_versioneer_source, SOURCE_INSTALL_TIMEOUT_SECONDS
+        materialize_versioneer_source(root/'baseline',config['swe']['repo'],config['swe']['version'])
+        materialize_versioneer_source(project,config['swe']['repo'],config['swe']['version'])
+        command(namespace(editable_install_argv('/opt/hicode-swe/env/bin/python','/testbed',config['swe']['repo'],config['swe']['version'])),timeout=SOURCE_INSTALL_TIMEOUT_SECONDS,output_path=logs/'repo-install.txt')
     for required in config.get('commands',[]):
         if not shutil.which(required):raise RuntimeError('Task environment missing command: '+required)
     packages=config.get('packages',[])
     if packages:
-        shutil.copytree('/opt/hicode-terminal/actor',project/'.eval-python',symlinks=True)
-        subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(project/'.eval-python')],check=True)
+        if not Path('/opt/hicode-terminal/actor').is_dir():raise ValueError('Prepared actor packages are missing')
     initializer=config['initializer']
     if initializer:
         script=project/initializer['file']
@@ -225,10 +226,12 @@ try:
                 verifier_log.mkdir(exist_ok=True);os.chown(verifier_log,uid,account.pw_gid)
                 verifier_packages=config.get('verifierPackages',[])
                 if verifier_packages:
+                    if not Path('/opt/hicode-terminal/verifier').is_dir():raise ValueError('Prepared verifier packages are missing')
                     target=project/'.eval-verifier-python'
                     if target.exists() or target.is_symlink():raise ValueError('Reserved verifier dependency path already exists in the submitted workspace')
-                    shutil.copytree('/opt/hicode-terminal/verifier',target,symlinks=True)
-                    subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(target)],check=True)
+                    if config.get('verifierChroot'):
+                        shutil.copytree('/opt/hicode-terminal/verifier',target,symlinks=True)
+                        subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(target)],check=True)
                 if config.get('verifierChroot'):
                     verifier_root=root/'verifier-root'
                     prepare_verifier_root(project,verifier_root)
@@ -249,7 +252,7 @@ try:
                         # after all Agent processes are stopped; the source dataset is never mounted.
                         subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(root/'tests')],check=True)
                         command(namespace(['--chdir','/tests','/opt/hicode-verifier/bin/python','-s','-P','setup.py','build_ext','--inplace'],verifier=True,setup=True),
-                                timeout=60,extra={'PYTHONPATH':'/app/.eval-verifier-python','PYTHONNOUSERSITE':'1'},output_path=verifier_log/'setup.txt')
+                                timeout=60,extra={'PYTHONPATH':'/app/.eval-verifier-python' if config.get('verifierChroot') else '/opt/hicode-terminal/verifier','PYTHONNOUSERSITE':'1'},output_path=verifier_log/'setup.txt')
                     grade,output=verify(namespace(['/opt/hicode-verifier/bin/python','-m','pytest','-o','cache_dir=/logs/verifier/.pytest_cache','--ctrf','/logs/verifier/ctrf.json','/tests/test_outputs.py','-rA'],verifier=True),
                         timeout=config['verifierSeconds'],output_path=verifier_log/'output.txt',report_path=verifier_log/'ctrf.json',cwd=project,
                         env={**verifier_environment(config,home),**config.get('verifierEnvironment',{})},

@@ -184,6 +184,11 @@ def actor_readonly_mounts(release, environment):
             re.fullmatch(r'/opt/hicode/dependencies/[a-f0-9]{64}/node_modules',str(dependencies))):
         raise ValueError('Actor dependencies escape prepared runtime')
     paths.extend([release,dependencies,Path('/opt/hicode-eval/preflight.ts'),Path('/opt/hicode-eval/network_entry.py')])
+    terminal_packages=Path('/opt/hicode-terminal/actor')
+    if terminal_packages.exists():
+        if terminal_packages.is_symlink() or not terminal_packages.is_dir():
+            raise ValueError('Invalid prepared terminal actor packages')
+        paths.append(terminal_packages)
     if environment is not None:
         interpreter=(Path(environment)/'bin/python').resolve(strict=True)
         if not interpreter.is_relative_to(Path('/usr')):

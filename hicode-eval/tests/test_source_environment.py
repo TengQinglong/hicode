@@ -3,7 +3,9 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
-from prepare_source_environment import validate_recipe, unpack
+from prepare_source_environment import validate_recipe, unpack, stage_runtime_archive
+from prepare_source_environment37 import validate_recipe as validate_python37_recipe
+import hashlib
 
 
 class SourceEnvironmentTests(unittest.TestCase):
@@ -14,7 +16,10 @@ class SourceEnvironmentTests(unittest.TestCase):
 
     def test_only_the_pinned_source_interpreter_and_public_packages_are_accepted(self):
         self.assertEqual(validate_recipe(self.recipe())['python'], '3.6.15')
-        for value in ['3.6', '3.6.14', '3.9.23']:
+        self.assertEqual(validate_python37_recipe({**self.recipe(), 'python': '3.7.17'})['python'], '3.7.17')
+        ordered = {**self.recipe(), 'buildGroups': [{'packages': ['pip==21.3.1'], 'requirements': []}]}
+        self.assertEqual(validate_recipe(ordered)['buildGroups'], ordered['buildGroups'])
+        for value in ['3.6', '3.6.14', '3.7.16', '3.7.17', '3.9.23']:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 validate_recipe({**self.recipe(), 'python': value})
         for pins in [['pip'], ['pkg @ file:///answer'], ['--index-url=https://example.com'], ['pkg==1', 'PKG==1']]:
@@ -45,3 +50,19 @@ class SourceEnvironmentTests(unittest.TestCase):
                 stream.addfile(item, io.BytesIO(b'ok'))
             unpack(archive, root/'output')
             self.assertEqual((root/'output/source/file').read_bytes(), b'ok')
+
+    def test_runtime_archive_must_match_reviewed_checksum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root/'source.tar.gz'
+            target = root/'staged.tar.gz'
+            source.write_bytes(b'public runtime source')
+            expected = hashlib.sha256(source.read_bytes()).hexdigest()
+            stage_runtime_archive(source, target, expected)
+            self.assertEqual(target.read_bytes(), source.read_bytes())
+            with self.assertRaises(ValueError):
+                stage_runtime_archive(source, target, '0'*64)
+            source.unlink()
+            source.symlink_to(target)
+            with self.assertRaises(ValueError):
+                stage_runtime_archive(source, target, expected)
