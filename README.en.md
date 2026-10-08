@@ -47,7 +47,7 @@ Runs locally on **macOS and Linux**. Connect your own model API key to get start
 
 ### Public benchmarks
 
-- 🔥 **Evaluation in progress**: as of October 6, 2026, HiCode has passed **37 Terminal-Bench 2.0 tasks** and **255 SWE-bench Verified tasks**.
+- 🔥 **Evaluation in progress**: as of October 7, 2026, HiCode has passed **39 Terminal-Bench 2.0 tasks** and **316 SWE-bench Verified tasks**.
 
 ## Quick start
 
