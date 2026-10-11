@@ -2,15 +2,39 @@ import {describe, expect, test} from "bun:test";
 import {
   isPublicAddress,
   parsePublicWebUrl,
+  validatePinnedAddresses,
 } from "../../src/tools/webFetch/network.js";
-import {htmlToReadableText} from "../../src/tools/webFetch/webFetch.js";
+import {decodeWebText, htmlToReadableText} from "../../src/tools/webFetch/webFetch.js";
+import {WebFailures} from "../../src/tools/webFetch/state.js";
 import {generateRuleForTool} from "../../src/permissions/index.js";
 import {fileURLToPath} from "node:url";
 import {testChildEnvironment} from "../helpers/childEnvironment.js";
 import {displayWebUrl, webFetchFailure} from "../../src/tools/webFetch/errors.js";
 
 describe("web_fetch boundaries", () => {
-  test.each(["reuse", "refresh", "permission", "query", "no-store", "expired", "evicted", "octet", "binary", "invalid-utf8", "failure", "http-error"])("session source reuse and recovery: %s", async mode => {
+  test("explicit DNS answers keep HTTPS identity and public address boundaries", () => {
+    expect(validatePinnedAddresses(new URL("https://example.com"), ["8.8.8.8"])).toEqual([{address: "8.8.8.8", family: 4}]);
+    for (const address of ["127.0.0.1", "10.0.0.1", "198.18.0.1", "::1", "not-an-IP"]) expect(() => validatePinnedAddresses(new URL("https://example.com"), [address, "8.8.8.8"])).toThrow();
+    expect(() => validatePinnedAddresses(new URL("http://example.com"), ["8.8.8.8"])).toThrow("HTTPS");
+    expect(() => validatePinnedAddresses(new URL("https://8.8.8.8"), ["1.1.1.1"])).toThrow("HTTPS");
+  });
+  test("declared encodings are decoded without silently corrupting text", () => {
+    expect(decodeWebText(Buffer.from([0x63, 0x61, 0x66, 0xe9]), 'text/html; charset="windows-1252"')).toBe("café");
+    expect(decodeWebText(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]), "text/html; charset=gbk")).toBe("中文");
+    expect(() => decodeWebText(Buffer.from([0xff]), "text/plain; charset=utf-8")).toThrow();
+    expect(() => decodeWebText(Buffer.from("text"), "text/plain; charset=unknown")).toThrow();
+  });
+  test("changed queries retain service failure evidence without leaking query values", () => {
+    const failures = new WebFailures();
+    failures.record("https://example.com/search?q=private-one", 10);
+    const note = failures.record("https://example.com/search?q=private-two", 20);
+    expect(note).toContain("failed 1 time(s)");
+    expect(note).toContain("service has 2 failed retrieval(s)");
+    expect(note).not.toContain("private-");
+    failures.clear("https://example.com/search?q=private-one");
+    expect(failures.record("https://other.example.com/search", 1)).toContain("service has 1 failed retrieval(s)");
+  });
+  test.each(["reuse", "refresh", "permission", "query", "no-store", "expired", "evicted", "octet", "binary", "invalid-utf8", "failure", "http-error", "pinned-private", "pinned-http", "pinned-denied"])("session source reuse and recovery: %s", async mode => {
     const child = Bun.spawn([process.execPath, fileURLToPath(new URL("../fixtures/webFetchReuse.ts", import.meta.url)), mode],
       {env: testChildEnvironment.base, stdout: "pipe", stderr: "pipe"});
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);

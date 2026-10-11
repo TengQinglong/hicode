@@ -9,7 +9,7 @@ import {createHash} from 'node:crypto';
 import {parse} from 'dotenv';
 import {z} from 'zod';
 import {EvalLayout} from './host/layout.js';
-import {loadConfig,settingsSchema,modelSchema,submissionSchema,reasoningSchema,runSchema,idSchema,serviceRegradeRequestSchema,serviceRecheckSchema} from './host/types.js';
+import {loadConfig,settingsSchema,modelSchema,submissionSchema,reasoningSchema,runSchema,idSchema,serviceRegradeRequestSchema,serviceRecheckSchema,continuationRequestSchema} from './host/types.js';
 import {TaskCatalog} from './host/catalog.js';
 import type {CatalogTask} from './host/catalog.js';
 import {taskAdapters,datasetSchema,taskKey} from './host/datasets.js';
@@ -28,11 +28,12 @@ import {EVAL_ROOT,REPOSITORY_ROOT} from './paths.js';
 async function main(){
   const {positionals,values:v}=parseArgs({args:process.argv.slice(2),allowPositionals:true,options:{
     preparation:{type:'string'},script:{type:'string'},root:{type:'string'},help:{type:'boolean'},file:{type:'string'},dataset:{type:'string'},tasks:{type:'string'},ids:{type:'string'},run:{type:'string'},batch:{type:'string'},apply:{type:'boolean'},
-    port:{type:'string',default:'8878'},'worker-port':{type:'string',default:'8879'},'model-config':{type:'string'},reasoning:{type:'string'},'snapshot-worktree':{type:'boolean'},'build-proxy':{type:'string'},'build-cache':{type:'boolean'},live:{type:'boolean'},'verifier-proxy':{type:'string'},'service-restart-script':{type:'string'},review:{type:'string'}
+    port:{type:'string',default:'8878'},'worker-port':{type:'string',default:'8879'},'model-config':{type:'string'},reasoning:{type:'string'},'snapshot-worktree':{type:'boolean'},'build-proxy':{type:'string'},'build-cache':{type:'boolean'},live:{type:'boolean'},'verifier-proxy':{type:'string'},'service-restart-script':{type:'string'},review:{type:'string'},'agent-seconds':{type:'string'},prompt:{type:'string'}
   }});
   const command=positionals[0];
-  if(v.help||!command){console.log('HiCode Eval · current root only\n  init --root DIR [--model-config FILE]\n  prepare --root DIR [--snapshot-worktree]\n  register --root DIR --dataset DATASET --tasks DIR [--ids ID1,ID2]\n  prepare-environments --root DIR [--ids DATASET:ID1,DATASET:ID2] [--build-proxy URL]\n  worker --root DIR [--worker-port 8879]\n  serve --root DIR [--port 8878] [--worker-port 8879]\n  submit --file FILE [--reasoning EFFORT] | status [--batch ID] | catalog | cancel --batch ID | recover --run ID | retry --run ID\n  image-inventory --root DIR [--dataset DATASET]\n  gc --root DIR [--apply] [--build-cache]\n  regrade --root DIR --run ID [--verifier-proxy URL | --service-restart-script FILE]\n  recheck --root DIR --run ID --review ID\nAll operations read the root README first. No old format, old data-dir or independent catalog paths.');return;}
+  if(v.help||!command){console.log('HiCode Eval · current root only\n  init --root DIR [--model-config FILE]\n  prepare --root DIR [--snapshot-worktree]\n  register --root DIR --dataset DATASET --tasks DIR [--ids ID1,ID2]\n  prepare-environments --root DIR [--ids DATASET:ID1,DATASET:ID2] [--build-proxy URL]\n  worker --root DIR [--worker-port 8879]\n  serve --root DIR [--port 8878] [--worker-port 8879]\n  submit --file FILE [--reasoning EFFORT] | status [--batch ID] | catalog | cancel --batch ID | recover --run ID | retry --run ID\n  image-inventory --root DIR [--dataset DATASET]\n  gc --root DIR [--apply] [--build-cache]\n  regrade --root DIR --run ID [--verifier-proxy URL | --service-restart-script FILE]\n  recheck --root DIR --run ID --review ID\n  continue --root DIR --run ID --agent-seconds SECONDS [--prompt TEXT]\nAll operations read the root README first. No old format, old data-dir or independent catalog paths.');return;}
   if(positionals.length!==1||!v.root)throw Error('Supply one command and --root');
+  if((v['agent-seconds']!==undefined||v.prompt!==undefined)&&command!=='continue')throw Error('--agent-seconds/--prompt are only supported by continue');
   if(v['service-restart-script']!==undefined&&command!=='regrade')throw Error('--service-restart-script is only supported by regrade');
   if(v.reasoning!==undefined&&command!=='submit')throw Error('--reasoning is only supported by submit; retry preserves the original batch reasoning');
   const reasoning=v.reasoning===undefined?undefined:reasoningSchema.parse({effort:v.reasoning});
@@ -76,7 +77,7 @@ async function main(){
       console.log('HiCode Eval worker: http://127.0.0.1:'+server.port+' · root '+layout.root);return;
     }catch(error){server?.stop();await lab?.close();await release();throw error;}
   }
-  if(['catalog','status','submit','cancel','recover','retry'].includes(command)){
+  if(['catalog','status','submit','cancel','recover','retry','continue'].includes(command)){
     const client=new Client(workerPort);const health=z.object({data:z.string()}).passthrough().parse(await client.request('health'));
     if(health.data!==layout.root)throw Error('Worker belongs to another root');
     let result:unknown;
@@ -88,6 +89,10 @@ async function main(){
     }
     else if(command==='cancel')result=await client.request('cancel-batch',{batch:idSchema.parse(required('batch'))});
     else if(command==='recover')result=await client.request('recover-run',{run:idSchema.parse(required('run'))});
+    else if(command==='continue'){
+      if(v['agent-seconds']===undefined)throw Error('Continue requires --agent-seconds for the additional time');
+      result=await client.request('continue-run',continuationRequestSchema.parse({run:required('run'),agentSeconds:Number(v['agent-seconds']),prompt:v.prompt}));
+    }
     else result=await client.request('retry-run',{run:idSchema.parse(required('run'))});
     console.log(JSON.stringify(result,null,2));return;
   }

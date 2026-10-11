@@ -5,7 +5,7 @@ import {TaskCatalog} from './catalog.js';
 import {EvalLayout} from './layout.js';
 import {taskKey} from './datasets.js';
 import {readJson,exists} from './store.js';
-import {batchSchema,runSchema,idSchema,done,liveSchema,containerSchema,loadConfig} from './types.js';
+import {batchSchema,runSchema,idSchema,done,liveSchema,containerSchema,loadConfig,checkpointSchema} from './types.js';
 import type {Batch,Run,Config} from './types.js';
 
 export function batchView(batch:Batch,runs:ReadonlyMap<string,Run>,halted=false){
@@ -31,7 +31,15 @@ export async function runView(path:string,run:Run){
   const container=await exists(join(path,'container.json'))?await readJson(join(path,'container.json'),containerSchema):undefined;
   const preparation=await exists(join(path,'preparation.json'))?await readJson(join(path,'preparation.json'),z.object({
     phase:z.string(),cached:z.boolean().optional(),image:z.string().optional(),updatedAt:z.number()})):undefined;
-  return {...run,preparation,evidencePath:path,displayState:done(run.state)?run.state:live?.phase??run.state,live,container};
+  let checkpointElapsedSeconds:number|undefined;
+  if(done(run.state)&&run.state!=='needs_recovery'&&run.state!=='passed'&&run.collection==='complete'&&['timeout','cancelled','failed'].includes(run.execution)){
+    const file=join(path,'evidence','continuation.json');
+    if(await exists(file))try{
+      const checkpoint=await readJson(file,checkpointSchema,4096);
+      if(checkpoint.runId===run.id)checkpointElapsedSeconds=checkpoint.elapsedSeconds;
+    }catch{ /* Invalid metadata disables the action; execution performs full hash checks. */ }
+  }
+  return {...run,continuable:checkpointElapsedSeconds!==undefined,checkpointElapsedSeconds,preparation,evidencePath:path,displayState:done(run.state)?run.state:live?.phase??run.state,live,container};
 }
 
 function validateChild(batch:Batch,run:Run){

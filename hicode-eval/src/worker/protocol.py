@@ -240,7 +240,9 @@ def assignment_prompt(instruction, agent_seconds, network, workdir, public_entri
     return '\n'.join(lines)+'\n\n'+instruction
 
 
-def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False, workdir="/app", environment=None, readonly_logs=False, public_tests=None, private_root=None, isolated_network=False, actor_release=None, actor_events=None, workspace_aliases=(), writable_runtime_bin=False, verifier_release=None, model_gateway=False):
+def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False, workdir="/app", environment=None, readonly_logs=False, public_tests=None, private_root=None, isolated_network=False, actor_release=None, actor_events=None, workspace_aliases=(), writable_runtime_bin=False, verifier_release=None, model_gateway=False, home_alias=None):
+    if home_alias is not None and not re.fullmatch(r'/eval/runs/[a-f0-9]{16}/home',home_alias):
+        raise ValueError('Invalid continuation home alias')
     if type(model_gateway) is not bool or (model_gateway and actor_release is None):
         raise ValueError('Model gateway requires an actor view')
     if verifier_release is not None and (tests is None or actor_release is not None or public_tests is not None or root_overlay or private_root is not None):
@@ -281,6 +283,7 @@ def namespace_argv(args, project, home, logs, control, tests=None, *, writable_t
             raise ValueError('Invalid runtime executable directory')
         result+=['--bind',str(runtime_bin),'/usr/local/bin']
     result+=['--bind',str(home),str(home)]
+    if home_alias is not None and home_alias!=str(home):result+=['--bind',str(home),home_alias]
     if actor_release is not None:result+=['--bind',str(actor_events),str(actor_events)]
     else:result+=['--ro-bind' if readonly_logs else '--bind',str(logs),str(logs)]
     if actor_release is not None:

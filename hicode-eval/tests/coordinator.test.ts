@@ -95,9 +95,9 @@ test('worker preparation returns immediately, lets other tasks finish, and block
  }finally{finishBuild();finishExecution();worker?.stop(true);await lab.close();validate.mockRestore();resolve.mockRestore();prepare.mockRestore();build.mockRestore();execute.mockRestore();dispose.mockRestore();boundary.mockRestore();await f.cleanup();}
 });
 
-test('reasoning is frozen through batch, execution manifest and retry even after the service default changes',async()=>{
+test.each(['qwen-token-plan','ark-agent-plan'] as const)('%s reasoning is frozen through batch, execution manifest and retry even after the service default changes',async source=>{
  const f=await fixture(),task=await seed(f,'reasoning'),second=await seed(f,'default-choice','d');
- f.config.model={...f.config.model,source:'qwen-token-plan',model:'deepseek-v4.1-flash',reasoning:{effort:'high'}};
+ f.config.model={...f.config.model,source,model:'deepseek-v4.1-flash',reasoning:{effort:'high'}};
  const lab=new Lab(f.config,'offline-secret');let restarted:Lab|undefined;await save(join(f.layout.payload,'manifest.json'),{});
  const metadata=publicTaskProfile({reasoning:{hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPrelude:'none'}},'reasoning');
  const validate=spyOn(publicTasks,'validatePublicTask').mockResolvedValue(metadata);

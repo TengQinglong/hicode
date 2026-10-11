@@ -3,7 +3,8 @@
 <header><div><span class="brand">◆ HiCode Eval</span><span class="sub">公开题目 · 自主执行 · 自动判题</span></div><span id="connection">连接中</span></header>
 <main><aside><h2>评测批次</h2><p>CLI 提交批次，也可单题重新运行。</p><div id="batches"></div></aside>
 <article><div class="toolbar"><div><h1 id="batch-title">还没有评测批次</h1><p id="batch-detail">提交题目清单后，在这里查看执行过程和判题结果。</p></div></div><div id="summary" class="summary"></div>
-<section class="inspection"><div class="task-heading"><h2 id="title">选择任务查看执行过程</h2><div class="task-actions"><button id="previous-attempt" hidden>查看上次尝试</button><button id="run-action" hidden>重新运行</button></div></div><p id="detail"></p><p id="action-message" role="status" hidden></p><div id="statuses" class="statuses"></div><p id="terminal-status" role="status"></p>
+<section class="inspection"><div class="task-heading"><h2 id="title">选择任务查看执行过程</h2><div class="task-actions"><button id="previous-attempt" hidden>查看上次尝试</button><button id="continue-action" hidden>继续作答</button><button id="run-action" hidden>重新运行</button></div></div><p id="detail"></p><p id="action-message" role="status" hidden></p><div id="statuses" class="statuses"></div><p id="terminal-status" role="status"></p>
+<form id="continue-form" hidden><label>追加时间（分钟）<input id="continue-minutes" type="number" min="1" max="180" step="1" value="30" required></label><label>补充要求<textarea id="continue-prompt" rows="2" maxlength="4096">继续完成原任务。</textarea></label><div><button type="submit" id="continue-submit">提交续跑</button><button type="button" id="continue-cancel">取消</button></div></form>
 <details id="preparation-panel"><summary id="preparation-title">执行阶段与日志</summary><pre id="preparation">尚未开始。</pre></details>
 <p id="terminal-empty" role="status">提交批次后，任务会依次运行并自动判题。</p><div id="terminal-shell" class="terminal-shell" hidden><div id="terminal"></div></div><footer>只读终端 · 保留完整历史 · 不自动回放</footer>
 <details><summary>证据目录</summary><pre id="attach"></pre></details></section>

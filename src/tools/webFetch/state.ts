@@ -58,16 +58,19 @@ export class WebSources {
 
 /** One Turn owns repeated-failure accounting; a new Turn starts empty. */
 export class WebFailures {
-    private readonly entries = new Map<string, {count: number; elapsedMs: number}>();
+    private readonly entries = new Map<string, {count: number; elapsedMs: number; service: string}>();
 
     record(url: string, elapsedMs: number): string {
         const key = sourceKey(url);
+        const service = new URL(url).origin;
         const previous = this.entries.get(key);
-        const next = {count: (previous?.count ?? 0) + 1, elapsedMs: (previous?.elapsedMs ?? 0) + elapsedMs};
+        const next = {count: (previous?.count ?? 0) + 1, elapsedMs: (previous?.elapsedMs ?? 0) + elapsedMs, service};
         if (!previous && this.entries.size >= 32) this.entries.delete(this.entries.keys().next().value!);
         this.entries.set(key, next);
+        const serviceCount = [...this.entries.values()].filter(entry => entry.service === service).reduce((count, entry) => count + entry.count, 0);
         return `This URL has failed ${next.count} time(s) in this turn (${Math.round(next.elapsedMs)} ms total). ` +
-            "No automatic retry was made. Retry only with a corrected request or new evidence; switching to Bash does not by itself fix TLS or connectivity.";
+            `This service has ${serviceCount} failed retrieval(s), including other URLs or query terms. ` +
+            "No further retry will be made for this tool call. Retry only with a corrected request or new evidence; switching to Bash does not by itself fix TLS or connectivity.";
     }
 
     clear(url: string): void {this.entries.delete(sourceKey(url));}

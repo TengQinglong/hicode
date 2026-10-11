@@ -3,10 +3,12 @@ import type {LLMProviderName} from "./providerRegistry.js";
 export const REASONING_EFFORTS = ["default", "off", "low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
 export interface ReasoningPreference {source: LLMProviderName; model: string; effort: ReasoningEffort}
-interface ReasoningCapability {efforts: readonly ReasoningEffort[]; switch: "enable_thinking" | "thinking"; reviewEffort: "off" | "low"}
+interface ReasoningCapability {efforts: readonly ReasoningEffort[]; switch: "enable_thinking" | "thinking" | "reasoning_effort"; reviewEffort: "off" | "low"}
 
 /** Only confirmed model protocols expose configurable levels; unknown models retain their existing defaults. */
 export function reasoningCapability(source: LLMProviderName, model: string): ReasoningCapability | undefined {
+    if (source === "ark-agent-plan" && model === "deepseek-v4.1-flash")
+        return {efforts: ["default", "off", "low", "high", "max"], switch: "reasoning_effort", reviewEffort: "off"};
     if ((source === "qwen" && /^qwen3\.8-(?:flash|max)$/.test(model)) || (source === "qwen-token-plan" && model === "qwen3.8-flash"))
         return {efforts: ["default", "off", "low", "medium", "xhigh"], switch: "enable_thinking", reviewEffort: "off"};
     if ((source === "qwen-token-plan" && model === "deepseek-v4.1-flash") ||
@@ -28,6 +30,7 @@ export function reasoningRequestFields(source: LLMProviderName, model: string, e
     validateReasoningEffort(source, model, effort);
     const capability = reasoningCapability(source, model);
     if (!capability || effort === "default") return {};
+    if (capability.switch === "reasoning_effort") return {reasoning_effort: effort === "off" ? "none" : effort};
     return {
         ...(capability.switch === "thinking" ? {thinking: {type: effort === "off" ? "disabled" : "enabled"}} : {enable_thinking: effort !== "off"}),
         ...(effort === "off" ? {} : {reasoning_effort: effort}),

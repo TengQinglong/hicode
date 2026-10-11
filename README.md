@@ -70,7 +70,7 @@ hicode
 
 以后可在任意项目目录运行 `hicode`。首次启动自动进入模型配置：
 
-1. **选择服务商**：支持 Qwen Token Plan、DeepSeek、智谱 GLM、OpenRouter 和阿里云百炼（Qwen）。
+1. **选择服务商**：支持 Qwen Token Plan、方舟 Token Plan（Ark Agent Plan）、DeepSeek、智谱 GLM、OpenRouter 和阿里云百炼（Qwen）。
 2. **API key**：粘贴 Key，按 Enter 保存。
 3. **API endpoint**：默认地址不适用时，填写该服务商提供的 API 基础地址。
 4. **Choose model and start**：选择账号有权限使用的模型，即可开始。
@@ -78,6 +78,8 @@ hicode
 没有需要的模型？通过 **Add model** 填写 Model ID 和可选展示名。之后可用 `/providers` 修改配置。
 
 **Qwen Token Plan** 是独立的模型来源，支持 Qwen 3.8 Flash 和 DeepSeek V4.1 Flash；连接与 API Key 均与普通百炼分别配置。详见 [模型设置](docs/reference/SETTINGS.md)。
+
+**方舟 Token Plan（Ark Agent Plan）** 已支持 DeepSeek V4.1 Flash，可在 `/providers` 配置专属 Key，在 `/model` 选择思考强度。连接与凭据独立保存，支持多轮工具调用和思考回放。
 
 配置自动保存，可跨项目复用。模型调用费用由服务商计收。
 

@@ -31,11 +31,11 @@ function response(reasoning: string, tool: boolean) {
         {headers:{"content-type":"text/event-stream"}});
 }
 
-test.each(["qwen", "deepseek", "qwen-token-plan"] as const)("%s replays tool and text reasoning across Session restore and a follow-up", async id => {
+test.each(["qwen", "deepseek", "qwen-token-plan", "ark-agent-plan"] as const)("%s replays tool and text reasoning across Session restore and a follow-up", async id => {
     await withTempProject(async (cwd, storage) => {
         process.env.HICODE_REPLAY_TEST_KEY = "fixture-key";
         const call = createLLMCaller({...source, id});
-        const model = id === "qwen" ? "qwen3.8-flash" : id === "qwen-token-plan" ? "deepseek-v4.1-flash" : "deepseek-flash";
+        const model = id === "qwen" ? "qwen3.8-flash" : id === "deepseek" ? "deepseek-flash" : "deepseek-v4.1-flash";
         const longReasoning = "Compare candidate moves α\n".repeat(3000);
         let calls = 0;
         globalThis.fetch = (async (_input, init) => {
@@ -80,6 +80,7 @@ test.each(["qwen", "deepseek", "qwen-token-plan"] as const)("%s replays tool and
 test.each([
     {id:"qwen" as const, model:"qwen3.8-flash"},
     {id:"qwen-token-plan" as const, model:"deepseek-v4.1-flash"},
+    {id:"ark-agent-plan" as const, model:"deepseek-v4.1-flash"},
 ])("$id reasoning replay is scoped to source, endpoint and model without mutating History", async ({id, model}) => {
     await withTempProject(async (cwd, storage) => {
         process.env.HICODE_REPLAY_TEST_KEY = "fixture-key";

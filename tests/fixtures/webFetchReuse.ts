@@ -11,7 +11,7 @@ let calls = 0;
 mock.module("../../src/tools/webFetch/network.js", () => ({...network, fetchPublicWebUrl: async (url: string) => {
     calls++;
     if (mode === "failure") throw webFetchFailure("request", Object.assign(new Error("fixture certificate error"), {code: "CERT_HAS_EXPIRED"}), new URL(url), 7);
-    return {url, status: mode === "http-error" ? 429 : 200, statusText: "Fixture",
+    return {url, attempts: 1, status: mode === "http-error" ? 429 : 200, statusText: "Fixture",
         cacheControl: mode === "no-store" ? "no-store" : "",
         contentType: ["octet", "binary", "invalid-utf8"].includes(mode ?? "") ? "application/octet-stream" : "text/plain",
         body: mode === "binary" ? Buffer.from([0, 1, 2]) : mode === "invalid-utf8" ? Buffer.from([0xff, 0xfe, 0xfd]) : Buffer.from("--- a/source\n+++ b/source\n+valid text\n")};
@@ -21,6 +21,14 @@ await withTempProject(async cwd => {
     const ctx = createTestContext(cwd);
     const url = "https://docs.example.com/source?version=1";
     const invoke = (args = {}, context = ctx) => executeToolResult("web_fetch", JSON.stringify({url, ...args}), context, `fetch-${calls}`);
+    if (mode === "pinned-private" || mode === "pinned-http" || mode === "pinned-denied") {
+        if (mode === "pinned-denied") ctx.permissionRules.deny.push({toolName: "web_fetch", content: "domain:docs.example.com", source: "host"});
+        const result = await invoke({resolved_addresses: mode === "pinned-private" ? ["127.0.0.1"] : ["8.8.8.8"],
+            ...(mode === "pinned-http" ? {url: "http://docs.example.com/source"} : {})});
+        assert.notEqual(result.outcome, "ok");
+        assert.equal(calls, 0, "invalid DNS overrides and domain denials must never reach the transport");
+        return;
+    }
     const first = await invoke();
     if (mode === "binary" || mode === "invalid-utf8") {
         assert.equal(first.outcome, "failed");

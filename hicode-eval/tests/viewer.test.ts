@@ -5,10 +5,39 @@ import { runInNewContext } from 'node:vm';
 // Minimal DOM records observable rendering and requests, without a browser or network.
 class Element {
   hidden = false; open = false; textContent = ''; className = ''; dataset = {}; attributes: Record<string,string> = {}; children: Element[] = []; onclick?: () => void;
+  value='';disabled=false;onsubmit?: (event:{preventDefault:()=>void})=>Promise<void>;
   append(...children: Element[]) { this.children.push(...children); }
   replaceChildren(...children: Element[]) { this.children = children; }
   setAttribute(name: string, value: string) { this.attributes[name] = value; }
 }
+test('continue form sends additional time and follow-up text once while keeping the terminal read-only',async()=>{
+ const elements=new Map<string,Element>();const el=(id:string)=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id)!;};
+ const old={id:'first',batchId:'old-batch',task:'service',dataset:'terminal-bench-2.1',state:'error',displayState:'error',
+  execution:'timeout',grading:'failed',collection:'complete',continuable:true,budget:{agentSeconds:4200}};
+ const batch={id:'old-batch',name:'stopped',createdAt:1,model:{model:'fake'},concurrency:1,payload:{},state:'finished',
+  counts:{total:1,completed:1,active:0,queued:0,passed:0,failed:0,errors:1,cancelled:0}};
+ const status={batches:[batch],runs:[old],concurrency:5,schedulingBlocked:false};
+ const commands:Array<{url:string;body:unknown}>=[];let finish!:()=>void;
+ const rendered=new Promise<void>(resolve=>{finish=resolve;});
+ class Terminal{parser={registerOscHandler(){}};buffer={active:{viewportY:0,baseY:0}};open(){}reset(){}write(_text:string,done:()=>void){done();}refresh(){}scrollToBottom(){}scrollToLine(){}}
+ runInNewContext(await readFile(new URL('../src/web/app.js',import.meta.url),'utf8'),{
+  document:{getElementById:el,createElement:()=>new Element()},Terminal,AbortController,AbortSignal,window:{addEventListener(){}},clearTimeout(){},setTimeout(){finish();},
+  fetch:async(url:string,options?:{body:string})=>({ok:true,status:200,json:async()=>{
+   if(url==='/api/continue-run'){
+    commands.push({url,body:JSON.parse(options!.body)});
+    return {batch:{id:'next-batch',runIds:['next-run']}};
+   }
+   if(url==='/api/status')return status;
+   return url.includes('terminal')?{screen:'saved frame',revision:'one'}:{text:''};
+  }}),
+ });
+ await rendered;expect(el('continue-action').hidden).toBe(false);el('continue-action').onclick!();
+ expect(el('continue-form').hidden).toBe(false);expect(el('continue-minutes').value).toBe('70');
+ el('continue-minutes').value='30';el('continue-prompt').value='继续，从已有权重恢复。';
+ await el('continue-form').onsubmit!({preventDefault(){}});
+ expect(commands).toEqual([{url:'/api/continue-run',body:{run:'first',agentSeconds:1800,prompt:'继续，从已有权重恢复。'}}]);
+ expect(el('continue-form').hidden).toBe(true);
+});
 test.each(['passed','failed','needs_recovery','error','setup_error'])('batch viewer distinguishes completion, collection and grading failures (%s)', async state => {
   const blocked=state==='needs_recovery',setupFailure=state==='setup_error';
   const elements = new Map<string, Element>();

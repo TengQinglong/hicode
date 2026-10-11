@@ -4,6 +4,7 @@ import {deepseekProvider} from "./providers/deepseek.js";
 import {glmProvider} from "./providers/glm.js";
 import {qwenProvider} from "./providers/qwen.js";
 import {openrouterProvider} from "./providers/openrouter.js";
+import {arkAgentPlanProvider} from "./providers/arkAgentPlan.js";
 import type {LLMProviderName} from "./providerRegistry.js";
 import type {
     LLMCaller,
@@ -25,6 +26,7 @@ const providers: Record<LLMProviderName, LLMProvider> = {
     "qwen-token-plan": {name: "qwen-token-plan", call: qwenProvider.call},
     deepseek: deepseekProvider,
     openrouter: openrouterProvider,
+    "ark-agent-plan": arkAgentPlanProvider,
 };
 
 // Public LLM domain entry point.

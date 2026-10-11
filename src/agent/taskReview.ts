@@ -1,6 +1,5 @@
 import type {QueuedAgentInput} from "./inputChannel.js";
 import {contentText} from "../images/content.js";
-import {toolFileChanges} from "../toolResults/uiData.js";
 import type {Message, UserMessageOrigin} from "../llm/types.js";
 import type {AgentEvent} from "./types.js";
 import type {ToolContext} from "../tools/types.js";
@@ -65,16 +64,6 @@ export class TaskReviewProgress {
         if (event.type === "tool_call_end") item = `Tool result (${event.toolCallId}), outcome=${event.outcome}: ${event.result}`;
         if (event.type === "assistant_text") item = `Assistant ${event.phase} claim (not independently verified): ${event.content}`;
         if (item) this.appendEvidence(round, item, event.type === "assistant_text" ? "claim" : "tool");
-        if (event.type === "tool_call_end") {
-            for (const change of toolFileChanges(event.uiData, event.outcome)) {
-                const diff = change.hunks.flatMap(hunk => hunk.lines
-                    .filter(line => line.type !== "context")
-                    .map(line => `${line.type === "add" ? "+" : "-"}${line.content}`)).join("\n");
-                this.appendEvidence(round,
-                    `Committed file change (${event.toolCallId}): ${change.kind} ${change.path}; diff=${change.diffStatus}\n${diff}`,
-                    "tool");
-            }
-        }
     }
 
     recordInput(input: QueuedAgentInput, round: number): void {

@@ -23,12 +23,25 @@ def validate_reasoning(value, policy):
     thinking = value.get('thinking')
     if thinking is not None and (not isinstance(thinking, dict) or set(thinking) != {'type'} or thinking['type'] not in {'enabled', 'disabled'}):raise ValueError('Invalid thinking mode')
     effort = value.get('reasoning_effort')
-    if effort is not None and (not isinstance(effort, str) or effort not in {'low', 'medium', 'high', 'xhigh', 'max'}):raise ValueError('Invalid reasoning effort')
+    if effort is not None and (not isinstance(effort, str) or effort not in {'none', 'low', 'medium', 'high', 'xhigh', 'max'}):raise ValueError('Invalid reasoning effort')
     off = value.get('enable_thinking') is False or thinking == {'type': 'disabled'}
     if off and value.get('preserve_thinking') is True:raise ValueError('Disabled thinking cannot preserve reasoning')
     if off and effort is not None:raise ValueError('Disabled thinking cannot specify effort')
     if policy is None:return
     switch = policy.get('switch')
+    if switch == 'reasoning_effort':
+        if any(field in value for field in ('thinking', 'enable_thinking', 'preserve_thinking', 'reasoning')):
+            raise ValueError('Wrong reasoning protocol')
+        selected = policy['effort']
+        if effort == 'none':
+            if 'off' not in policy['efforts'] or policy['reviewEffort'] != 'off':raise ValueError('This model requires thinking')
+            return
+        if effort is not None and effort not in policy['efforts']:raise ValueError('Unsupported model reasoning level')
+        if selected == 'off':raise ValueError('This batch disabled reasoning')
+        if selected == 'default' and effort is not None:raise ValueError('Default batch must omit reasoning effort')
+        if selected != 'default' and effort != selected:raise ValueError('Reasoning differs from the frozen batch')
+        return
+    if effort == 'none':raise ValueError('Wrong reasoning protocol')
     if switch is None:
         if effort is not None:raise ValueError('Unknown model reasoning capability')
         return

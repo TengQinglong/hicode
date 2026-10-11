@@ -30,6 +30,7 @@ export class EvalLayout {
   get preparations(){return join(this.environments,'preparations');}
   run(id:string){return join(this.runs,runId.parse(id));}
   recheck(id:string,review:string){return join(this.run(id),'rechecks',runId.parse(review));}
+  continuationArchive(id:string){return join(this.run(id),'continuation-input.tar.gz');}
   batch(id:string){return join(this.batches,runId.parse(id)+'.json');}
   source(task:TaskRef){return join(this.datasets,safeId.parse(task.dataset),'tasks',safeId.parse(task.id));}
   static fromEnvironments(path:string){

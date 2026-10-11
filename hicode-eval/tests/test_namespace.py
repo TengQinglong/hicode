@@ -5,6 +5,13 @@ from pathlib import Path
 from protocol import namespace_argv, prepare_verifier_root
 
 class NamespaceTest(unittest.TestCase):
+    def test_continuation_alias_exposes_only_the_restored_home(self):
+        alias='/eval/runs/aaaaaaaaaaaaaaaa/home'
+        argv=namespace_argv(['python'],'/project','/new/home','/logs','/control',home_alias=alias)
+        self.assertIn(['--bind','/new/home',alias],[argv[i:i+3] for i in range(len(argv)-2)])
+        for invalid in ['/eval/runs/aaaaaaaaaaaaaaaa','/','/etc','/eval/runs/../home']:
+            with self.assertRaisesRegex(ValueError,'home alias'):
+                namespace_argv(['python'],'/project','/new/home','/logs','/control',home_alias=invalid)
     def test_writable_runtime_bin_is_private_and_does_not_grant_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             project=Path(tmp)/'project';(project/'runtime-bin').mkdir(parents=True)

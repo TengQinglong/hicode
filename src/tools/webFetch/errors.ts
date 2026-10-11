@@ -9,12 +9,35 @@ export function displayWebUrl(value: string): string {
     } catch {return "(invalid URL)";}
 }
 
-class WebFetchError extends Error {
+export class WebFetchError extends Error {
     constructor(message: string, readonly stage: "dns" | "request" | "response_body", readonly codes: readonly string[],
         readonly elapsedMs: number, readonly httpStatus: number | null) {
         super(message);
         this.name = "WebFetchError";
     }
+}
+
+export function isRetryableWebFailure(error: unknown): boolean {
+    return error instanceof WebFetchError && (error.httpStatus === null || error.httpStatus < 400) &&
+        !error.codes.some(code => /CERT|SSL|TLS/.test(code)) && error.codes.some(code =>
+        ["EAI_AGAIN", "ECONNRESET", "EPIPE", "UND_ERR_SOCKET"].includes(code));
+}
+
+export function webFailureAdvice(error: unknown): string {
+    if (!(error instanceof WebFetchError)) return "Check the request and response before trying again.";
+    if (error.httpStatus !== null && error.httpStatus >= 400) return httpFailureAdvice(error.httpStatus);
+    if (error.codes.some(code => /CERT|SSL|TLS/.test(code))) return "TLS verification failed. Check the network route, DNS and certificate chain; do not disable verification or assume that changing query terms fixes it.";
+    if (error.stage === "dns") return error.codes.length ? "DNS resolution failed. Check the resolver/network setup before trying URL variants." : "DNS/address validation did not permit this target. Inspect the stated boundary; do not assume this is a connectivity failure.";
+    if (error.codes.includes("ETIMEDOUT")) return "No complete response arrived within the request deadline. Reuse available sources; retry only if connectivity or the request changes.";
+    return "Check connectivity and the saved error. Changing search terms does not fix a transport failure.";
+}
+
+export function httpFailureAdvice(status: number): string {
+    if (status === 401) return "Authentication is required; changing query terms does not supply credentials.";
+    if (status === 403) return "The server refused this request. Check access requirements; do not repeatedly change keywords or assume the body is usable source material.";
+    if (status === 404) return "Check the documented endpoint or resource path before retrying; this URL did not provide the requested resource.";
+    if (status === 429) return "The server rate-limited or challenged this request. Respect Retry-After/access requirements; changing keywords is not evidence that access is restored.";
+    return "This HTTP response is not a successful retrieval. Inspect the status and error body before parsing it as source data.";
 }
 
 export function webFetchFailure(stage: "dns" | "request" | "response_body", cause: unknown, url: URL,

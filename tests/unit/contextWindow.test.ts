@@ -5,6 +5,10 @@ import {
 } from "../../src/context/window.js";
 
 describe("context window", () => {
+  test("DeepSeek 4.1 Flash caps an expanded host window at the documented 1024k", () => {
+    expect(getAutoCompactThreshold("deepseek-v4.1-flash", undefined,
+      {windowTokens:2_000_000, autoCompactTokenLimit:1_500_000})).toBe(991_000);
+  });
   test("Provider 实报窗口覆盖模型名回退", () => {
     expect(getAutoCompactThreshold("provider-specific-model", 256_000))
       .toBe(223_000);

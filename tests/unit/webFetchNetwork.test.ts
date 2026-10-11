@@ -10,6 +10,9 @@ describe("web_fetch request lifecycle", () => {
         "request-close", "pre-abort", "dns-abort", "dns-deadline", "body-abort",
         "redirect", "redirect-deadline", "late-error",
         "dns-reserved", "dns-reserved-v6", "dns-private", "dns-mixed",
+        "dns-phase-timeout", "connect-timeout", "idle-timeout", "retry-reset", "retry-reset-fails", "retry-http",
+        "no-retry-auth", "no-retry-auth-reset", "no-retry-rate-limit", "no-retry-after",
+        "pinned-addresses", "pinned-private",
     ])("%s settles without uncaught errors or leaked requests", async mode => {
         const child = Bun.spawn([
             process.execPath,

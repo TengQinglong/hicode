@@ -49,6 +49,7 @@ test.each([{finalFailure:false,uploadFailure:false},{finalFailure:true,uploadFai
   const f=await fixture(),root=f.layout.root;
   const payload=f.layout.payload,path=f.layout.run('0123456789abcdef'),tools=join(f.layout.cache,'tools');
   await mkdir(payload);await mkdir(tools);await mkdir(join(path,'task','fixture'),{recursive:true});
+  await writeFile(f.layout.continuationArchive('0123456789abcdef'),'restore staging input');
   const archive=Buffer.from('offline source fixture'),hash=createHash('sha256').update(archive).digest('hex');
   await writeFile(join(payload,'source.tar.gz'),archive);
   await transport.save(join(payload,'manifest.json'),{files:{'source.tar.gz':hash}});
@@ -123,6 +124,7 @@ printf '%s\n' '{"type":"result","execution":"completed","grading":"${uploadFailu
       expect(receipt.files.sqlite3.symlink).toBe('/app/sqlite/sqlite3');
     }
     expect(copies).toBe(1);
+    expect(await Bun.file(f.layout.continuationArchive(state.id)).exists()).toBe(finalFailure);
     expect(calls.some(command=>command.some(arg=>arg.includes('/cancel')))).toBe(false);
   }finally{
     if(oldPath===undefined)delete process.env.PATH;else process.env.PATH=oldPath;

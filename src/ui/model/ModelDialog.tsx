@@ -11,6 +11,7 @@ const SOURCE_LABELS: Record<ModelTargetSettings["source"], string> = {
     glm: "ZHIPU GLM",
     qwen: "ALIBABA QWEN",
     "qwen-token-plan": "QWEN TOKEN PLAN",
+    "ark-agent-plan": "ARK AGENT PLAN",
     deepseek: "DEEPSEEK",
     openrouter: "OPENROUTER",
 };

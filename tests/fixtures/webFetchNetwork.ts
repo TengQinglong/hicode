@@ -15,9 +15,11 @@ const uncaught: Error[] = [];
 const captureUncaught = (error: Error) => { uncaught.push(error); };
 process.on("uncaughtException", captureUncaught);
 const deadlines: Array<() => void> = [];
+const phaseDeadlines = new Map<number, Array<() => void>>();
 const realSetTimeout = globalThis.setTimeout;
 Reflect.set(globalThis, "setTimeout", (callback: () => void, delay?: number) => {
     if (delay === 30_000) deadlines.push(callback);
+    if (delay === 5_000 || delay === 10_000) phaseDeadlines.set(delay, [...(phaseDeadlines.get(delay) ?? []), callback]);
     return realSetTimeout(callback, delay);
 });
 let requests = 0;
@@ -59,6 +61,12 @@ class RequestFixture extends EventEmitter {
         queueMicrotask(() => {
             if (this.destroyed) return;
             if (mode === "request-close") { this.destroy(); return; }
+            if (mode === "connect-timeout") {phaseDeadlines.get(10_000)?.at(-1)?.(); return;}
+            if (mode === "retry-reset" || mode === "retry-reset-fails") {
+                if (requests === 1 || mode === "retry-reset-fails") {
+                    this.emit("error", Object.assign(new Error("connection reset"), {code: "ECONNRESET"}));return;
+                }
+            }
             if (mode === "tls-error") {
                 this.emit("error", Object.assign(new Error("certificate rejected", {cause: Object.assign(new Error("certificate chain detail"), {code: "CERT_CHAIN"})}), {code: "CERT_HAS_EXPIRED"}));
                 return;
@@ -68,6 +76,11 @@ class RequestFixture extends EventEmitter {
                 return;
             }
             const response = new ResponseFixture();
+            if (mode === "retry-http" && requests === 1) response.statusCode = 503;
+            if (mode === "no-retry-auth") response.statusCode = 401;
+            if (mode === "no-retry-auth-reset") response.statusCode = 401;
+            if (mode === "no-retry-rate-limit") response.statusCode = 429;
+            if (mode === "no-retry-after") {response.statusCode = 503;response.headers["retry-after"] = "120";}
             this.response = response;
             responses.push(response);
             if (mode === "declared-limit") response.headers["content-length"] = String(6 * 1024 * 1024);
@@ -80,6 +93,8 @@ class RequestFixture extends EventEmitter {
             if (compression) response.headers["content-encoding"] = compression;
             if (mode === "unknown-encoding") response.headers["content-encoding"] = "unknown";
             this.respond(response);
+            if (mode === "no-retry-auth-reset") {response.emit("error", Object.assign(new Error("error body connection reset"), {code: "ECONNRESET"}));return;}
+            if (mode === "idle-timeout") {response.write("partial");phaseDeadlines.get(10_000)?.at(-1)?.();return;}
             if (mode === "unknown-encoding") return;
             if (compression) {
                 if (mode === "compressed-corrupt") {response.end("invalid compressed bytes"); return;}
@@ -126,10 +141,10 @@ mock.module("node:https", () => ({...https, request}));
 mock.module("node:dns/promises", () => ({...dns, lookup: async () => {
     lookups++;
     if (mode === "dns-error") throw Object.assign(new Error("DNS resolution failed"), {code: "EAI_AGAIN"});
-    if (mode === "dns-abort" || mode === "dns-deadline") {
+    if (mode === "dns-abort" || mode === "dns-deadline" || mode === "dns-phase-timeout") {
         await new Promise<void>(resolve => {
             releaseDns = resolve;
-            queueMicrotask(() => mode === "dns-abort" ? controller.abort() : deadlines[0]?.());
+            queueMicrotask(() => mode === "dns-abort" ? controller.abort() : mode === "dns-phase-timeout" ? phaseDeadlines.get(5_000)?.at(-1)?.() : deadlines[0]?.());
         });
     }
     if (mode === "dns-reserved") return [{address: "198.18.0.42", family: 4}];
@@ -150,7 +165,8 @@ const watchdog = realSetTimeout(() => {
 let error: unknown;
 let body: string | undefined;
 try {
-    body = (await fetchPublicWebUrl(mode === "error-redaction" ? "https://example.com/doc?signature=private-value" : "https://example.com/doc", controller.signal)).body.toString();
+    body = (await fetchPublicWebUrl(mode === "error-redaction" ? "https://example.com/doc?signature=private-value" : "https://example.com/doc", controller.signal,
+        mode === "pinned-addresses" ? ["8.8.8.8"] : mode === "pinned-private" ? ["127.0.0.1"] : undefined)).body.toString();
 } catch (caught) {
     error = caught;
 } finally {
@@ -161,7 +177,7 @@ await new Promise<void>(resolve => setImmediate(resolve));
 process.removeListener("uncaughtException", captureUncaught);
 assert.equal(watchdogExpired, false, "request must settle before the fixture watchdog");
 assert.deepEqual(uncaught, [], "response errors must not escape the request Promise");
-if (mode === "redirect" || mode === "late-error" || mode === "dns-mixed" || ["gzip", "deflate", "br"].includes(mode ?? "")) {
+if (["redirect", "late-error", "dns-mixed", "gzip", "deflate", "br", "retry-reset", "retry-http", "no-retry-auth", "no-retry-rate-limit", "no-retry-after", "pinned-addresses"].includes(mode ?? "")) {
     assert.equal(error, undefined);
     assert.equal(body, "complete");
 } else {
@@ -177,10 +193,19 @@ if (mode === "redirect" || mode === "late-error" || mode === "dns-mixed" || ["gz
         assert.match(error.message, /30000 ms/);
         assert.equal(deadlines.length, 1, "redirects must share one deadline");
     }
+    if (mode === "connect-timeout") assert.match(error.message, /Connection\/TLS.*10000 ms/);
+    if (mode === "idle-timeout") assert.match(error.message, /during response_body[\s\S]*no progress.*10000 ms/);
+    if (mode === "dns-phase-timeout") assert.match(error.message, /during dns[\s\S]*5000 ms/);
+    if (mode === "retry-reset-fails") assert.match(error.message, /Retrieval attempts: 2/);
     assert.ok(responses.every(response => response.destroyed));
     assert.ok(clients.every(client => client.destroyed));
 }
 if ((mode?.startsWith("dns-") && mode !== "dns-mixed") || mode === "pre-abort") assert.equal(requests, 0);
 if (mode === "pre-abort") assert.equal(lookups, 0);
 if (mode === "redirect" || mode === "redirect-deadline") assert.equal(requests, 2);
+if (["retry-reset", "retry-http", "retry-reset-fails"].includes(mode ?? "")) assert.equal(requests, 2);
+if (["connect-timeout", "idle-timeout", "no-retry-auth", "no-retry-auth-reset", "no-retry-rate-limit", "no-retry-after", "tls-error"].includes(mode ?? "")) assert.equal(requests, 1);
+if (mode === "dns-error") assert.equal(lookups, 2);
+if (mode === "pinned-addresses" || mode === "pinned-private") assert.equal(lookups, 0);
+if (mode === "pinned-private") assert.equal(requests, 0);
 process.stdout.write("verified\n");

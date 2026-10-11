@@ -18,7 +18,7 @@ RUN_ID = '1234567890abcdef'
 
 
 class RunnerFailureTest(unittest.TestCase):
-    def run_attempt(self, *, saved=True, pending=False, exits=True, handoff=True, completed=False, claimed_dependencies=False, isolated=False, timed_out=False, service=False, verifier_raises=False, reasoning=None):
+    def run_attempt(self, *, saved=True, pending=False, exits=True, handoff=True, completed=False, claimed_dependencies=False, isolated=False, timed_out=False, service=False, verifier_raises=False, reasoning=None, checkpoint=False, resume=False):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             root = base / 'eval/runs' / RUN_ID
@@ -36,6 +36,8 @@ class RunnerFailureTest(unittest.TestCase):
                 config['model'].update(model='qwen3.8-flash',reasoning={'effort':reasoning})
                 config['reasoningPolicy'].update(switch='enable_thinking',efforts=['default','off','low','medium','xhigh'],reviewEffort='off')
             config['network'] = 'isolated' if isolated else 'open'
+            config['continuationEnabled']=checkpoint or resume
+            if resume:config['continuation']={'checkpoint':{'sessionId':'fixture','homePath':'/eval/runs/aaaaaaaaaaaaaaaa/home','elapsedSeconds':4200,'modelBridgePort':49152},'prompt':'继续原任务'}
             if service:config['service']={'writablePaths':[]}
             (root / 'job.json').write_text(json.dumps(config))
             (root / 'instruction.md').write_text('Offline fixture')
@@ -82,6 +84,9 @@ class RunnerFailureTest(unittest.TestCase):
                     calls.append('install-verifier')
                 if 'new-session' in argv:
                     self.assertEqual(kwargs['env']['EVAL_FIXTURE_KEY'], 'eval-isolated')
+                    if resume:self.assertEqual(kwargs['env']['HICODE_EVAL_BRIDGE_PORT'],'49152')
+                    settings_file=root/'home/.hicode/settings.json'
+                    data=json.loads(settings_file.read_text());data['sources']['qwen']['baseUrl']='http://127.0.0.1:49152/v1';settings_file.write_text(json.dumps(data))
                 if 'kill-server' in argv:calls.append('terminal-close')
                 return subprocess.CompletedProcess(argv, 0, stdout='', stderr='')
 
@@ -146,6 +151,17 @@ class RunnerFailureTest(unittest.TestCase):
                     owner.start.side_effect=start_service
                     owner.snapshot.side_effect=lambda:calls.append('service-snapshot')
                     owner.close.side_effect=lambda:calls.append('service-close')
+                    owner.stop_workloads.side_effect=lambda:calls.append('workloads-stop')
+                def checkpoint_capture(*args):
+                    self.assertIn('shutdown',calls)
+                    self.assertIn('workloads-stop' if service else 'stop',calls)
+                    self.assertNotIn('handoff',calls);self.assertNotIn('verify',calls)
+                    self.assertEqual(args[1],'fixture');calls.append('checkpoint')
+                stack.enter_context(patch('continuation.capture_checkpoint',side_effect=checkpoint_capture))
+                restore=stack.enter_context(patch('continuation.restore_checkpoint'))
+                stack.enter_context(patch('continuation.restore_service'))
+                if resume:
+                    prepared_actor=stack.enter_context(patch('eval_datasets.terminal_bench.TerminalBenchRuntime.prepare_actor'))
                 stack.enter_context(patch('terminal.capture'))
                 stack.enter_context(patch('terminal.settle', return_value=True))
                 stack.enter_context(patch('terminal.submit_prompt'))
@@ -169,6 +185,9 @@ class RunnerFailureTest(unittest.TestCase):
                 elif isolated:self.assertIn('--unshare-net',launch)
                 else:self.assertNotIn('--unshare-net',launch)
                 self.assertIn('network_entry.py',launch)
+                if resume:
+                    self.assertIn('--resume fixture',launch);self.assertIn('/eval/runs/aaaaaaaaaaaaaaaa/home/.hicode/settings.json',launch)
+                    restore.assert_called_once();prepared_actor.assert_not_called()
                 self.assertNotIn('offline-fixture',launch)
                 settings=json.loads((root/'home/.hicode/settings.json').read_text())
                 if reasoning:self.assertEqual(settings['models']['reasoning'],[{'source':'qwen','model':'qwen3.8-flash','effort':reasoning}])
@@ -176,6 +195,7 @@ class RunnerFailureTest(unittest.TestCase):
                 self.assertEqual(json.loads((root/'network.json').read_text())['mode'],'isolated' if isolated else 'open')
             submitted=(root/'submitted-instruction.md').read_text()
             self.assertIn('60 分钟',submitted)
+            if resume:self.assertIn('此前已执行 4200 秒',submitted);self.assertIn('继续原任务',submitted)
             self.assertIn('/app',submitted)
             self.assertEqual('当前外网不可用' in submitted,isolated)
             settings=json.loads((root/'home/.hicode/settings.json').read_text())
@@ -184,6 +204,20 @@ class RunnerFailureTest(unittest.TestCase):
             self.assertIn('finalize', calls)
             self.assertEqual(calls.count('shutdown'), 1 if service or not completed else 0)
             return packets[-1], calls, None if completed and not service else json.loads((root / 'shutdown.json').read_text())
+
+    def test_checkpoint_is_taken_only_after_shutdown_and_before_hidden_verifier(self):
+        for service in [False,True]:
+            result,calls,_=self.run_attempt(timed_out=True,service=service,checkpoint=True)
+            self.assertEqual(result['execution'],'timeout');self.assertEqual(calls.count('checkpoint'),1)
+            self.assertLess(calls.index('checkpoint'),calls.index('handoff'))
+
+    def test_incomplete_shutdown_never_produces_a_continuation_checkpoint(self):
+        _,calls,_=self.run_attempt(saved=False,checkpoint=True)
+        self.assertNotIn('checkpoint',calls)
+
+    def test_restored_attempt_resumes_original_session_without_replaying_initializer(self):
+        _,calls,_=self.run_attempt(resume=True)
+        self.assertIn('checkpoint',calls)
 
     def test_actor_settings_and_gateway_receive_the_frozen_reasoning(self):
         self.run_attempt(reasoning='low', completed=True)

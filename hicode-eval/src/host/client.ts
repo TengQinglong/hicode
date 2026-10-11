@@ -3,7 +3,7 @@ import { batchSchema, runSchema, liveSchema, containerSchema, budgetSchema } fro
 
 const statusSchema = z.object({
   batches: z.array(batchSchema.extend({ state: z.enum(['running', 'finished', 'blocked']), counts: z.record(z.number()), analysis: z.string(), finishedAt: z.number().optional() })),
-  runs: z.array(runSchema.extend({ evidencePath: z.string().optional(), displayState: z.string(), live: liveSchema.optional(), container: containerSchema.optional(), preparation: z.object({ phase: z.string(), cached: z.boolean().optional(), image: z.string().optional(), updatedAt: z.number() }).optional() })),
+  runs: z.array(runSchema.extend({ continuable:z.boolean().default(false),checkpointElapsedSeconds:z.number().optional(), evidencePath: z.string().optional(), displayState: z.string(), live: liveSchema.optional(), container: containerSchema.optional(), preparation: z.object({ phase: z.string(), cached: z.boolean().optional(), image: z.string().optional(), updatedAt: z.number() }).optional() })),
   tasks: z.array(z.object({ id: z.string(), category: z.string(), seconds: z.number(),status:z.enum(['passed','unpassed','untested']),note:z.string().optional(),sourcePrepared:z.boolean(),environmentPrepared:z.boolean() })),
   inventory:z.object({total:z.number(),passed:z.number(),unpassed:z.number(),untested:z.number(),running:z.number(),preparedSources:z.number()}),
   schedulingBlocked: z.boolean(), concurrency:z.number().int().min(1).max(5),budget:budgetSchema,workerConnected:z.boolean().optional(),
@@ -21,7 +21,7 @@ export class Client {
       await home.body?.cancel();
     };
     if (!this.cookie) await connect();
-    const send = () => fetch(url + '/api/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { cookie: this.cookie, 'X-Eval-Request': '1', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: timed(['submit','retry-run'].includes(path) ? 300000 : 30000), redirect: 'error' });
+    const send = () => fetch(url + '/api/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { cookie: this.cookie, 'X-Eval-Request': '1', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: timed(['submit','retry-run','continue-run'].includes(path) ? 300000 : 30000), redirect: 'error' });
     let response = await send();
     if (response.status === 403) { await response.body?.cancel(); await connect(); response = await send(); }
     const result: unknown = await response.json();

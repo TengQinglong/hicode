@@ -148,7 +148,7 @@ test("busy reviews do not stack; changed user requirements invalidate old result
     });
 });
 
-test("review evidence keeps tool results and committed edits when unverified claims overflow the window", async () => {
+test("review evidence keeps tool results without copying UI diffs when unverified claims overflow the window", async () => {
     await withTempProject(async cwd => {
         const base = createTestContext(cwd);
         const runtime = createTaskRuntimeForTest(cwd, base.shellRunner);
@@ -173,7 +173,7 @@ test("review evidence keeps tool results and committed edits when unverified cla
                         outcome: "output_failed", uiData: {type: "file_change", change: {
                             version: 1, path: "source.py", kind: "update", diffStatus: "complete", linesAdded: 1, linesRemoved: 1,
                             hunks: [{oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
-                                lines: [{type: "remove", content: "old"}, {type: "add", content: "new"}]}],
+                                lines: [{type: "remove", content: "UI_ONLY_OLD"}, {type: "add", content: "UI_ONLY_NEW"}]}],
                         }}}, round);
                     progress.record({type: "tool_call_start", turnId: ctx.turnId, toolCallId: "rejected-edit",
                         name: "edit_file", args: '{"path":"unchanged.py"}'}, round);
@@ -192,9 +192,11 @@ test("review evidence keeps tool results and committed edits when unverified cla
             const evidence = inputs[0]!.evidence;
             expect(evidence.requirements).toContain("Preserve existing behavior");
             for (let round = 1; round <= 10; round++) expect(evidence.activity).toContain(`CHECK_${round}:`);
-            expect(evidence.activity).toContain("Committed file change (edit): update source.py");
-            expect(evidence.activity).toContain("-old\n+new");
-            expect(evidence.activity).not.toContain("Committed file change (rejected-edit)");
+            expect(evidence.activity).toContain('"path":"source.py","old_string":"old","new_string":"new"');
+            expect(evidence.activity).toContain("outcome=output_failed: Output storage failed");
+            expect(evidence.activity).not.toContain("Committed file change");
+            expect(evidence.activity).not.toContain("UI_ONLY_OLD");
+            expect(evidence.activity).not.toContain("UI_ONLY_NEW");
             expect(evidence.activity).toContain("execution not yet confirmed");
             expect(evidence.activity).toContain("No file was written");
             expect(evidence.activity).toContain("Background check failed: counterexample remains");

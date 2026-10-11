@@ -1,6 +1,6 @@
 import {createGunzip, createInflate, createBrotliDecompress} from "node:zlib";
 import type {Transform} from "node:stream";
-import {webFetchFailure} from "./errors.js";
+import {isRetryableWebFailure, WebFetchError, webFetchFailure} from "./errors.js";
 import {lookup} from "node:dns/promises";
 import {request as requestHttp, type ClientRequest, type IncomingMessage, type RequestOptions} from "node:http";
 import {request as requestHttps} from "node:https";
@@ -8,6 +8,9 @@ import {BlockList, isIP, type LookupFunction, type TcpNetConnectOpts} from "node
 
 const WEB_FETCH_MAX_BYTES = 5 * 1024 * 1024;
 const WEB_FETCH_TIMEOUT_MS = 30_000;
+const DNS_TIMEOUT_MS = 5_000;
+const CONNECT_TIMEOUT_MS = 10_000;
+const RESPONSE_IDLE_MS = 10_000;
 const MAX_REDIRECTS = 5;
 
 const blockedIpv4Addresses = new BlockList();
@@ -50,6 +53,8 @@ interface WebFetchResponse {
     contentType: string;
     cacheControl: string;
     body: Buffer;
+    attempts: number;
+    retryAfter?: string;
     redirectUrl?: string;
 }
 
@@ -96,6 +101,14 @@ export function isPublicAddress(address: string): boolean {
     if (family === 4) return !blockedIpv4Addresses.check(address, "ipv4");
     if (family === 6) return !blockedIpv6Addresses.check(address, "ipv6");
     return false;
+}
+
+export function validatePinnedAddresses(url: URL, addresses: readonly string[]): {address: string; family: 4 | 6}[] {
+    if (url.protocol !== "https:" || isIP(normalizedHostname(url.hostname)) !== 0) throw new Error("Explicit DNS addresses require an HTTPS domain with certificate verification");
+    if (addresses.length === 0 || addresses.length > 16 || addresses.some(address => !isPublicAddress(address))) {
+        throw new Error("Explicit DNS addresses must contain 1-16 public IPs; private, loopback and reserved addresses are rejected");
+    }
+    return [...new Set(addresses)].map(address => ({address, family: isIP(address) === 4 ? 4 : 6}));
 }
 
 async function resolvePublicAddresses(hostname: string) {
@@ -146,20 +159,23 @@ function requestAbortError(signal: AbortSignal): Error {
 }
 
 // DNS lookup cannot be cancelled, but its late result must never start a request.
-async function resolveWithAbort(hostname: string, signal: AbortSignal) {
+async function resolveWithAbort(url: URL, signal: AbortSignal, addresses?: readonly string[]) {
     if (signal.aborted) throw requestAbortError(signal);
+    if (addresses) return validatePinnedAddresses(url, addresses);
     return new Promise<Awaited<ReturnType<typeof resolvePublicAddresses>>>((resolve, reject) => {
-        const abort = () => reject(requestAbortError(signal));
+        const cleanup = () => {clearTimeout(deadline); signal.removeEventListener("abort", abort);};
+        const fail = (error: unknown) => {cleanup(); reject(error);};
+        const abort = () => fail(requestAbortError(signal));
+        const deadline = setTimeout(() => fail(Object.assign(new Error(`DNS resolution did not complete within ${DNS_TIMEOUT_MS} ms`), {code: "ETIMEDOUT"})), DNS_TIMEOUT_MS);
+        deadline.unref?.();
         signal.addEventListener("abort", abort, {once: true});
-        resolvePublicAddresses(hostname).then(resolve, reject).finally(() => {
-            signal.removeEventListener("abort", abort);
-        });
+        resolvePublicAddresses(url.hostname).then(value => {cleanup(); resolve(value);}, fail);
     });
 }
 
-async function requestOnce(url: URL, signal: AbortSignal, startedAt: number): Promise<WebFetchResponse> {
+async function requestOnce(url: URL, signal: AbortSignal, startedAt: number, pinnedAddresses?: readonly string[]): Promise<WebFetchResponse> {
     let addresses: Awaited<ReturnType<typeof resolvePublicAddresses>>;
-    try {addresses = await resolveWithAbort(url.hostname, signal);}
+    try {addresses = await resolveWithAbort(url, signal, pinnedAddresses);}
     catch (error) {
         if (signal.aborted && !(signal.reason instanceof Error && "code" in signal.reason && signal.reason.code === "ETIMEDOUT")) throw requestAbortError(signal);
         throw webFetchFailure("dns", error, url, performance.now() - startedAt);
@@ -173,7 +189,13 @@ async function requestOnce(url: URL, signal: AbortSignal, startedAt: number): Pr
         let responseEnded = false;
         let decoder: Transform | undefined;
         const chunks: Buffer[] = [];
+        let connectDeadline: ReturnType<typeof setTimeout> | undefined;
+        let idleDeadline: ReturnType<typeof setTimeout> | undefined;
+        let detachSocket: (() => void) | undefined;
         const cleanup = () => {
+            clearTimeout(connectDeadline);
+            clearTimeout(idleDeadline);
+            detachSocket?.();
             signal.removeEventListener("abort", abort);
             chunks.length = 0;
         };
@@ -189,6 +211,11 @@ async function requestOnce(url: URL, signal: AbortSignal, startedAt: number): Pr
                 ? requestAbortError(signal) : webFetchFailure(response ? "response_body" : "request", error, url, performance.now() - startedAt, response?.statusCode ?? null));
         };
         const abort = () => fail(requestAbortError(signal));
+        const armIdle = () => {
+            clearTimeout(idleDeadline);
+            idleDeadline = setTimeout(() => fail(Object.assign(new Error(`Response made no progress within ${RESPONSE_IDLE_MS} ms`), {code: "ETIMEDOUT"})), RESPONSE_IDLE_MS);
+            idleDeadline.unref?.();
+        };
         signal.addEventListener("abort", abort, {once: true});
         try {
             const options: RequestOptions & Pick<TcpNetConnectOpts, "autoSelectFamily" | "autoSelectFamilyAttemptTimeout"> = {
@@ -211,6 +238,8 @@ async function requestOnce(url: URL, signal: AbortSignal, startedAt: number): Pr
                     if (!settled && !responseEnded) fail(new Error("Web response closed before completion"));
                 });
                 if (settled) { response.destroy(); return; }
+                clearTimeout(connectDeadline);
+                armIdle();
                 const encoding = String(response.headers["content-encoding"] ?? "identity").trim().toLowerCase();
                 if (!["identity", "gzip", "deflate", "br"].includes(encoding)) {fail(new Error(`Unsupported Content-Encoding: ${encoding.slice(0, 80)}`)); return;}
                 try {
@@ -226,6 +255,7 @@ async function requestOnce(url: URL, signal: AbortSignal, startedAt: number): Pr
                 }
                 response.on("data", (chunk: Buffer | string) => {
                     if (settled) return;
+                    armIdle();
                     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
                     bytes += buffer.length;
                     if (bytes > WEB_FETCH_MAX_BYTES) {
@@ -252,6 +282,8 @@ async function requestOnce(url: URL, signal: AbortSignal, startedAt: number): Pr
                             contentType: String(incoming.headers["content-type"] ?? ""),
                             cacheControl: String(incoming.headers["cache-control"] ?? ""),
                             body: Buffer.concat(chunks),
+                            attempts: 1,
+                            ...(incoming.headers["retry-after"] ? {retryAfter: String(incoming.headers["retry-after"])} : {}),
                             ...(incoming.headers.location
                                 ? {redirectUrl: new URL(incoming.headers.location, url).toString()}
                                 : {}),
@@ -266,6 +298,18 @@ async function requestOnce(url: URL, signal: AbortSignal, startedAt: number): Pr
                 if (decoder) response.pipe(decoder);
             });
             req.on("error", fail);
+            connectDeadline = setTimeout(() => fail(Object.assign(new Error(`Connection/TLS did not complete within ${CONNECT_TIMEOUT_MS} ms`), {code: "ETIMEDOUT"})), CONNECT_TIMEOUT_MS);
+            connectDeadline.unref?.();
+            req.on("socket", socket => {
+                if (settled) return;
+                const connected = () => {if (!settled) {clearTimeout(connectDeadline); armIdle();}};
+                if (!socket.connecting && (url.protocol === "http:" || req?.reusedSocket)) connected();
+                else {
+                    const event = url.protocol === "https:" ? "secureConnect" : "connect";
+                    socket.once(event, connected);
+                    detachSocket = () => socket.removeListener(event, connected);
+                }
+            });
             req.on("close", () => {
                 if (!response) fail(new Error("Web request closed before a response was received"));
             });
@@ -278,7 +322,8 @@ async function requestOnce(url: URL, signal: AbortSignal, startedAt: number): Pr
 
 export async function fetchPublicWebUrl(
     value: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    pinnedAddresses?: readonly string[]
 ): Promise<WebFetchResponse> {
     const startedAt = performance.now();
     if (signal.aborted) throw requestAbortError(signal);
@@ -291,8 +336,23 @@ export async function fetchPublicWebUrl(
     deadline.unref?.();
     try {
         let current = parsePublicWebUrl(value);
+        let attempts = 0;
+        let retried = false;
         for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
-            const response = await requestOnce(current, controller.signal, startedAt);
+            let response: WebFetchResponse;
+            while (true) {
+                attempts++;
+                try {response = await requestOnce(current, controller.signal, startedAt, pinnedAddresses);}
+                catch (error) {
+                    if (!controller.signal.aborted && !retried && isRetryableWebFailure(error)) {retried = true; continue;}
+                    if (error instanceof WebFetchError) throw new WebFetchError(`${error.message}\nRetrieval attempts: ${attempts}.`, error.stage, error.codes, error.elapsedMs, error.httpStatus);
+                    throw error;
+                }
+                // One transient GET retry shares the original deadline and redirect budget.
+                if (!retried && !response.retryAfter && [502, 503, 504].includes(response.status) && !controller.signal.aborted) {retried = true; continue;}
+                break;
+            }
+            response.attempts = attempts;
             if (response.status < 300 || response.status >= 400 || !response.redirectUrl) {
                 return response;
             }

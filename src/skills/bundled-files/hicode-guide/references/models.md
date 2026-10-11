@@ -2,7 +2,7 @@
 
 ## Recommended configuration flow
 
-Use `/providers` in the interactive CLI to configure a provider's API key, API endpoint and model list. Built-in provider sources are Alibaba Bailian (`qwen`), Zhipu GLM (`glm`), DeepSeek (`deepseek`) and OpenRouter (`openrouter`).
+Use `/providers` in the interactive CLI to configure a provider's API key, API endpoint and model list. Built-in provider sources are Alibaba Bailian (`qwen`), Zhipu GLM (`glm`), DeepSeek (`deepseek`), OpenRouter (`openrouter`), Qwen Token Plan (`qwen-token-plan`), and Ark Agent Plan (`ark-agent-plan`).
 
 Choose the source that actually serves the API request. A model's brand or displayed name does not determine which provider key or endpoint it uses.
 
@@ -45,7 +45,7 @@ Prefer the UI. A minimal user settings fragment selecting a built-in model is:
 
 Provider model IDs must exist in the configured source's model list. To declare a custom endpoint/list, merge a `sources.<source>` entry into user settings using `baseUrl`, `apiKeyEnv`, and `models: [{"id": "...", "label": "..."}]`. A supplied model list replaces that source's list; it is not an additive patch. Keep key values out of settings.
 
-Default key variable names: `DASHSCOPE_API_KEY`, `GLM_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`. The configured `apiKeyEnv` can change the name.
+Default key variable names: `DASHSCOPE_API_KEY`, `GLM_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `QWEN_TOKEN_PLAN_API_KEY`, `ARK_AGENT_PLAN_API_KEY`. The configured `apiKeyEnv` can change the name.
 
 `hicode --source <source> --model <id>` overrides the primary selection for that invocation. Headless/SDK callers must configure credentials through their environment/Host; `/providers` is an interactive CLI UI.
 
@@ -61,3 +61,7 @@ Support for images, reasoning output and continuation depends on the selected pr
 ### Image input
 
 Each model entry can declare `imageInput: true`; undeclared models are text-only. In `/providers`, press Tab on the display-name step when adding a model to enable images. Enable it only for a model and endpoint that actually accept image input. The bundled Qwen Flash entry is enabled; changing only its endpoint clears inherited image support until explicitly configured.
+
+### Ark Agent Plan
+
+Use the dedicated Agent Plan key, not a regular Ark or Coding Plan key. The default Chat API endpoint is `https://ark.cn-beijing.volces.com/api/plan/v3`; the bundled model is `deepseek-v4.1-flash`. `/model` offers default/off/low/high/max. Default omits the effort field; off maps to the native `none` value. Explicit efforts stay fixed on retries. Known DeepSeek reasoning is replayed only for the same source, endpoint and model. Image input is enabled for this bundled model. Other added model IDs retain default effort until their protocol is confirmed.

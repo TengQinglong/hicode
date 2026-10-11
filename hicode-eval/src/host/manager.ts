@@ -1,4 +1,4 @@
-import { mkdir, readdir, cp, rm,realpath } from 'node:fs/promises';
+import { mkdir, readdir, cp, rm,realpath,copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -9,8 +9,10 @@ import {taskAdapters,taskKey} from './datasets.js';
 import {EnvironmentStore} from './environments.js';
 import { EvidenceCollectionError, LinuxMachine } from './linux.js';
 import { readJson, save, exists, contained } from './store.js';
-import { runSchema, done, modelSchema,batchSchema, submissionSchema,environmentPreparationSchema,serviceRegradeRequestSchema,serviceRecheckSchema } from './types.js';
-import type { Config, Run, Batch, Submission,EnvironmentPreparation,ServiceRegradeRequest } from './types.js';
+import { runSchema, done, modelSchema,batchSchema, submissionSchema,environmentPreparationSchema,serviceRegradeRequestSchema,serviceRecheckSchema,continuationRequestSchema } from './types.js';
+import type { Config, Run, Batch, Submission,EnvironmentPreparation,ServiceRegradeRequest,ContinuationRequest,ContinuationOrigin } from './types.js';
+import {readCheckpoint,verifyCheckpointArchive,environmentDigest} from './continuation.js';
+import {bindingSchema} from './environments.js';
 import {serviceRegradeChanges,ServiceRegradeCleanupError} from './serviceRegrade.js';
 import {batchView,catalogView,runView} from './view.js';
 
@@ -78,13 +80,15 @@ export class Lab {
     }
     for (const batch of this.batches.values()) if (batch.runIds.some(id => !this.runs.has(id))) throw Error('Batch has missing run evidence');
     const retried=new Set<string>();
-    for(const batch of this.batches.values())if(batch.retryOf){
-      const origin=batch.retryOf,parent=this.runs.get(origin.runId);
-      if(retried.has(origin.runId)||batch.runIds.length!==1||batch.runIds[0]===origin.runId||batch.id===origin.batchId||
+    for(const batch of this.batches.values())if(batch.retryOf||batch.continueOf){
+      if(batch.retryOf&&batch.continueOf)throw Error('An attempt cannot both retry and continue');
+      const origin=batch.retryOf??batch.continueOf!,parent=this.runs.get(origin.runId),key=(batch.continueOf?'continue:':'retry:')+origin.runId;
+      if(retried.has(key)||batch.runIds.length!==1||batch.runIds[0]===origin.runId||batch.id===origin.batchId||
         (parent&&(parent.batchId!==origin.batchId||taskKey(batch.taskRefs[0]!)!==taskKey({dataset:parent.dataset,id:parent.task})||
-          origin.attempt!==(this.batches.get(parent.batchId)!.retryOf?.attempt??1)+1)))
+          origin.attempt!==(this.batches.get(parent.batchId)!.retryOf?.attempt??this.batches.get(parent.batchId)!.continueOf?.attempt??1)+1))
+          ||(batch.continueOf&&(!parent||batch.continueOf.checkpoint.runId!==parent.id||parent.state==='passed')))
         throw Error('Invalid retry lineage');
-      retried.add(origin.runId);
+      retried.add(key);
     }
     this.machine=new LinuxMachine(this.config);await this.machine.freeze();
     for(const state of this.runs.values()){
@@ -208,12 +212,38 @@ export class Lab {
       const {reasoning: _originalReasoning, ...originalConnection} = parent.model;
       const {reasoning: _currentReasoning, ...currentConnection} = this.config.model;
       if(!isDeepStrictEqual(originalConnection,currentConnection))throw Error('Current service model differs from the original; restore the original model configuration before rerunning');
-      return this.createBatch({name:original.task.slice(0,90)+' · 第 '+((parent.retryOf?.attempt??1)+1)+' 次尝试',
+      return this.createBatch({name:original.task.slice(0,90)+' · 第 '+((parent.retryOf?.attempt??parent.continueOf?.attempt??1)+1)+' 次尝试',
         network:original.network,concurrency:1,tasks:[{id:original.task,dataset:original.dataset,agentSeconds:original.budget.agentSeconds}]},original);
     });
     this.submissions=operation.catch(()=>{});return operation;
   }
-  private async createBatch(input: Submission,original:Run|null): Promise<Batch> {
+  async continueRun(input:ContinuationRequest):Promise<Batch>{
+    const operation=this.submissions.then(async()=>{
+      const request=continuationRequestSchema.parse(input),original=this.runs.get(request.run);
+      if(!original)throw Error('Unknown run');
+      if(!this.adapters[original.dataset].canContinue)throw Error('This dataset does not support continuing saved attempts');
+      const existing=[...this.batches.values()].find(batch=>batch.continueOf?.runId===original.id);
+      if(existing){
+        if(existing.continueOf?.prompt!==request.prompt||this.runs.get(existing.runIds[0]!)?.budget.agentSeconds!==request.agentSeconds)
+          throw Error('This attempt already has a continuation with different inputs');
+        return existing;
+      }
+      if(this.jobs.has(original.id)||[...this.rechecks.values()].some(item=>item.task===taskKey({dataset:original.dataset,id:original.task}))
+        ||[...this.runs.values()].some(run=>run.dataset===original.dataset&&run.task===original.task&&(!done(run.state)||run.state==='needs_recovery'||this.jobs.has(run.id))))
+        throw Error('Wait for this task to finish and its evidence to be collected');
+      const parent=this.batches.get(original.batchId)!;
+      const {reasoning:_old,...oldConnection}=parent.model,{reasoning:_new,...currentConnection}=this.config.model;
+      if(!isDeepStrictEqual(oldConnection,currentConnection))throw Error('Restore the original model connection before continuing');
+      const checkpoint=await readCheckpoint(this.layout,original);
+      const environment=await readJson(join(this.path(original.id),'environment.json'),bindingSchema);
+      const origin:ContinuationOrigin={batchId:parent.id,runId:original.id,attempt:(parent.retryOf?.attempt??parent.continueOf?.attempt??1)+1,
+        checkpoint,prompt:request.prompt,environmentSha256:environmentDigest(environment)};
+      return this.createBatch({name:original.task.slice(0,85)+' · 继续作答 '+origin.attempt,network:original.network,concurrency:1,
+        tasks:[{id:original.task,dataset:original.dataset,agentSeconds:request.agentSeconds}]},original,origin);
+    });
+    this.submissions=operation.catch(()=>{});return operation;
+  }
+  private async createBatch(input: Submission,original:Run|null,continuation?:ContinuationOrigin): Promise<Batch> {
     if (this.closed || this.halted) throw Error('Service closing or scheduling blocked');
     if ([...this.runs.values()].some(r => r.state === 'needs_recovery')) throw Error('Recover retained runs before submitting more');
     if (input.concurrency > this.config.concurrency) throw Error('Batch exceeds service concurrency');
@@ -240,7 +270,10 @@ export class Lab {
       const network=(input.network??this.config.network)==='isolated'?'isolated':permitted;
       if(original&&network!==original.network)throw Error('Original frozen task network permission changed; refusing to rerun');
       networks.push(network);
-      try{await environments.resolve(task);}
+      try{
+        const environment=await environments.resolve(task);
+        if(continuation&&environmentDigest(environment)!==continuation.environmentSha256)throw Error('Continuation environment changed');
+      }
       catch(error){throw Error('Prepare the selected task environment before submission: '+taskKey(task)+' · '+String(error));}
     }
     if(!this.machineReady)await this.prepareMachine();
@@ -251,7 +284,8 @@ export class Lab {
     const id = randomBytes(8).toString('hex'), now = Date.now() / 1000;
     const batch = batchSchema.parse({name:input.name, network: input.network ?? this.config.network, concurrency:input.concurrency,
       taskRefs,budget: this.config.budget, version: 1, id, createdAt: now, runIds: taskRefs.map(() => randomBytes(8).toString('hex')), model, payload,
-      ...(original?{retryOf:{batchId:original.batchId,runId:original.id,attempt:(this.batches.get(original.batchId)!.retryOf?.attempt??1)+1}}:{}) });
+      ...(continuation?{continueOf:continuation}:original?{retryOf:{batchId:original.batchId,runId:original.id,
+        attempt:(this.batches.get(original.batchId)!.retryOf?.attempt??this.batches.get(original.batchId)!.continueOf?.attempt??1)+1}}:{}) });
     const states = input.tasks.map((task, i) => runSchema.parse({ version: 1, network: networks[i], id: batch.runIds[i], batchId: id, task: task.id, dataset: selected[i]!.dataset, state: 'queued', createdAt: now, updatedAt: now, model: model.model, budget: { agentSeconds: task.agentSeconds ?? batch.budget.agentSeconds } }));
     // Publish the batch only after all children are durable; no worker sees a partial submission.
     try {
@@ -271,6 +305,10 @@ export class Lab {
           throw Error(`Task changed during submission: ${state.task} (${changed ?? 'snapshot metadata'})`);
         }
         await save(join(root, 'task-files.json'), hashes);
+        if(continuation&&original){
+          await copyFile(join(this.path(original.id),'evidence','continuation.tar.gz'),this.layout.continuationArchive(state.id));
+          await verifyCheckpointArchive(this.layout.continuationArchive(state.id),continuation.checkpoint);
+        }
         await save(join(root, 'state.json'), state);
       }
       await save(this.layout.batch(id), batch);
@@ -395,13 +433,15 @@ export class Lab {
       if (!isDeepStrictEqual(await this.adapters[current.dataset].snapshot(join(path, 'task', current.task)),frozen)) throw Error('Frozen task changed');
       const payload = await readJson(join(this.config.payload, 'manifest.json'), z.record(z.unknown()));
       if (JSON.stringify(payload) !== JSON.stringify(this.batches.get(current.batchId)!.payload)) throw Error('Payload changed after submission');
-      await save(join(path, 'manifest.json'), { model: this.batches.get(current.batchId)!.model, payload, task: current.task, dataset: current.dataset, task_files: frozen, machine: this.config.machine, entry: 'tui', network: current.network, budget: current.budget });
+      const batch=this.batches.get(current.batchId)!;
+      await save(join(path, 'manifest.json'), { model: batch.model, payload, task: current.task, dataset: current.dataset, task_files: frozen, machine: this.config.machine, entry: 'tui', network: current.network, budget: current.budget,
+        ...(batch.continueOf?{continueOf:batch.continueOf}:{}) });
       if (!this.machine) throw Error('Initialize the evaluation machine before running tasks');
       const result = await this.machine.execute(current, path, this.credential, async phase => {
         await appendPhase(path, phase);
         const state = phase === 'Running HiCode' ? 'running' : phase.includes('verif') || phase.includes('Verif') ? 'verifying' : 'preparing';
         if (this.runs.get(id)?.state !== 'cancelling') await this.update(id, { state });
-      }, this.batches.get(current.batchId)!.model);
+      }, batch.model,batch.continueOf);
       const execution = result.execution;
       const classified = classify(execution === 'completed' ? undefined : execution, result.grading === 'unavailable' ? null : { reward: result.grading === 'passed' ? 1 : 0 });
       await this.update(id, { state: execution === 'cancelled' ? 'cancelled' : classified.state, execution, grading: result.grading, note: result.note, reward: result.grading === 'unavailable' ? undefined : result.grading === 'passed' ? 1 : 0, collection: 'complete', finishedAt: Date.now() / 1000 });

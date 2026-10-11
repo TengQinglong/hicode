@@ -19,6 +19,38 @@ function setup(storage: Parameters<typeof createModelConfiguration>[0], cwd: str
     return {runtime, config: createModelConfiguration(storage, cwd, runtime)};
 }
 
+test("Ark and Qwen Token Plan save independent keys, endpoints and per-model reasoning", async () => {
+    const keys = ["ARK_AGENT_PLAN_API_KEY", "QWEN_TOKEN_PLAN_API_KEY"] as const;
+    const previous = keys.map(key => process.env[key]);
+    try {
+        await withTempProject(async (cwd, storage) => {
+            const {runtime, config} = setup(storage, cwd);
+            await config.saveKey("qwen-token-plan", "qwen-fixture");
+            const qwen = runtime.available.find(item => item.source === "qwen-token-plan" && item.model === "deepseek-v4.1-flash")!;
+            await config.saveSelection({...qwen, reasoning:"low"});
+            await config.saveKey("ark-agent-plan", "ark-fixture");
+            await config.saveEndpoint("ark-agent-plan", "https://ark-fixture.invalid/api/plan/v3");
+            const ark = runtime.available.find(item => item.source === "ark-agent-plan")!;
+            await config.saveSelection({...ark, reasoning:"max"});
+            const loaded = loadHiCodeSettings({cwd, storage});
+            expect(loaded.issues).toHaveLength(0);
+            expect(loaded.values.models.primary).toEqual({...ark, reasoning:"max"});
+            expect(loaded.values.models.reasoning).toEqual(expect.arrayContaining([
+                {source:"ark-agent-plan", model:ark.model, effort:"max"},
+                {source:"qwen-token-plan", model:qwen.model, effort:"low"},
+            ]));
+            expect(loaded.values.sources["ark-agent-plan"].baseUrl).toBe("https://ark-fixture.invalid/api/plan/v3");
+            expect(loaded.values.sources["qwen-token-plan"].baseUrl).toBeUndefined();
+            expect(await readFile(join(storage.hicodeHome,"settings.json"),"utf8")).not.toContain("ark-fixture\"");
+            expect(parseEnv(await readFile(join(storage.hicodeHome,".env"),"utf8"))).toMatchObject({ARK_AGENT_PLAN_API_KEY:"ark-fixture",QWEN_TOKEN_PLAN_API_KEY:"qwen-fixture"});
+            await config.saveSelection(runtime.available.find(item => item.source === "qwen-token-plan" && item.model === qwen.model)!);
+            expect(runtime.target.reasoning).toBe("low");
+        });
+    } finally {
+        keys.forEach((key, index) => {if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index];});
+    }
+});
+
 test("Token Plan settings and credentials coexist with ordinary Qwen and survive selection reload", async () => {
     const keys = ["DASHSCOPE_API_KEY", "QWEN_TOKEN_PLAN_API_KEY"] as const;
     const previous = keys.map(key => process.env[key]);

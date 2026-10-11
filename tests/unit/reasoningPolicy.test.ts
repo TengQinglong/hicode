@@ -11,7 +11,7 @@ import {withTempProject} from "../helpers/tempProject.js";
 import {listPromptLogs} from "../helpers/promptLogs.js";
 
 const originalFetch = globalThis.fetch;
-const keys = ["DASHSCOPE_API_KEY", "QWEN_TOKEN_PLAN_API_KEY", "DEEPSEEK_API_KEY", "GLM_API_KEY"] as const;
+const keys = ["DASHSCOPE_API_KEY", "QWEN_TOKEN_PLAN_API_KEY", "DEEPSEEK_API_KEY", "GLM_API_KEY", "ARK_AGENT_PLAN_API_KEY"] as const;
 const previous = keys.map(key => process.env[key]);
 afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -25,6 +25,7 @@ test("canonical choices reject aliases, unsupported levels and duplicate prefere
     const doc = (source: "user" | "project", effort: ReasoningEffort): LoadedSettingsDocument => ({source, path: "/fixture", value: {models: {reasoning: [{source: "qwen-token-plan", model: "deepseek-v4.1-flash", effort}]}}});
     expect(reasoningCapability("qwen", "qwen3.8-flash")?.efforts).toEqual(["default", "off", "low", "medium", "xhigh"]);
     expect(reasoningCapability("qwen-token-plan", "deepseek-v4.1-flash")?.efforts).toEqual(["default", "off", "low", "high", "max"]);
+    expect(reasoningCapability("ark-agent-plan", "deepseek-v4.1-flash")?.efforts).toEqual(["default", "off", "low", "high", "max"]);
     expect(reasoningCapability("glm", "glm-5.2")?.efforts).toEqual(["default", "off", "high", "max"]);
     expect(reasoningCapability("glm", "glm-5.3")?.efforts).toEqual(["default", "low", "high", "max"]);
     expect(reasoningCapability("glm", "glm-5.3-flash")?.efforts).toEqual(["default", "low", "high", "max"]);
@@ -39,7 +40,7 @@ test("canonical choices reject aliases, unsupported levels and duplicate prefere
     expect(hicodeHostSettingsSchema.safeParse({models: {reasoning: [{source: "qwen", model: "qwen3.8-flash", effort: "ultra"}]}}).success).toBe(false);
 });
 
-for (const [sourceId, model] of [["qwen", "qwen3.8-flash"], ["qwen-token-plan", "qwen3.8-flash"], ["qwen-token-plan", "deepseek-v4.1-flash"], ["deepseek", "deepseek-flash"], ["glm", "glm-5.2"], ["glm", "glm-5.3"], ["glm", "glm-5.3-flash"]] as const) {
+for (const [sourceId, model] of [["qwen", "qwen3.8-flash"], ["qwen-token-plan", "qwen3.8-flash"], ["qwen-token-plan", "deepseek-v4.1-flash"], ["ark-agent-plan", "deepseek-v4.1-flash"], ["deepseek", "deepseek-flash"], ["glm", "glm-5.2"], ["glm", "glm-5.3"], ["glm", "glm-5.3-flash"]] as const) {
     test(`${sourceId}/${model} sends canonical choices and applies the supported task-review policy`, async () => {
         await withTempProject(async (cwd, storage) => {
             const source = resolveHiCodeSettings([]).values.sources[sourceId];
@@ -53,17 +54,21 @@ for (const [sourceId, model] of [["qwen", "qwen3.8-flash"], ["qwen-token-plan", 
                 await caller(messages, [], storage, cwd, model, "main", undefined, undefined, undefined, undefined, undefined, effort);
                 const body = bodies.at(-1)!;
                 expect(body).not.toHaveProperty("thinking_budget");
-                if (effort === "default" || effort === "off") expect(body).not.toHaveProperty("reasoning_effort");
+                if (capability.switch === "reasoning_effort" && effort === "off") expect(body.reasoning_effort).toBe("none");
+                else if (effort === "default" || effort === "off") expect(body).not.toHaveProperty("reasoning_effort");
                 else expect(body.reasoning_effort).toBe(effort);
                 if (capability.switch === "thinking") expect(body.thinking).toEqual({type: effort === "off" ? "disabled" : "enabled"});
-                else {expect(body.enable_thinking).toBe(effort !== "off"); expect(body).not.toHaveProperty("thinking");}
+                else if (capability.switch === "enable_thinking") {expect(body.enable_thinking).toBe(effort !== "off"); expect(body).not.toHaveProperty("thinking");}
+                else {expect(body).not.toHaveProperty("enable_thinking"); expect(body).not.toHaveProperty("thinking"); expect(body).not.toHaveProperty("preserve_thinking");}
             }
             await caller(messages, [], storage, cwd, model, "task_review", undefined, undefined, undefined, undefined, undefined, explicitEffort);
             const review = bodies.at(-1)!;
-            if (capability.reviewEffort === "off") expect(review).not.toHaveProperty("reasoning_effort");
+            if (capability.switch === "reasoning_effort") expect(review.reasoning_effort).toBe("none");
+            else if (capability.reviewEffort === "off") expect(review).not.toHaveProperty("reasoning_effort");
             else expect(review.reasoning_effort).toBe("low");
             expect(review.max_tokens).toBe(512);
-            if (capability.switch === "thinking") expect(review.thinking).toEqual({type: capability.reviewEffort === "off" ? "disabled" : "enabled"}); else expect(review.enable_thinking).toBe(false);
+            if (capability.switch === "thinking") expect(review.thinking).toEqual({type: capability.reviewEffort === "off" ? "disabled" : "enabled"});
+            else if (capability.switch === "enable_thinking") expect(review.enable_thinking).toBe(false);
             const directory = getPromptLogDirectory(storage, cwd);
             const files = await listPromptLogs(directory);
             const logs = await Promise.all(files.map(async file => JSON.parse(await readFile(join(directory, file), "utf8"))));

@@ -4,6 +4,7 @@ export const LLM_PROVIDER_NAMES = [
     "deepseek",
     "openrouter",
     "qwen-token-plan",
+    "ark-agent-plan",
 ] as const;
 
 export type LLMProviderName = typeof LLM_PROVIDER_NAMES[number];
@@ -25,6 +26,7 @@ const QWEN_DEFAULT_BASE_URL = "https://trial.cn-beijing.maas.aliyuncs.com/compat
 export const PROVIDER_BASE_URLS: Readonly<Record<LLMProviderName, string>> = Object.freeze({
     qwen: QWEN_DEFAULT_BASE_URL,
     "qwen-token-plan": "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
+    "ark-agent-plan": "https://ark.cn-beijing.volces.com/api/plan/v3",
     glm: "https://open.bigmodel.cn/api/paas/v4",
     deepseek: "https://api.deepseek.com",
     openrouter: "https://openrouter.ai/api/v1",

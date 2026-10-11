@@ -42,7 +42,7 @@
 - 正常完成的服务题必须先确认 `--single-task` 已封锁执行（持久化成功、工具回执完整、无运行或待消费子 Agent），并关闭模型网关；保留 HiCode Runtime 及其托管 Shell 服务，让私有 verifier 在独立文件／PID 视图中访问本题服务。判题完成、取消或失败后再关闭 Runtime、服务 namespace 和容器。未确认封锁不得暴露隐藏测试；超时／作答失败仍走原有停止确认，不保证服务存活。不能通过关闭全局 Task 清理或自行 daemonize 来替代此交接。
 - 默认允许联网，数据集适配器按原题许可逐题收窄；Terminal-Bench 2.1 只有冻结 task.toml 的 environment.allow_internet=true 才开放，false／缺失则隔离，DeepSWE 始终隔离。settings 和批次 network=isolated 可进一步禁网，open 不能覆盖原题限制。同批允许混合模式，实际模式写入各 Run，retry 沿用原模式。服务题联网时共享本题独立容器的网络，禁网时保留私有无外网 namespace；两者均保留文件、进程、隐藏判题隔离和本题模型网关，真实 Key 不进入作答环境。修改默认配置只在空闲 worker 停止后持 service lease 原子保存，再恢复服务；不改变已有 Run。
 
-模型强度随连接声明保存在 `state/settings.json` 的 `model.reasoning.effort`。init 可从 HiCode 当前 Settings 导入；submit 的 --reasoning 选项优先于文件顶层；文件顶层 `reasoning: {effort: "max"}` 覆盖本批，省略沿用服务默认，`default` 保留厂商默认参数省略语义。批次冻结完整模型选择，manifest/job/Actor/模型网关均使用原值；retry 沿用原强度，regrade 不调用模型。不得给旧记录推填强度，实际字段查请求日志。GLM 5.3/5.3 Flash 强制思考，网关不接受 off，审定复盘使用 low；其他已支持关闭的型号继续使用 off。更新源码只在空闲时更新 payload 与重启 worker，不需重建题目依赖镜像。
+模型强度随连接声明保存在 `state/settings.json` 的 `model.reasoning.effort`。init 可从 HiCode 当前 Settings 导入；submit 的 --reasoning 选项优先于文件顶层；文件顶层 `reasoning: {effort: "max"}` 覆盖本批，省略沿用服务默认，`default` 保留厂商默认参数省略语义。批次冻结完整模型选择，manifest/job/Actor/模型网关均使用原值；retry 沿用原强度，regrade 不调用模型。不得给旧记录推填强度，实际字段查请求日志。GLM 5.3/5.3 Flash 强制思考，网关不接受 off，审定复盘使用 low；其他已支持关闭的型号继续使用 off。方舟 Agent Plan 为独立 `ark-agent-plan` 来源，使用 `ARK_AGENT_PLAN_API_KEY` 和专属 `/api/plan/v3`，与其他账号分开。DeepSeek 4.1 Flash 的 default 省略 effort、off 编码 none，审定复盘使用 none；网关仅接受冻结的主强度与审定辅助策略，不混用其他思考开关。更新源码只在空闲时更新 payload 与重启 worker，不需重建题目依赖镜像。
 
 ## 镜像的实际存放位置
 
@@ -62,6 +62,10 @@
 
 通过题收集完成、成绩入账、容器销毁回执确认后，先核验原证据哈希，再打包 evidence、task、inputs、public-test-inputs 和 worker。完整读取压缩包校验后写 SHA256 回执，最后才删除原目录。取消、异常和未通过现场保留供复核，不默认删除。归档失败保留原文件和错误回执，不改变题目成绩。
 
+Terminal-Bench 2.1 的可续跑现场只由 runner 在超时、取消或模型失败且完整停机后、隐藏判题上传前生成。`runs/<id>/evidence/continuation.tar.gz` 与 `continuation.json` 保存工作区、Home、原会话身份、累计执行时长、本地模型网关端口和审定服务目录；压缩包及解压内容均受 8 GiB／100000 文件上限约束，不跟随 symlink。不能拿判题后的 project/Home 当续跑输入，不能为旧记录人工补造快照。
+
+continue 由同一持锁 worker 创建新的关联尝试，追加 30–10800 秒，冻结原模型、强度、网络、题目、payload 和环境身份；保留原成绩。恢复时沿用快照记录的模型网关端口，保持思考回放的连接身份。网页只读小型快照元数据，提交及执行前才核验完整哈希。新 Run 的 `continuation-input.tar.gz` 仅用于恢复，恢复后删除容器内副本，完整收集后删除宿主副本；原快照留在父 Run。恢复仅为原 Home 路径提供绑定到本题新 Home 的受限别名，不挂载原 Run、控制目录或隐藏测试。服务重启和训练 checkpoint 恢复由模型处理，不恢复进程内存或临时 tmpfs。活动、待恢复、已通过或没有有效快照的题拒绝续跑；其他数据集未开放此能力。
+
 旧体系备份只用于人工查阅。需要重建某题时，从公开题库/审定配方重新验证，或显式 register 一份已核对的冻结题包；不恢复旧服务配置、成绩 JSON、环境绑定或运行状态。备份未核验前不得删除唯一原件。
 
 执行初始化只校验冻结 HiCode payload；release 和执行模块在每题的数据集镜像内安装并预检，不依赖其他数据集引擎的常驻准备容器。
@@ -73,3 +77,5 @@
 ## 本机定位
 
 此节仅由本机维护，不进入 Git：数据根、离线备份根、Docker context、Colima profile、Docker Root、数据盘文件、磁盘容量和服务端口。实际值以 settings 和引擎查询为准。
+
+审定服务题可声明 verifierProcessView 与 /tmp 下具名 verifierSockets；只向私有判题提供本题封锁时的服务 PID 目录和指定归属 socket，判题仍使用独立 PID namespace，self/net 来自自己的 Proc。Proc 构造辅助进程进入服务 PID 前先 chroot 到空 tmpfs，隐藏文件不能经辅助进程 root 暴露；socket 放本题 service-tmp，只绑定审定文件，不开放整份 tmp 或控制目录。

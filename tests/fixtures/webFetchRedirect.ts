@@ -10,7 +10,7 @@ const target = mode === "private" ? "http://127.0.0.1/private" : "https://cdn.ex
 const seen: string[] = [];
 mock.module("../../src/tools/webFetch/network.js", () => ({...network, fetchPublicWebUrl: async (url: string) => {
     seen.push(url);
-    return {url, status: seen.length === 1 ? 302 : 200, statusText: "Fixture", cacheControl: "", contentType: "text/plain",
+    return {url, attempts: 1, status: seen.length === 1 ? 302 : 200, statusText: "Fixture", cacheControl: "", contentType: "text/plain",
         body: Buffer.from("document"), ...(seen.length === 1 ? {redirectUrl: target} : {})};
 }}));
 const {executeToolResult} = await import("../helpers/executeTool.js");

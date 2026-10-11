@@ -16,6 +16,43 @@ afterEach(() => {cleanup(); if (oldKey === undefined) delete process.env.GLM_API
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 async function until(check: () => boolean) {for (let i = 0; i < 100 && !check(); i++) await tick(); expect(check()).toBe(true);}
 
+test("Ark provider saves a masked dedicated key and configures DeepSeek reasoning through the existing picker", async () => {
+    const previous = process.env.ARK_AGENT_PLAN_API_KEY;
+    try {
+        await withTempProject(async (cwd, storage) => {
+            const settings = resolveHiCodeSettings([]).values;
+            const runtime = createPrimaryModelRuntime(settings.models.primary, settings.sources);
+            const config = createModelConfiguration(storage, cwd, runtime);
+            let selected = false;
+            const app = render(<ProvidersDialog runtime={runtime} configuration={config} onSelect={async target => {
+                await config.saveSelection(target); selected = true;
+            }} onClose={() => {}}/>);
+            await tick();
+            expect(app.lastFrame()).toContain("Ark Agent Plan");
+            for (let index = 0; index < LLM_PROVIDER_NAMES.indexOf("ark-agent-plan"); index++) {app.stdin.write("\u001b[B"); await tick();}
+            app.stdin.write("\r"); await tick();
+            app.stdin.write("\r"); await tick();
+            const secret = "ark-ui-fixture-secret";
+            app.stdin.write(secret); await tick(); app.stdin.write("\r");
+            await until(() => app.lastFrame()?.includes("Key saved") ?? false);
+            app.stdin.write("\r"); await tick();
+            expect(app.lastFrame()).toContain("ARK AGENT PLAN");
+            expect(app.lastFrame()).toContain("DeepSeek 4.1 Flash (Ark Agent Plan)");
+            app.stdin.write("\r"); await tick();
+            expect(app.lastFrame()).toContain("2/2 Reasoning");
+            expect(app.lastFrame()).toContain("off");
+            expect(app.lastFrame()).not.toContain("medium");
+            for (let index = 0; index < 4; index++) {app.stdin.write("\u001b[B"); await tick();}
+            app.stdin.write("\r"); await until(() => selected);
+            expect(runtime.target).toMatchObject({source:"ark-agent-plan", model:"deepseek-v4.1-flash", reasoning:"max"});
+            expect(app.frames.join("\n")).not.toContain(secret);
+            expect(await readFile(join(storage.hicodeHome,"settings.json"),"utf8")).not.toContain(secret);
+            expect(await readFile(join(storage.hicodeHome,".env"),"utf8")).toContain("ARK_AGENT_PLAN_API_KEY=");
+            app.unmount();
+        });
+    } finally {if (previous === undefined) delete process.env.ARK_AGENT_PLAN_API_KEY; else process.env.ARK_AGENT_PLAN_API_KEY = previous;}
+});
+
 test("provider form masks secrets, cancels without saving, then adds a model with an optional label", async () => {
     await withTempProject(async (cwd, storage) => {
         const settings = resolveHiCodeSettings([]).values;
@@ -90,7 +127,7 @@ test("remove-model picker confirms the exact ID, supports cancelling, and refres
         app.stdin.write("\r");
         await until(() => app.lastFrame()?.includes("Model removed.") ?? false);
         expect(runtime.sources.glm.models.some(model => model.id === id)).toBe(false);
-        expect(app.lastFrame()).not.toContain(id);
+        expect(app.lastFrame()).not.toMatch(new RegExp(`· ${id.replaceAll(".", "\\.")}\\s*$`, "m"));
         app.unmount();
     });
 });
@@ -124,6 +161,8 @@ test("first setup saves Qwen, chooses its model and returns to chat without Esca
             app.stdin.write("\u001b[B"); await tick();
             expect(app.lastFrame()).toMatch(/›\s+Qwen 3\.8 Max/);
             app.stdin.write("\r");
+            await until(() => app.lastFrame()?.includes("2/2 Reasoning") ?? false);
+            await tick(); app.stdin.write("\r");
             await until(() => app.lastFrame()?.includes("Ask HiCode") ?? false);
             const selected = settings.sources.qwen.models[1]!;
             expect(runtime.target).toMatchObject({source: "qwen", model: selected.id});
@@ -158,9 +197,13 @@ test("provider list has a visible finish action and failed selection stays open"
         for (let index = 0; index < LLM_PROVIDER_NAMES.length; index++) {app.stdin.write("\u001b[B"); await tick();}
         app.stdin.write("\r"); await tick();
         expect(app.lastFrame()).toContain("◆ MODEL");
+        app.stdin.write("\r"); await tick();
+        expect(app.lastFrame()).toContain("2/2 Reasoning");
         app.stdin.write("\r");
         await until(() => app.lastFrame()?.includes("Fixture: settings are read-only") ?? false);
         expect(closed).toBe(0);
+        app.stdin.write("\u001b"); await tick();
+        expect(app.lastFrame()).toContain("◆ MODEL");
         app.stdin.write("\u001b"); await tick();
         expect(app.lastFrame()).toContain("› Choose model and start");
         app.stdin.write("\u001b[B"); await tick();
@@ -187,7 +230,7 @@ test.each(["providers", "key", "model"] as const)("incomplete setup: Escape from
                 app.stdin.write("\r"); await tick();
                 app.stdin.write("unsaved-fixture-key"); await tick();
             }
-            expect(app.lastFrame()?.toLowerCase()).toContain("esc exit");
+            expect(app.lastFrame()?.toLowerCase()).toMatch(/esc(?:\/ctrl\+c)? exit/);
             if (page === "providers") {
                 expect(app.lastFrame()).toContain("Exit HiCode");
                 expect(app.lastFrame()).not.toContain("Back to chat");

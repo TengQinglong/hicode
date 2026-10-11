@@ -11,7 +11,7 @@ import tarfile
 import time
 
 from protocol import atomic_json, namespace_argv
-from service_namespace import ServiceNamespace, service_paths, ACCOUNT_COUNT
+from service_namespace import ServiceNamespace, service_paths, verifier_options, ACCOUNT_COUNT
 from dataset_runtime import dataset_runtime
 
 
@@ -66,7 +66,7 @@ def main():
         path.mkdir(parents=True, exist_ok=True)
     subprocess.run(['chown', '-hR', f'{uid}:{account.pw_gid}', str(project), str(home), str(logs), str(root / 'actor-events'), str(control)], check=True)
     os.chmod(root, 0o755)
-    owner = ServiceNamespace(root, uid, paths, network=config['network'])
+    owner = ServiceNamespace(root, uid, paths, network=config['network'],**verifier_options(config['service']))
     dataset = dataset_runtime(config)
     cancelled = [False]
     signal.signal(signal.SIGTERM, lambda *_: cancelled.__setitem__(0, True))

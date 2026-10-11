@@ -7,7 +7,8 @@ import type {SweTask} from './sweTasks.js';
 import type {RegradeInput} from './regrade.js';
 import {taskAdapters} from './datasets.js';
 import { run, readJson, save, runEvidenceTree, exists } from './store.js';
-import type { Batch, Config, Run,ServiceRegradeResult } from './types.js';
+import type { Batch, Config, Run,ServiceRegradeResult,ContinuationOrigin } from './types.js';
+import {verifyCheckpointArchive,environmentDigest} from './continuation.js';
 import {regradeResultSchema,runSchema,containerSchema} from './types.js';
 import type {Dataset} from './datasets.js';
 import { EVAL_ROOT } from '../paths.js';
@@ -138,6 +139,7 @@ export class LinuxMachine {
     if (await exists(join(path, 'evidence'))) await rename(join(path, 'evidence'), previous);
     await rename(stage, join(path, 'evidence')); await rm(previous, { recursive: true, force: true });
     await save(join(path, 'collection.json'), { complete: true, files });
+    await rm(new EvalLayout(this.config.data).continuationArchive(id),{force:true});
   }
   private async handoffVerification(id: string, tests: string, credential: string): Promise<void> {
     const remote = '/eval/runs/' + id;
@@ -170,6 +172,7 @@ export class LinuxMachine {
       if(JSON.stringify(await runEvidenceTree(join(path,'evidence')))!==JSON.stringify(receipt.files))throw Error('Archived evidence changed');
       const result=packetSchema.parse({type:'result',...await readJson(join(path,'evidence/result.json'),z.record(z.unknown()))});
       if(result.type!=='result')throw Error('Invalid archived outcome');
+      await rm(new EvalLayout(this.config.data).continuationArchive(state.id),{force:true});
       return result;
     }
     await this.containers.assert(state.id);
@@ -179,14 +182,18 @@ export class LinuxMachine {
     await this.collect(state.id, path);
     return { ...result, note: 'Recovered from verified durable evidence; no Agent or verifier rerun.' };
   }
-  async execute(state: Run, path: string, credential: string, onPhase: (phase: string) => Promise<void>, model: Batch["model"]): Promise<LinuxResult> {
-    const backend=this.backend(state.dataset);if(backend!==this)return backend.execute(state,path,credential,onPhase,model);
+  async execute(state: Run, path: string, credential: string, onPhase: (phase: string) => Promise<void>, model: Batch["model"],continuation?:ContinuationOrigin): Promise<LinuxResult> {
+    const backend=this.backend(state.dataset);if(backend!==this)return backend.execute(state,path,credential,onPhase,model,continuation);
     if (!this.release||!this.workerBundle) throw Error('Evaluation machine not initialized');
     const remote = '/eval/runs/' + state.id;
     const task = join(path, 'task', state.task);
     const execution=await taskAdapters(new EvalLayout(this.config.data))[state.dataset].execution(state,task);
     const catalog=await TaskCatalog.open(this.config.catalog);
     const environment=await this.environments.resolve({...catalog.get(state.dataset,state.task),source:task});
+    if(continuation){
+      if(environmentDigest(environment)!==continuation.environmentSha256)throw Error('Continuation environment changed before execution');
+      await verifyCheckpointArchive(new EvalLayout(this.config.data).continuationArchive(state.id),continuation.checkpoint);
+    }
     const container=this.containers.name(state.id);
     let proc:Bun.Subprocess<'ignore','pipe','pipe'>;
     try {
@@ -203,9 +210,11 @@ export class LinuxMachine {
     if(release!==this.release)throw Error('Run source release identity changed');
     await run(this.docker('exec',container,'mkdir','-p',remote+'/project'));
     await execution.stage({container,remote,runPath:path,docker:(...args)=>this.docker(...args)});
+    if(continuation)await run(this.docker('cp',new EvalLayout(this.config.data).continuationArchive(state.id),container+':'+remote+'/continuation-input.tar.gz'),{timeout:300000});
     await run(this.docker('cp', join(task, 'instruction.md'), container + ':' + remote + '/instruction.md'));
     await save(join(path, 'job.json'), { model, reasoningPolicy: {...reasoningCapability(model.source, model.model), effort: model.reasoning?.effort ?? 'default'}, network: state.network, release: this.release,
       agentSeconds: state.budget.agentSeconds, originalAgentSeconds:execution.originalAgentSeconds,
+      ...(continuation?{continuation:{checkpoint:continuation.checkpoint,prompt:continuation.prompt}}:{}),
       verifierSeconds:execution.verifierSeconds,...execution.job });
     await run(this.docker('cp', join(path, 'job.json'), container + ':' + remote + '/job.json'));
     if (await exists(join(path, 'cancel'))) await this.cancel(state.id);

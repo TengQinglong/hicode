@@ -175,7 +175,7 @@ function toChatCompletionsUrl(baseUrl: string): string {
 
 function requestReasoningPolicy(options: LLMCallOptions, request: ChatCompletionsRequest) {
     const thinking = request.thinking;
-    const disabled = request.enable_thinking === false || (thinking !== null && typeof thinking === "object" && "type" in thinking && thinking.type === "disabled");
+    const disabled = request.reasoning_effort === "none" || request.enable_thinking === false || (thinking !== null && typeof thinking === "object" && "type" in thinking && thinking.type === "disabled");
     return {requested: options.reasoning ?? "default", effective: disabled ? "off" : typeof request.reasoning_effort === "string" ? request.reasoning_effort : options.reasoning ?? "default"};
 }
 

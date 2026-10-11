@@ -76,6 +76,12 @@ function getReplayConnection(provider: LLMProviderName): ReplayConnection {
                 apiKey: process.env.QWEN_TOKEN_PLAN_API_KEY,
                 baseUrl: "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
             };
+        case "ark-agent-plan":
+            return {
+                apiKeyVariable: "ARK_AGENT_PLAN_API_KEY",
+                apiKey: process.env.ARK_AGENT_PLAN_API_KEY,
+                baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+            };
         case "deepseek":
             return {
                 apiKeyVariable: "DEEPSEEK_API_KEY",

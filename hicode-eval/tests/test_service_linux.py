@@ -20,6 +20,33 @@ from model_proxy import Gateway
 
 
 class ServiceDeclarationTest(unittest.TestCase):
+    def test_reviewed_verifier_paths_do_not_expose_arbitrary_runtime_directories(self):
+        config={'dataset':'terminal-bench-2.1','network':'open','service':{'writablePaths':[],
+                'verifierProcessView':True,'verifierSockets':['/tmp/qemu-monitor.sock']}}
+        self.assertEqual(service_paths(config),[])
+        for sockets in [['/run/control.sock'],['/tmp/../control.sock'],['/tmp/qemu-monitor.sock']*2]:
+            with self.assertRaises(ValueError):
+                service_paths({**config,'service':{**config['service'],'verifierSockets':sockets}})
+        with self.assertRaises(ValueError):
+            service_paths({**config,'service':{**config['service'],'verifierProcessView':'yes'}})
+
+    def test_verifier_process_view_and_socket_are_scoped_to_the_owned_keeper(self):
+        owner=ServiceNamespace('/eval/runs/1234567890abcdef',20000,[],verifier_process_view=True,
+                               verifier_sockets=['/tmp/qemu-monitor.sock'])
+        owner.pid=42
+        view=lambda args:['bwrap','--unshare-pid','--proc','/proc',*args]
+        info=SimpleNamespace(st_mode=stat.S_IFSOCK|0o600,st_uid=20000)
+        with patch.object(owner,'_check'),patch.object(Path,'lstat',return_value=info):
+            argv=owner.verifier_argv(['pytest'],view)
+        self.assertIn('/proc/42/root/proc',argv)
+        self.assertIn('/eval/runs/1234567890abcdef/service-tmp/qemu-monitor.sock',argv)
+        self.assertNotIn('--proc',argv)
+        self.assertIn('--unshare-pid',argv,'verifier processes must not enter the service PID namespace')
+        for bad in [SimpleNamespace(st_mode=stat.S_IFREG|0o600,st_uid=20000),
+                    SimpleNamespace(st_mode=stat.S_IFLNK|0o600,st_uid=20000),
+                    SimpleNamespace(st_mode=stat.S_IFSOCK|0o600,st_uid=0)]:
+            with patch.object(owner,'_check'),patch.object(Path,'lstat',return_value=bad):
+                with self.assertRaises(ValueError):owner.verifier_argv(['pytest'],view)
     def test_service_waits_for_owned_keeper_marker_after_root_setup(self):
         owner=ServiceNamespace('/eval/runs/1234567890abcdef',20000,[])
         owner.pid=42
@@ -89,13 +116,18 @@ class ServiceDeclarationTest(unittest.TestCase):
 @unittest.skipUnless(sys.platform=='linux' and os.environ.get('HICODE_EVAL_SERVICE_SMOKE')=='1',
                      'Requires a disposable Linux evaluation container')
 class ServiceLinuxTest(unittest.TestCase):
+    def test_service_workloads_can_stop_without_losing_the_owned_namespace(self):
+        self.check_service_handoff(True,checkpoint=True)
     def test_service_survives_actor_exit_and_private_verifier_reaches_original_localhost(self):
         self.check_service_handoff(True)
 
     def test_open_service_survives_actor_exit_and_private_verifier_reaches_original_localhost(self):
         self.check_service_handoff(False)
 
-    def check_service_handoff(self,isolated):
+    def test_reviewed_process_and_monitor_views_keep_hidden_verifier_private(self):
+        self.check_service_handoff(False,reviewed_views=True)
+
+    def check_service_handoff(self,isolated,checkpoint=False,reviewed_views=False):
         release=os.environ['HICODE_EVAL_ACTOR_RELEASE']
         ssh_smoke=os.environ.get('HICODE_EVAL_SERVICE_SSH_SMOKE')=='1'
         with tempfile.TemporaryDirectory(dir='/eval',prefix='service-handoff-') as directory:
@@ -133,6 +165,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 server=http.server.HTTPServer(('127.0.0.1',8080),Handler)
 Path('/app/ready').touch();server.serve_forever()
 '''
+            if reviewed_views:
+                server=server.replace('server.serve_forever()', '''import socket,threading
+monitor=socket.socket(socket.AF_UNIX);monitor.bind('/tmp/fixture-monitor.sock');monitor.listen()
+def monitor_loop():
+ while True:
+  client,_=monitor.accept();client.sendall(b'MONITOR_OK');client.close()
+threading.Thread(target=monitor_loop,daemon=True).start()
+server.serve_forever()''')
             (project/'server.py').write_text(server.replace("8080),Handler)","8081),Handler)") if ssh_smoke else server)
             env={'PATH':'/opt/python313/bin:'+os.environ['PATH'],'HOME':str(home),'LANG':'C.UTF-8',
                  'HICODE_EVAL_SERVICE_NGINX_SMOKE':os.environ.get('HICODE_EVAL_SERVICE_NGINX_SMOKE',''),
@@ -156,7 +196,9 @@ Path('/app/ready').touch();server.serve_forever()
             settings=home/'model-settings.json';settings.write_text(json.dumps({'sources':{'fixture':{'baseUrl':'unused'}}}));os.chown(settings,20000,20000)
             def actor(args):return namespace_argv(args,project,home,logs,control,isolated_network=isolated,
                                                   actor_release=release,actor_events=events,model_gateway=True)
-            owner=ServiceNamespace(root,20000,['/etc','/var','/run',*(['/home','/git'] if ssh_smoke else [])],network='isolated' if isolated else 'open')
+            owner=ServiceNamespace(root,20000,['/etc','/var','/run',*(['/home','/git'] if ssh_smoke else [])],network='isolated' if isolated else 'open',verifier_process_view=reviewed_views,
+                                   verifier_sockets=['/tmp/fixture-monitor.sock'] if reviewed_views else [])
+            probe_process=None
             try:
                 owner.prepare()
                 try:owner.start(actor,env,model_socket=control/'model.sock')
@@ -270,14 +312,42 @@ if os.environ.get('HICODE_EVAL_SERVICE_SSH_SMOKE')=='1':
 assert not Path('/opt/hicode-eval/runner.py').exists()
 print('PRIVATE_VERIFIER_OK')
 '''
+                if reviewed_views:
+                    probe='''import time
+from pathlib import Path
+for _ in range(200):
+ for entry in Path('/proc').iterdir():
+  if entry.name.isdigit():
+   try:
+    if (entry/'root/tests/secret.txt').read_text()=='HIDDEN_TEST_CANARY':Path('/app/leaked').touch()
+   except (OSError,ValueError):pass
+ time.sleep(.01)
+'''
+                    (project/'probe.py').write_text(probe)
+                    probe_process=subprocess.Popen(owner.actor_argv(['python3','/app/probe.py']),env=env,
+                                     stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                    check+='''import socket,subprocess,time
+p=subprocess.run(['pgrep','-f','/app/server.py'],capture_output=True,text=True)
+assert p.returncode==0,p.stderr
+assert any('/app/server.py' in Path('/proc/'+pid+'/cmdline').read_text() for pid in p.stdout.split())
+s=socket.socket(socket.AF_UNIX);s.settimeout(2);s.connect('/tmp/fixture-monitor.sock');assert s.recv(100)==b'MONITOR_OK';s.close()
+time.sleep(.3);assert not Path('/app/leaked').exists()
+'''
                 try:
                     result=subprocess.run(owner.verifier_argv(['python3','-c',check],verifier),env=env,capture_output=True,text=True,timeout=5)
                 except subprocess.TimeoutExpired as error:
                     self.fail('Verifier stalled after: '+repr(error.stdout)+'; '+repr(error.stderr))
                 detail=(project/'flask.log').read_text() if (project/'flask.log').exists() else ''
                 self.assertEqual(result.returncode,0,result.stderr+result.stdout+detail);self.assertIn('PRIVATE_VERIFIER_OK',result.stdout)
+                if checkpoint:
+                    owner.stop_workloads()
+                    stopped="import socket; s=socket.socket(); s.settimeout(1); assert s.connect_ex(('127.0.0.1',8080))!=0; print('WORKLOADS_STOPPED')"
+                    result=subprocess.run(owner.actor_argv(['python3','-c',stopped]),env=env,capture_output=True,text=True,timeout=5)
+                    self.assertEqual(result.returncode,0,result.stderr);self.assertIn('WORKLOADS_STOPPED',result.stdout)
                 owner.snapshot();self.assertTrue((root/'service-system.tar').is_file())
                 owner.close()
                 with self.assertRaises(RuntimeError):owner.actor_argv(['true'])
             finally:
-                owner.close();gateway.close();provider.shutdown();provider.server_close();thread.join(timeout=2);shutil.rmtree(control)
+                owner.close()
+                if probe_process is not None:probe_process.wait(timeout=5)
+                gateway.close();provider.shutdown();provider.server_close();thread.join(timeout=2);shutil.rmtree(control)

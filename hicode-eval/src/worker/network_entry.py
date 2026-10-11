@@ -1,5 +1,6 @@
 """Inside the actor net namespace: bridge loopback to its model-only Unix socket."""
 import json
+import os
 from pathlib import Path
 import select
 import signal
@@ -44,7 +45,10 @@ class Relay(socketserver.BaseRequestHandler):
 def main():
     gateway, settings_path, *command = sys.argv[1:]
     if not command:raise ValueError('Missing actor command')
-    server = Bridge(('127.0.0.1', 0), Relay)
+    requested=os.environ.get('HICODE_EVAL_BRIDGE_PORT')
+    if requested is not None and (not requested.isdecimal() or not 1024<=int(requested)<=65535):
+        raise ValueError('Invalid continuation bridge port')
+    server = Bridge(('127.0.0.1', int(requested) if requested is not None else 0), Relay)
     server.capacity = threading.BoundedSemaphore(16)
     server.gateway = gateway
     path = Path(settings_path)

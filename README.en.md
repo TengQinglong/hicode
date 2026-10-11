@@ -70,7 +70,7 @@ hicode
 
 Run `hicode` from any project directory afterward. First launch opens model setup:
 
-1. **Choose a provider**: Qwen Token Plan, DeepSeek, Zhipu GLM, OpenRouter, or Alibaba Bailian (Qwen).
+1. **Choose a provider**: Qwen Token Plan, Ark Agent Plan, DeepSeek, Zhipu GLM, OpenRouter, or Alibaba Bailian (Qwen).
 2. **API key**: paste your key and press Enter to save.
 3. **API endpoint**: if the default does not match your account, enter your provider’s API base URL.
 4. **Choose model and start**: pick a model your account can access.
@@ -78,6 +78,8 @@ Run `hicode` from any project directory afterward. First launch opens model setu
 Model missing? Use **Add model** to enter its Model ID and an optional display name. Use `/providers` to change settings later.
 
 **Qwen Token Plan** is a separate model source for Qwen 3.8 Flash and DeepSeek V4.1 Flash, with its own connection and API key distinct from regular Bailian. See [model settings](docs/reference/SETTINGS.md).
+
+**Ark Token Plan (Agent Plan)** supports DeepSeek V4.1 Flash. Configure its dedicated key through `/providers` and select reasoning effort through `/model`. Its connection and credentials are stored independently, with support for multi-turn tool calls and reasoning replay.
 
 Configuration is saved automatically and reusable across projects. Model usage is billed by your provider.
 

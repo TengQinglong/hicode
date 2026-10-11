@@ -131,6 +131,26 @@ class ModelProxyTest(unittest.TestCase):
         validate_request(self.body(thinking={'type':'enabled'},reasoning_effort='low'),'fixture',native)
         validate_request(self.body(thinking={'type':'disabled'}),'fixture',native)
 
+    def test_ark_effort_only_protocol_freezes_main_and_allows_review_none(self):
+        policy={'switch':'reasoning_effort','efforts':['default','off','low','high','max'],'effort':'max','reviewEffort':'off'}
+        validate_request(self.body(reasoning_effort='max'),'fixture',policy)
+        validate_request(self.body(reasoning_effort='none'),'fixture',policy)
+        for fields in [dict(),dict(reasoning_effort='high'),dict(reasoning_effort='medium'),
+                       dict(reasoning_effort='off'),dict(reasoning_effort='max',thinking={'type':'enabled'}),
+                       dict(reasoning_effort='none',enable_thinking=False),dict(preserve_thinking=True),
+                       dict(reasoning={'effort':'max'})]:
+            with self.assertRaises(ValueError):validate_request(self.body(**fields),'fixture',policy)
+        policy['effort']='default'
+        validate_request(self.body(),'fixture',policy)
+        validate_request(self.body(reasoning_effort='none'),'fixture',policy)
+        with self.assertRaises(ValueError):validate_request(self.body(reasoning_effort='high'),'fixture',policy)
+        policy['effort']='off'
+        validate_request(self.body(reasoning_effort='none'),'fixture',policy)
+        for fields in [dict(),dict(reasoning_effort='low')]:
+            with self.assertRaises(ValueError):validate_request(self.body(**fields),'fixture',policy)
+        other={'switch':'thinking','efforts':policy['efforts'],'effort':'max','reviewEffort':'off'}
+        with self.assertRaises(ValueError):validate_request(self.body(reasoning_effort='none'),'fixture',other)
+
     def test_forced_thinking_accepts_frozen_effort_or_review_low_and_never_off(self):
         policy={'switch':'thinking','efforts':['default','low','high','max'],'effort':'max','reviewEffort':'low'}
         for effort in ['max','low']:

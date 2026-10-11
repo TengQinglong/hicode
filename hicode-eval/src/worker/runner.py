@@ -6,6 +6,7 @@ from terminal import capture,settle,submit_prompt
 from cleanup import stop_task_processes,finalize_task,open_task_cli,terminate_task_cli,process_start
 from model_proxy import Gateway
 from dataset_runtime import dataset_runtime
+from continuation import capture_checkpoint,restore_checkpoint,restore_service,model_bridge_port
 
 run_id=sys.argv[1]
 if len(run_id)!=16 or any(c not in '0123456789abcdef' for c in run_id):raise ValueError('Invalid run ID')
@@ -16,10 +17,18 @@ if network not in {'open','isolated'}:raise ValueError('Invalid evaluation netwo
 dataset=dataset_runtime(config)
 service_declaration=None
 if config.get('service') is not None:
-    from service_namespace import ServiceNamespace,service_paths
+    from service_namespace import ServiceNamespace,service_paths,verifier_options
     service_declaration=service_paths(config)
 service=None
 project=root/'project';home=root/'home';logs=root/'logs';actor_events=root/'actor-events';event_path=actor_events/'events.jsonl';control=Path('/run/hicode-eval')/run_id
+continuation=config.get('continuation')
+home_alias=None
+if continuation is not None:
+    if config.get('continuationEnabled') is not True:raise ValueError('Dataset does not support continuation')
+    if not isinstance(continuation,dict) or set(continuation)!={'checkpoint','prompt'} or not isinstance(continuation['prompt'],str) or not 0<len(continuation['prompt'])<=4096:
+        raise ValueError('Invalid continuation request')
+    restore_checkpoint(root,continuation['checkpoint'],service_declaration)
+    home_alias=continuation['checkpoint']['homePath']
 name='eval-'+run_id
 cancelled=False
 
@@ -43,7 +52,7 @@ with open('/eval/users.lock','a') as lock:
     subprocess.run(['useradd','--uid',str(uid),'--user-group','--no-create-home','--shell','/bin/bash',name],check=True)
     account=pwd.getpwnam(name)
 for p in [root,project,home,logs,actor_events,control]:p.mkdir(parents=True,exist_ok=True)
-subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(project),str(home),str(logs),str(actor_events),str(control)],check=True)
+subprocess.run(['chown','-hR',f'{uid}:{account.pw_gid}',str(project),str(home),str(logs),str(actor_events),str(control)],check=True)
 if config.get('publicTestInputs'):
     subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(root/'public-tests')],check=True)
 os.chown(root,uid,account.pw_gid);os.chmod(root,0o700)
@@ -58,7 +67,7 @@ def namespace(args,verifier=False,setup=False,actor=False):
     if service is not None and verifier:
         def view(arguments):
             argv=namespace_argv(arguments,project,home,logs,control,root/'tests',workdir=dataset.workdir,
-                                writable_tests=dataset.writable_tests(config),verifier_release=config['release'])
+                                writable_tests=dataset.writable_tests(config),verifier_release=config['release'],home_alias=home_alias)
             runtime=[]
             for path in ['/opt/hicode-verifier','/opt/hicode-terminal/verifier']:
                 if Path(path).exists():runtime+=['--ro-bind',path,path]
@@ -74,10 +83,11 @@ def namespace(args,verifier=False,setup=False,actor=False):
                           private_root=dataset.verifier_root if verifier else None,
                           isolated_network=actor and network=='isolated',
                           actor_release=config['release'] if actor else None,actor_events=actor_events if actor else None,
-                          model_gateway=actor and gateway is not None)
+                          model_gateway=actor and gateway is not None,home_alias=home_alias)
 
 def command(args,timeout=15,extra=None,cwd=None,output_path=None):
-    env={'PATH':'/opt/python313/bin:'+str(home/'.local/bin')+':'+str(home/'bin')+':'+os.environ['PATH'],'HOME':str(home),'TERM':'xterm-256color','COLORTERM':'truecolor','LANG':'C.UTF-8'}
+    logical_home=home_alias or str(home)
+    env={'PATH':'/opt/python313/bin:'+logical_home+'/.local/bin:'+logical_home+'/bin:'+os.environ['PATH'],'HOME':logical_home,'TERM':'xterm-256color','COLORTERM':'truecolor','LANG':'C.UTF-8'}
     env.update(dataset.command_environment(config,home,root))
     env.update(config.get('environment',{}))
     if extra:env.update(extra)
@@ -135,8 +145,11 @@ try:
     if network=='isolated':settings['permissions']['deny'].append('web_fetch')
     conf=home/'.hicode';conf.mkdir(exist_ok=True);atomic_json(conf/'settings.json',settings)
     subprocess.run(['chown','-R',f'{uid}:{account.pw_gid}',str(home)],check=True)
-    extra={'HICODE_EVAL_SOURCE':release,'HICODE_EVAL_HOME':str(conf)}
-    dataset.prepare_actor(config,project,logs,command,namespace)
+    logical_conf=(home_alias or str(home))+'/.hicode'
+    extra={'HICODE_EVAL_SOURCE':release,'HICODE_EVAL_HOME':logical_conf}
+    if continuation is not None:extra['HICODE_EVAL_RESUME_SESSION_ID']=continuation['checkpoint']['sessionId']
+    # Initializers create the original task; replaying them would erase restored work.
+    if continuation is None:dataset.prepare_actor(config,project,logs,command,namespace)
     command(namespace(['bun','/opt/hicode-eval/preflight.ts'],actor=True),timeout=60,extra=extra)
     if network=='isolated':
         # Check the actual actor namespace before consuming model tokens. There is no open fallback.
@@ -144,15 +157,16 @@ try:
     gateway=Gateway(control/'model.sock',model['baseUrl'],model['model'],os.environ[model['apiKeyEnv']],config['reasoningPolicy'])
     os.chown(control/'model.sock',uid,account.pw_gid)
     if service_declaration is not None:
-        owner=ServiceNamespace(root,uid,service_declaration,network=network)
+        owner=ServiceNamespace(root,uid,service_declaration,network=network,**verifier_options(config['service']))
         owner.prepare()
         try:
             owner.start(lambda args:namespace(args,actor=True),
-                        {'PATH':'/opt/python313/bin:'+os.environ['PATH'],'HOME':str(home),'SHELL':'/bin/bash','LANG':'C.UTF-8'},
+                        {'PATH':'/opt/python313/bin:'+os.environ['PATH'],'HOME':home_alias or str(home),'SHELL':'/bin/bash','LANG':'C.UTF-8'},
                         model_socket=control/'model.sock' if gateway else None)
         except BaseException:
             owner.close();raise
         service=owner
+        if continuation is not None:restore_service(owner,root)
         extra['HICODE_LINUX_RUNTIME_DIR']=str(owner.sandbox_runtime)
         command(namespace(['bun','/opt/hicode-eval/preflight.ts'],actor=True),timeout=60,extra=extra)
     atomic_json(root/'network.json',{'version':1,'mode':network,'actorInternet':network=='open',
@@ -161,10 +175,12 @@ try:
     launch=control/'launch.sh'
     import shlex
     actor_command=['bun',release+'/src/index.tsx','--single-task','--event-log',str(event_path),'--permission-mode',config['permissionMode'],'--source',model['source'],'--model',model['model']]
-    if gateway:actor_command=['python3','/opt/hicode-eval/network_entry.py',str(control/'model.sock'),str(conf/'settings.json'),*actor_command]
+    if continuation is not None:actor_command+=['--resume',continuation['checkpoint']['sessionId']]
+    if gateway:actor_command=['python3','/opt/hicode-eval/network_entry.py',str(control/'model.sock'),logical_conf+'/settings.json',*actor_command]
     launch.write_text('#!/bin/bash\nset -eu\nexec '+shlex.join(namespace(actor_command,actor=True))+'\n')
     launch.chmod(0o755)
     secret={model['apiKeyEnv']:'eval-isolated' if gateway else os.environ[model['apiKeyEnv']]}
+    if continuation is not None:secret['HICODE_EVAL_BRIDGE_PORT']=str(continuation['checkpoint']['modelBridgePort'])
     if service is not None:secret['HICODE_LINUX_RUNTIME_DIR']=str(service.sandbox_runtime)
     tmux('new-session','-d','-s','hicode','-x','140','-y','40','bash --noprofile --norc',extra=secret)
     terminal_started=True
@@ -188,6 +204,11 @@ try:
         if events.ready and submitted is None:
             cli_fd=open_task_cli(uid,release+'/src/index.tsx',event_path)
             instruction=(root/'instruction.md').read_text()
+            if continuation is not None:
+                previous=continuation['checkpoint']['elapsedSeconds']
+                instruction=('继续原会话和原任务。此前已执行 '+str(round(previous))+' 秒；本次时限是额外追加的作答时间。\n'
+                             '工作区、会话和已保存文件已恢复；后台进程已停止，请按需重新启动服务。训练任务先检查已有 checkpoint，存在则恢复，无则重新训练。\n'
+                             '沿用原任务要求，无需从头重复已完成的探索。\n\n'+continuation['prompt'])
             instruction=assignment_prompt(instruction,config['agentSeconds'],network,dataset.workdir,dataset.public_test_entries(config))
             (root/'submitted-instruction.md').write_text(instruction)
             prompt=control/'prompt.txt';prompt.write_text(instruction);prompt.chmod(0o644)
@@ -219,6 +240,18 @@ try:
             else:capture(tmux,emit)
         except (OSError,RuntimeError,ValueError,subprocess.TimeoutExpired) as error:
             emit('error',message='Final terminal capture failed: '+str(error)[-1000:])
+    if status in ['timeout','cancelled'] or agent_failed:
+        receipt=shutdown_cli()
+        if config.get('continuationEnabled') is True and receipt and receipt['cliExited'] and receipt['turnSaved'] and not receipt['pendingToolCallIds'] and receipt['eventStreamComplete'] and not receipt['error']:
+            try:
+                if service is not None:service.stop_workloads()
+                else:stop_user();terminal_started=False
+                previous=continuation['checkpoint']['elapsedSeconds'] if continuation is not None else 0
+                port=model_bridge_port(conf/'settings.json',model['source'])
+                capture_checkpoint(root,events.session_id,home_alias or str(home),previous+(time.monotonic()-start if start is not None else 0),service,port)
+            except (OSError,RuntimeError,ValueError,subprocess.SubprocessError) as error:
+                atomic_json(root/'continuation-error.json',{'message':str(error)[-1000:]})
+                emit('error',message='Continuation checkpoint unavailable: '+str(error)[-1000:])
     if status in ['completed','timeout'] or agent_failed:
         # A completed single-task turn is sealed, but its Runtime still owns
         # live Shell services. Keep that owner until the private verifier ends.

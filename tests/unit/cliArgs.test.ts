@@ -34,6 +34,8 @@ describe("parseCliArgs", () => {
   });
 
   test("解析本次启动的 model 和 source 覆盖", () => {
+    expect(parseCliArgs(["--model=deepseek-v4.1-flash", "--source=ark-agent-plan"]))
+      .toMatchObject({model:"deepseek-v4.1-flash",source:"ark-agent-plan"});
     expect(
       parseCliArgs(["--model", "glm-5.2", "--source=GLM"])
     ).toMatchObject({

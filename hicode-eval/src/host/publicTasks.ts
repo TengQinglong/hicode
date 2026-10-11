@@ -22,7 +22,8 @@ const profileSchema = z.object({
   systemPackages: z.array(z.string().regex(/^[a-z0-9][a-z0-9+.-]*(?:=[A-Za-z0-9.+:~_-]+)?$/)).max(128).optional(),
   workspaceAliases: z.array(z.enum(['/data','/workspace','/tmp/CompCert'])).max(3).optional(),
   writableRuntimeBin: z.boolean().optional(),
-  service: z.object({writablePaths:z.array(z.enum(['/etc','/var','/run','/home','/git','/srv'])).max(6)}).strict().optional(),
+  service: z.object({writablePaths:z.array(z.enum(['/etc','/var','/run','/home','/git','/srv'])).max(6),
+    verifierProcessView:z.boolean().optional(),verifierSockets:z.array(z.string().regex(/^\/tmp\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,100}\.sock$/)).max(8).optional()}).strict().optional(),
   verifierInputs: z.array(z.object({source:inputPath.refine(path=>path.startsWith('tests/')),target:inputPath}).strict()).max(32).optional(),
   verifierSetup: inputPath.optional(),
   verifierWritableTests: z.boolean().optional(),
@@ -35,6 +36,8 @@ const profileSchema = z.object({
 }).strict().superRefine((profile, ctx) => {
   const targets = new Set<string>();
   if(profile.service){
+    if(new Set(profile.service.verifierSockets??[]).size!==(profile.service.verifierSockets??[]).length)
+      ctx.addIssue({code:z.ZodIssueCode.custom,message:'Verifier socket paths must be unique'});
     if(new Set(profile.service.writablePaths).size!==profile.service.writablePaths.length)
       ctx.addIssue({code:z.ZodIssueCode.custom,message:'Service system paths must be unique'});
     if(profile.verifierChroot||profile.verifierRootOverlay)

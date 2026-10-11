@@ -13,7 +13,7 @@ mock.module("../../src/tools/webFetch/network.js", () => ({
     ...network,
     fetchPublicWebUrl: async () => {
         calls++;
-        return {url: "https://example.com/docs", status: mode === "http-error" ? 500 : 200,
+        return {url: "https://example.com/docs", attempts: 1, status: mode === "http-error" ? 500 : 200,
             statusText: "Fixture", contentType: "text/html", body: Buffer.from(`<p>${body}</p>`)};
     },
 }));

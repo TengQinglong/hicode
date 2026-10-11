@@ -83,6 +83,10 @@ summary { cursor: pointer; width: fit-content; }
 .task-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .task-heading h2 { margin:0; overflow-wrap:anywhere; }
 .task-actions { display:flex; gap:6px; flex-shrink:0; }
+#continue-form { display:flex; gap:10px; align-items:end; flex-wrap:wrap; padding:10px; border:1px solid var(--line); border-radius:6px; }
+#continue-form label { display:flex; flex-direction:column; gap:4px; font-size:12px; }
+#continue-form textarea { min-width:260px; }
+#continue-form input { width:100px; }
 #action-message { margin:3px 0 6px; max-height:3.2em; overflow:auto; overflow-wrap:anywhere; }
 [hidden] { display: none !important; }
 .task-tree { margin: 0 0 14px 10px; padding-left: 8px; border-left: 1px solid var(--line); }

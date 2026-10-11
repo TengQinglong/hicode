@@ -29,9 +29,14 @@ bash hicode-eval/eval.sh status --root /path/eval-data
 bash hicode-eval/eval.sh cancel --root /path/eval-data --batch BATCH_ID
 bash hicode-eval/eval.sh recover --root /path/eval-data --run RUN_ID
 bash hicode-eval/eval.sh retry --root /path/eval-data --run RUN_ID
+bash hicode-eval/eval.sh continue --root /path/eval-data --run RUN_ID --agent-seconds 2400 --prompt "继续完成原任务。"
 ```
 
 批次项必须包含 dataset 和 id，单题可设 agentSeconds（30–10800 秒）。服务和批次并发均最多 5。示例应放在 Data 的 state/batch-example.json。每次尝试只执行一次，完成后用原判题评分。启动前取消保留未测；错误、超时和模型答错分别存储。恢复只校验原证据，不再次调用模型；retry 创建新尝试，不覆盖旧分数。已通过题不再提交，旧成绩保留在 `docs/eval` 离线记录中。
+
+Terminal-Bench 2.1 的超时、取消和模型失败尝试，在确认会话已保存、工具回执完整且作答进程已停止后生成判题前快照。网页的“继续作答”可设置追加时间和补充要求；CLI 用 continue。它恢复原工作区、Home、会话和审定服务目录，在新独立容器中调用 HiCode --resume，沿用原模型、推理档位、网络、题目和冻结源码，占同一共享并发名额。恢复时保留原模型网关端口，使会话中的思考记录仍对应同一连接身份。进程内存和临时 tmpfs 不恢复；服务需重新启动，训练有 checkpoint 才能接着训练。retry 仍从头开始，原尝试和成绩均保留。
+
+续跑只接收本功能生成且通过收集回执、哈希、容器销毁回执和环境身份校验的快照；不会从判题后的目录反推或导入旧记录。快照缺失、保存不完整、环境或源码变化时拒绝续跑。SWE/DeepSWE 的数据集适配器尚未开放该入口。执行模块升级只在所有任务和构建结束后重启 worker，不向活动题热部署。
 
 submit 可用 `--reasoning max`，或在提交文件顶层添加 `reasoning: {effort: "max"}`；CLI 选项优先于文件，两者都省略时沿用 state/settings.json 的 model.reasoning，显式 default 使用厂商默认。支持档位按模型校验，批次、执行与 retry 使用冻结值；看板显示英文 Reasoning，实际请求字段在原请求日志。`--reasoning` 仅用于新 submit，retry 不允许覆盖原强度。不修改已运行任务，也不为参数变更重建依赖镜像。
 
@@ -66,3 +71,5 @@ bash hicode-eval/eval.sh gc --root /path/eval-data --apply --build-cache
 开发验证：`bun test hicode-eval/tests`、`bunx tsc --noEmit -p hicode-eval/tsconfig.json`；Python 边界用 `PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker:hicode-eval/src/datasets python3 -B -m unittest discover -s hicode-eval/tests`。测试使用临时目录和假模型，不产生模型费用；真实 Linux 隔离测试按可用内核能力另行执行并明确报告。
 
 数据集清单使用 Data/datasets/<dataset>/definition.json；SWE 的依赖配方放同数据集 recipes/；公共底座为 Data/environments/runtime/{images.json,Dockerfile}，数据集专用运行配方放该数据集 runtime.Dockerfile。逐题重新审定，不整份照搬历史 config。特殊准备输入可用 register --preparation DIR --script FILE 复制并冻结。
+
+审定服务题可声明 verifierProcessView 与 /tmp 下具名 verifierSockets；只向私有判题提供本题封锁时的服务 PID 目录和指定归属 socket，判题仍使用独立 PID namespace，self/net 来自自己的 Proc。Proc 构造辅助进程进入服务 PID 前先 chroot 到空 tmpfs，隐藏文件不能经辅助进程 root 暴露；socket 放本题 service-tmp，只绑定审定文件，不开放整份 tmp 或控制目录。

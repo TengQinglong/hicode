@@ -4,6 +4,19 @@ import {createPrimaryModelRuntime} from "../../src/runtime/primaryModel.js";
 import {resolveHiCodeSettings} from "../../src/settings/resolve.js";
 
 describe("primary model catalog", () => {
+    test("Ark Agent Plan has independent credentials and a distinct DeepSeek catalog entry", () => {
+        const sources = resolveHiCodeSettings([]).values.sources;
+        const ark = listConfiguredPrimaryModels(sources, {ARK_AGENT_PLAN_API_KEY: "ark"});
+        expect(ark).toEqual([{source:"ark-agent-plan", model:"deepseek-v4.1-flash", label:"DeepSeek 4.1 Flash (Ark Agent Plan)"}]);
+        expect(listConfiguredPrimaryModels(sources, {QWEN_TOKEN_PLAN_API_KEY:"qwen"}).some(model => model.source === "ark-agent-plan")).toBe(false);
+        expect(sources["ark-agent-plan"].models[0]?.imageInput).toBe(true);
+        const available = listConfiguredPrimaryModels(sources, {ARK_AGENT_PLAN_API_KEY:"ark", QWEN_TOKEN_PLAN_API_KEY:"qwen"});
+        const runtime = createPrimaryModelRuntime(ark[0]!, sources, available);
+        runtime.select(available.find(model => model.source === "qwen-token-plan" && model.model === "deepseek-v4.1-flash")!);
+        expect(runtime.target.source).toBe("qwen-token-plan");
+        runtime.select(ark[0]!);
+        expect(runtime.target.source).toBe("ark-agent-plan");
+    });
     test("ordinary Qwen and Token Plan expose independent models and credentials", () => {
         const sources = resolveHiCodeSettings([]).values.sources;
         const ordinary = listConfiguredPrimaryModels(sources, {DASHSCOPE_API_KEY: "ordinary"});

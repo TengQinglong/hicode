@@ -2,6 +2,7 @@
 import ctypes
 import json
 import os
+import re
 from pathlib import Path
 import select
 import shutil
@@ -21,12 +22,23 @@ def service_paths(config):
     if value is None:return None
     if (config.get('dataset') not in {'terminal-bench-2.1'}
             or config.get('network') not in {'open','isolated'} or not isinstance(value, dict)
-            or set(value) != {'writablePaths'} or not isinstance(value['writablePaths'], list)
+            or 'writablePaths' not in value or set(value)-{'writablePaths','verifierProcessView','verifierSockets'} or not isinstance(value['writablePaths'], list)
             or len(value['writablePaths']) > len(SYSTEM_PATHS)
             or any(not isinstance(p, str) or p not in SYSTEM_PATHS for p in value['writablePaths'])
             or len(set(value['writablePaths'])) != len(value['writablePaths'])):
         raise ValueError('Invalid reviewed service execution declaration')
+    verifier_options(value)
     return value['writablePaths']
+
+
+def verifier_options(value):
+    process_view=value.get('verifierProcessView',False)
+    sockets=value.get('verifierSockets',[])
+    if (type(process_view) is not bool or not isinstance(sockets,list) or len(sockets)>8
+            or any(not isinstance(path,str) or not re.fullmatch(r'/tmp/[A-Za-z0-9_][A-Za-z0-9_.-]{0,100}\.sock',path) for path in sockets)
+            or len(set(sockets))!=len(sockets)):
+        raise ValueError('Invalid reviewed verifier service view')
+    return {'verifier_process_view':process_view,'verifier_sockets':sockets}
 
 
 def _user_namespace_exec(args):
@@ -37,31 +49,80 @@ def _user_namespace_exec(args):
                         *(arg for arg in args[1:] if arg != '--unshare-user')])
 
 
-def _verifier_exec(pid,args):
+def _verifier_exec(pid,command_count,args):
+    if not 1<=command_count<len(args):raise ValueError('Invalid verifier command boundary')
     # Join only the service network. Bubblewrap must still be able to bind
     # private verifier inputs from the caller's mount namespace; entering the
     # service mount namespace would make those inputs unreachable.
     user=os.open(f'/proc/{pid}/ns/user',os.O_RDONLY)
     network=os.open(f'/proc/{pid}/ns/net',os.O_RDONLY)
+    process_ns=None
     libc=ctypes.CDLL(None,use_errno=True)
     try:
-        # Open services already use this container's network. Only an isolated
-        # service network needs entry after acquiring its owning user namespace.
+        args=list(args)
+        proc_indices=[index for index in range(len(args)-2)
+                      if args[index:index+3]==['--ro-bind',f'/proc/{pid}/root/proc','/proc']]
+        if proc_indices:process_ns=os.open(f'/proc/{pid}/ns/pid',os.O_RDONLY)
         shares_network=os.fstat(network).st_ino==os.stat('/proc/self/ns/net').st_ino
         if libc.setns(user,0):raise OSError(ctypes.get_errno(),'Cannot enter service user namespace')
         os.setgroups([]);os.setgid(0);os.setuid(0)
         if not shares_network and libc.setns(network,0):raise OSError(ctypes.get_errno(),'Cannot enter service network namespace')
-    finally:os.close(user);os.close(network)
-    _user_namespace_exec(args)
+        if process_ns is not None:
+            if libc.unshare(0x00020000):raise OSError(ctypes.get_errno(),'Cannot create private verifier mount view')
+            if libc.mount(None,b'/',None,0x4000|0x40000,None):raise OSError(ctypes.get_errno(),'Cannot isolate verifier mounts')
+            if libc.mount(b'tmpfs',b'/mnt',b'tmpfs',2|4,b'mode=0755'):raise OSError(ctypes.get_errno(),'Cannot stage verifier proc view')
+            Path('/mnt/proc').mkdir()
+            child=os.fork()
+            if child==0:
+                try:
+                    # The short-lived mounter has no host filesystem view when
+                    # it becomes visible in the Actor's PID namespace.
+                    os.chroot('/mnt');os.chdir('/')
+                    if libc.setns(process_ns,0):raise OSError(ctypes.get_errno(),'Cannot select owned process view')
+                    grandchild=os.fork()
+                    if grandchild==0:
+                        result=libc.mount(b'proc',b'/proc',b'proc',2|4|8,None)
+                        os._exit(0 if result==0 else 1)
+                    _,status=os.waitpid(grandchild,0)
+                    os._exit(os.waitstatus_to_exitcode(status))
+                except BaseException:os._exit(1)
+            _,status=os.waitpid(child,0)
+            if status:raise RuntimeError('Cannot mount owned service process view')
+            # The caller never entered the Actor PID namespace. Bubblewrap
+            # still creates a sibling namespace invisible to Actor processes.
+            highest=max(int(entry.name) for entry in Path('/mnt/proc').iterdir() if entry.name.isdigit())
+            if highest>4096:raise ValueError('Owned process view exceeds verifier PID budget')
+            command=args[-command_count:]
+            # procps excludes its own numeric PID. Allocate verifier child PIDs
+            # beyond the sealed service set so a matching QEMU PID is not skipped.
+            launcher="import os,sys,json\nfor _ in range(int(sys.argv[1])+1):\n p=os.fork()\n if p==0:os._exit(0)\n os.waitpid(p,0)\na=json.loads(sys.argv[2]);os.execvp(a[0],a)"
+            args[-command_count:]=['python3','-c',launcher,str(highest),json.dumps(command)]
+            for index in reversed(proc_indices):
+                view=['--tmpfs','/proc','--proc','/mnt/verifier-proc',
+                      '--symlink','/mnt/verifier-proc/self','/proc/self',
+                      '--symlink','/mnt/verifier-proc/thread-self','/proc/thread-self',
+                      '--symlink','/mnt/verifier-proc/net','/proc/net',
+                      '--symlink','/mnt/verifier-proc/mounts','/proc/mounts']
+                for entry in Path('/mnt/proc').iterdir():
+                    if entry.name.isdigit() or entry.name in {'stat','meminfo','cpuinfo','uptime','loadavg','version','sys'}:
+                        view+=['--ro-bind',str(entry),'/proc/'+entry.name]
+                args[index:index+3]=view
+        _user_namespace_exec(args)
+    finally:
+        os.close(user);os.close(network)
+        if process_ns is not None:os.close(process_ns)
 
 
 class ServiceNamespace:
-    def __init__(self, root, uid, paths, *, network='isolated'):
+    def __init__(self, root, uid, paths, *, network='isolated',verifier_process_view=False,verifier_sockets=()):
         if network not in {'open','isolated'}:raise ValueError('Invalid service network mode')
         if type(uid) is not int or uid < 20000 or uid + ACCOUNT_COUNT >= 2**32:
             raise ValueError('Invalid service account mapping')
         self.root, self.uid = Path(root), uid
         self.network=network
+        views=verifier_options({'verifierProcessView':verifier_process_view,'verifierSockets':list(verifier_sockets)})
+        self.verifier_process_view=views['verifier_process_view']
+        self.verifier_sockets=views['verifier_sockets']
         self.sandbox_runtime = self.root / 'service-sandbox'
         self.paths = paths
         self.mounts = []
@@ -103,6 +164,11 @@ class ServiceNamespace:
         os.chown(directory/'ownership.json',self.uid,self.uid)
         self.mounts += ['--ro-bind',str(directory/'ownership.json'),'/.hicode-service-ownership']
         self.mounts += ['--ro-bind',str(self.sandbox_runtime),str(self.sandbox_runtime)]
+        if self.verifier_sockets:
+            temporary=self.root/'service-tmp'
+            temporary.mkdir(mode=0o700)
+            os.chown(temporary,self.uid,self.uid)
+            self.mounts+=['--bind',str(temporary),'/tmp']
         # /root is the same private Home, never the preparation machine's Home.
         self.mounts += ['--bind', str(self.root / 'home'), '/root']
 
@@ -193,19 +259,56 @@ class ServiceNamespace:
     def verifier_argv(self, args, namespace):
         self._check()
         argv = namespace(args)
+        prefix=argv[:-len(args)]
         mounts=[]
+        if self.verifier_process_view:
+            if prefix.count('--proc')!=1:raise ValueError('Expected one private verifier proc mount')
+            index=prefix.index('--proc')
+            if prefix[index+1]!='/proc':raise ValueError('Invalid verifier proc destination')
+            del prefix[index:index+2]
+        for path in self.verifier_sockets:
+            source=self.root/'service-tmp'/Path(path).name
+            info=source.lstat()
+            if not stat.S_ISSOCK(info.st_mode) or info.st_uid!=self.uid:
+                raise ValueError('Verifier service path must be an owned Unix socket')
+            mounts+=['--ro-bind',str(source),path]
         for path in self.paths:mounts+=['--bind',str(self.root/'service-system'/path[1:]),path]
         mounts+=['--bind',str(self.root/'home'),'/root']
-        argv = argv[:-len(args)] + mounts + args
+        if self.verifier_process_view:
+            mounts+=['--ro-bind',f'/proc/{self.pid}/root/proc','/proc']
+        argv = prefix + mounts + args
         # Enter only user/network; the verifier gets a sibling PID namespace and
         # its own minimal filesystem. Service processes cannot see hidden tests.
-        return ['python3','/opt/hicode-eval/service_namespace.py','--verifier',str(self.pid),*argv]
+        return ['python3','/opt/hicode-eval/service_namespace.py','--verifier',str(self.pid),str(len(args)),*argv]
 
     def snapshot(self):
         if not self.paths:return
         with (self.root/'service-system.tar').open('wb') as output:
             subprocess.run(self.actor_argv(['tar','--numeric-owner','-cf','-','-C','/',*[p[1:] for p in self.paths]]),
                            stdout=output,stderr=subprocess.PIPE,check=True,timeout=60)
+
+    def stop_workloads(self):
+        # This /proc and PID space belong only to this run. Keep its PID 1 owner
+        # for the separate verifier view, but stop all mutable Actor workloads.
+        script = """import os,signal,time
+from pathlib import Path
+for _ in range(50):
+    alive=[]
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit() or int(entry.name) in {1,os.getpid()}:continue
+        try:
+            state=(entry/'stat').read_text().rsplit(')',1)[1].split()[0]
+            if state!='Z':alive.append(int(entry.name))
+        except (FileNotFoundError,ProcessLookupError):pass
+    if not alive:break
+    for pid in alive:
+        try:os.kill(pid,signal.SIGKILL)
+        except ProcessLookupError:pass
+    time.sleep(.1)
+else:raise RuntimeError('Service workloads did not stop')
+"""
+        subprocess.run(self.actor_argv(['python3','-c',script]), check=True, timeout=10,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     def close(self):
         if self.pidfd is not None:
@@ -229,7 +332,7 @@ def main():
         os.close(go);os.setgroups([]);os.setgid(0);os.setuid(0)
         _user_namespace_exec(args[2:])
     elif mode == '--exec':_user_namespace_exec(args)
-    elif mode == '--verifier':_verifier_exec(int(args[0]),args[1:])
+    elif mode == '--verifier':_verifier_exec(int(args[0]),int(args[1]),args[2:])
     elif mode == '--keep':
         ownership=json.loads(Path('/.hicode-service-ownership').read_text())
         for path in args:

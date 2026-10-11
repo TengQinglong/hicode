@@ -1,6 +1,13 @@
 const source=process.env.HICODE_EVAL_SOURCE;
 const home=process.env.HICODE_EVAL_HOME;
 if(!source||!home)throw Error('Missing evaluation paths');
+const resume=process.env.HICODE_EVAL_RESUME_SESSION_ID;
+if(resume){
+ const {loadSession}=await import(source+'/src/session/storage.js');
+ const {createHiCodeStorageLayout}=await import(source+'/src/persistence/layout.js');
+ if(!loadSession(createHiCodeStorageLayout({hicodeHome:home}),process.cwd(),resume,'evaluation'))
+  throw Error('Continuation session cannot be restored');
+}
 const {createSandboxRuntime}=await import(source+'/src/sandbox/runtime.js');
 const {createHiCodeStorageLayout}=await import(source+'/src/persistence/layout.js');
 const {runShellArgv}=await import(source+'/src/tools/bash/process.js');

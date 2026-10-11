@@ -122,7 +122,7 @@ try{
    const expected=reasoning?reasoningRequestFields(model.source,model.model,reasoning.effort):{};
    const reasoningProof=!reasoning||(!!firstRequest&&batch.model.reasoning?.effort===reasoning.effort&&job?.model.reasoning?.effort===reasoning.effort&&
       Object.entries(expected).every(([key,value])=>isDeepStrictEqual(firstRequest[key],value))&&
-      (['default','off'].includes(reasoning.effort)?firstRequest.reasoning_effort===undefined:firstRequest.reasoning_effort===reasoning.effort));
+      isDeepStrictEqual(firstRequest.reasoning_effort,expected.reasoning_effort));
    const ok=reasoningProof&&deepProof&&(v.cancel?state.execution==='cancelled':state.execution==='completed'&&state.grading===(v['expect-pass']?'passed':'failed'))&&state.collection==='complete'&&!remaining&&functionalProof;
    const report={at:new Date().toISOString(),kind:'local-fake-provider',task:{dataset:task.dataset,id:task.id},context:executionConfig.context,paidModelCalls:0,mode:v.cancel?'cancel':'complete',control:v['expect-pass']?'reference-solution':'baseline',ok,execution:state.execution,grading:state.grading,collection:state.collection,containerRemaining:remaining,...(reasoning?{reasoning:{effort:reasoning.effort,request:firstRequest}}:{}),...(deep?{tests:deep,committedPatchBytes:patch===null?0:Buffer.byteLength(patch)}:{}),note:state.note};
    await save(join(new EvalLayout(current.data).state,'validation.json'),report);console.log(JSON.stringify(report));

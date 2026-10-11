@@ -309,7 +309,7 @@ Options:
       --eval-root <path>      Run artifacts root (default: ~/.hicode-evals)
       --settings-file <path>  User Settings catalog (default: ~/.hicode/settings.json when present)
       --env-file <path>       Explicit Provider env file; never copied into artifacts
-      --source <source>       glm | qwen | deepseek | openrouter | qwen-token-plan
+      --source <source>       glm | qwen | deepseek | openrouter | qwen-token-plan | ark-agent-plan
       --model <model>         Primary and fast model override
       --keep <policy>         all | failed | none (default: all)
       --max-iterations <n>    1..100 override
@@ -547,11 +547,13 @@ function parseSource(value: string | undefined): EvalModelSource | undefined {
         value === "glm" ||
         value === "qwen" ||
         value === "deepseek" ||
-        value === "openrouter"
+        value === "openrouter" ||
+        value === "qwen-token-plan" ||
+        value === "ark-agent-plan"
     ) {
         return value;
     }
-    throw new Error("--source 必须是 glm | qwen | deepseek | openrouter | qwen-token-plan");
+    throw new Error("--source 必须是 glm | qwen | deepseek | openrouter | qwen-token-plan | ark-agent-plan");
 }
 
 function parseKeepPolicy(value: string | undefined): EvalKeepPolicy {

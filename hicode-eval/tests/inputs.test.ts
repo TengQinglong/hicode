@@ -16,6 +16,12 @@ test('a malformed unrelated task profile cannot invalidate an active task',async
   expect(()=>publicTaskProfile(manifest,'unrelated')).toThrow();
   expect(()=>publicTaskProfile(manifest,'missing')).toThrow('not been adapted');
 });
+test('reviewed service monitors allow only unique scoped tmp sockets',()=>{
+  const service={writablePaths:[],verifierProcessView:true,verifierSockets:['/tmp/qemu-monitor.sock']};
+  expect(publicTaskProfile({fixture:{...profile,service}},'fixture').service).toEqual(service);
+  for(const verifierSockets of [['/run/control.sock'],['/tmp/../control.sock'],['/tmp/qemu-monitor.sock','/tmp/qemu-monitor.sock']])
+    expect(()=>publicTaskProfile({fixture:{...profile,service:{...service,verifierSockets}}},'fixture')).toThrow();
+});
 async function fixture(run: (root: string, task: string) => Promise<void>) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'hicode-eval-inputs-'))), task = join(root, 'task');
   try {
