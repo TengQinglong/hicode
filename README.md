@@ -14,6 +14,24 @@ HiCode 是一个基于 TypeScript 自研的轻量级终端 Code Agent，核心�
 
 支持 **macOS 和 Linux**，在本机运行，接入你自己的模型 API Key 即可使用。
 
+---
+
+## 🚀 公开评测 · 关键进展
+
+### ⭐ Terminal-Bench 2.1
+
+1. HiCode：原题干通过 **83/89（93.3%）**；含两道题干补充后通过 **85/89（95.5%）**。使用 Qwen3.8-Flash + DeepSeek V4.1 Flash。
+2. [DeepSeek V4.1 Flash 公开参考](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash#performance-across-agent-scaffolds-deepswe-v11-and-terminal-bench-21-max-reasoning-effort)：搭配 Codex、Claude Code、DeepSeek Harness Minimal 的通过率分别为 **84.1%、88.0%、90.6%**。每题独立评测 3 次，统计平均通过率。
+3. 其他模型的公开参考：[GPT-5.6 Sol + Codex](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash#comparison-with-frontier-models-max-reasoning-effort) **88.8%**、[Kimi K3 + Kimi Code](https://www.kimi.com/en/blog/kimi-k3) **88.3%**、[GLM-5.3 + Claude Code](https://huggingface.co/zai-org/GLM-5.3) **88.2%**、[Qwen3.8-Max + Claude Code](https://huggingface.co/Qwen/Qwen3.8-2.4T-A95B-FP8) **86.6%**（每题评测 10 次取平均）。
+
+题干说明：两道题的原题干未明确说明输出格式或行为要求，因此补充了说明，验收测试保持不变。
+
+评测说明：HiCode 为控制成本（省钱），每题验收通过一次就记为通过，不再重复测试；重复评测时，通过率会略有下降。
+
+---
+
+## 功能与界面
+
 <table width="100%">
   <tr>
     <th width="43.3%">启动界面</th>
@@ -31,6 +49,8 @@ HiCode 是一个基于 TypeScript 自研的轻量级终端 Code Agent，核心�
 
 ### 近期重点优化
 
+- 🧠 **10-11 · 模型与长任务执行**：支持推理强度调节与思考过程续传，优化后台复盘、网络获取和工具等待，提升复杂任务的执行稳定性。
+
 - 🧱 **10-04 · 测试环境隔离**：共享 Linux 底座，按依赖版本复用镜像，每题独立容器运行，减少重复安装与环境干扰。
 
 - 🛠️ **10-01 · Agent 执行链**：根据公开题评测反馈，统一后台任务的排队、状态与通知，支持长任务续接，并在取消或失败时完整收尾。
@@ -44,10 +64,6 @@ HiCode 是一个基于 TypeScript 自研的轻量级终端 Code Agent，核心�
 - 🔍 **09-20 · 工具与检索**：精简内置工具，统一通过 Bash 与 ripgrep 完成本地检索，减少重复实现，提升检索效率。
 
 - 🤝 **09-19 · 子 Agent 协作**：完善主 Agent 的任务分派与子 Agent 派生，优化并行执行、双向沟通和上下文续跑。
-
-### 公开评测
-
-- 🔥 **持续评测中**：截至 2026 年 10 月 7 日，Terminal-Bench 2.0 已通过 **39 题**，SWE-bench Verified 已通过 **316 题**。
 
 ## 快速开始
 

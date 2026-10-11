@@ -14,6 +14,26 @@ HiCode is a lightweight terminal coding agent built in TypeScript with its own e
 
 Runs locally on **macOS and Linux**. Connect your own model API key to get started.
 
+---
+
+## 🚀 Public benchmarks · Key progress
+
+### ⭐ Terminal-Bench 2.1
+
+1. HiCode: **83/89 (93.3%)** passed with original instructions; **85/89 (95.5%)** including two instruction clarifications. Models: Qwen3.8-Flash + DeepSeek V4.1 Flash.
+2. [DeepSeek V4.1 Flash public reference](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash#performance-across-agent-scaffolds-deepswe-v11-and-terminal-bench-21-max-reasoning-effort): pass rates of **84.1%, 88.0%, and 90.6%** with Codex, Claude Code, and DeepSeek Harness Minimal, respectively. Each task is evaluated independently three times, and the average pass rate is reported.
+3. Other published references: [GPT-5.6 Sol + Codex](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash#comparison-with-frontier-models-max-reasoning-effort) **88.8%**, [Kimi K3 + Kimi Code](https://www.kimi.com/en/blog/kimi-k3) **88.3%**, [GLM-5.3 + Claude Code](https://huggingface.co/zai-org/GLM-5.3) **88.2%**, and [Qwen3.8-Max + Claude Code](https://huggingface.co/Qwen/Qwen3.8-2.4T-A95B-FP8) **86.6%** (averaged over ten trials per task).
+
+Instruction notes: two tasks had unclear output-format or behavior requirements, so their instructions were clarified. Acceptance tests remained unchanged.
+
+Evaluation notes: to control costs, HiCode counts a task as passed once it clears acceptance tests, then stops retesting it; the pass rate is expected to decrease slightly over repeated evaluations.
+
+Historical results: as of October 7, 2026, **39 Terminal-Bench 2.0 tasks** and **316 SWE-bench Verified tasks** passed.
+
+---
+
+## Features and interface
+
 <table width="100%">
   <tr>
     <th width="43.3%">Welcome screen</th>
@@ -31,6 +51,8 @@ Runs locally on **macOS and Linux**. Connect your own model API key to get start
 
 ### Recent improvements
 
+- 🧠 **10-11 · Models and long-running tasks**: added reasoning-effort controls and reasoning replay across requests, and improved background reviews, web retrieval, and tool waits for more reliable execution of complex tasks.
+
 - 🧱 **10-04 · Test environment isolation**: shared Linux base, reusable images by dependency version, and a separate container per task to reduce repeated setup and interference.
 
 - 🛠️ **10-01 · Agent execution**: public benchmark findings drove unified background task queuing, status, and notifications, with continuation for long-running tasks and complete cleanup on cancellation or failure.
@@ -44,10 +66,6 @@ Runs locally on **macOS and Linux**. Connect your own model API key to get start
 - 🔍 **09-20 · Tools and search**: simplified built-in tools and unified local search through Bash and ripgrep, reducing duplicate implementations and improving search efficiency.
 
 - 🤝 **09-19 · Subagent collaboration**: improved task delegation and subagent spawning, along with parallel execution, two-way messaging, and context-preserving follow-ups.
-
-### Public benchmarks
-
-- 🔥 **Evaluation in progress**: as of October 7, 2026, HiCode has passed **39 Terminal-Bench 2.0 tasks** and **316 SWE-bench Verified tasks**.
 
 ## Quick start
 
