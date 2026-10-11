@@ -150,7 +150,7 @@ test('live service recheck shares the worker catalog, permits other submissions,
  const execute=spyOn(LinuxMachine.prototype,'execute').mockImplementation(async(state,_path,_key,phase)=>{
   await phase('Running HiCode');if(state.task==='active'){executing=true;await executionGate;}return {type:'result',execution:'completed',grading:'failed',uid:20000};
  });
- const regrade=spyOn(LinuxMachine.prototype,'regradeService').mockImplementation(async(state,task,script,reviewId)=>{
+ const regrade=spyOn(LinuxMachine.prototype,'regradeTerminal').mockImplementation(async(state,task,script,reviewId)=>{
   expect(state.id).toBe(original.id);expect(task.id).toBe('mailman');expect(script).toBe('restart reviewed service');
   rechecking=true;await recheckGate;return {version:1,runId:state.id,reviewId,grading:'passed',reason:null,modelCalls:0,snapshotSha256:'a'.repeat(64),projectSha256:'b'.repeat(64),elapsedSeconds:1};
  });
@@ -161,9 +161,9 @@ test('live service recheck shares the worker catalog, permits other submissions,
   await lab.init();worker=serveWorker(lab,0);const client=new Client(worker.port);
   await lab.submit({name:'active task',concurrency:1,tasks:[{dataset:active.dataset,id:active.id}]});await until(()=>executing);
   const input={run:original.id,restartScript:'restart reviewed service'};
-  const accepted=await client.request('regrade-service',input) as {reviewId:string};await until(()=>rechecking);
+  const accepted=await client.request('regrade-terminal',input) as {reviewId:string};await until(()=>rechecking);
   expect((await lab.recheck(original.id,accepted.reviewId)).state).toBe('running');
-  expect((await client.request('regrade-service',input) as {reviewId:string}).reviewId).toBe(accepted.reviewId);
+  expect((await client.request('regrade-terminal',input) as {reviewId:string}).reviewId).toBe(accepted.reviewId);
   await expect(lab.retry(original.id)).rejects.toThrow('Wait for completion');
   await expect(lab.prepareEnvironments({tasks:[{dataset:original.dataset,id:original.task}]})).rejects.toThrow('active or retained');
   const nextBatch=await lab.submit({name:'another submission',concurrency:1,tasks:[{dataset:next.dataset,id:next.id}]});
@@ -187,7 +187,7 @@ test('queued service recheck can be cancelled without starting a verifier or cha
  const validate=spyOn(publicTasks,'validatePublicTask').mockResolvedValue(metadata),resolve=spyOn(EnvironmentStore.prototype,'resolve').mockResolvedValue(active.binding);
  const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined);
  const execute=spyOn(LinuxMachine.prototype,'execute').mockImplementation(async()=>{executing=true;await gate;return {type:'result',execution:'completed',grading:'failed',uid:20000};});
- const regrade=spyOn(LinuxMachine.prototype,'regradeService');const dispose=spyOn(LinuxMachine.prototype,'disposeRun').mockResolvedValue(undefined);
+ const regrade=spyOn(LinuxMachine.prototype,'regradeTerminal');const dispose=spyOn(LinuxMachine.prototype,'disposeRun').mockResolvedValue(undefined);
  const boundary=spyOn(transport,'run').mockResolvedValue(active.binding.base.imageId+'\n'+active.binding.dependencies.imageId);
  try{
   await lab.init();await lab.submit({name:'active',concurrency:1,tasks:[{dataset:active.dataset,id:active.id}]});await until(()=>executing);
@@ -200,8 +200,8 @@ test('queued service recheck can be cancelled without starting a verifier or cha
 test('worker restart disposes an interrupted recheck without replaying the model or verifier',async()=>{
  const f=await fixture(),original=await failedService(f),reviewId='b'.repeat(16),lab=new Lab(f.config,'offline-secret');
  const path=join(f.layout.recheck(original.id,reviewId),'operation.json');await save(path,{version:1,runId:original.id,reviewId,state:'running'});
- const dispose=spyOn(LinuxMachine.prototype,'disposeServiceRecheck').mockResolvedValue(undefined);
- const regrade=spyOn(LinuxMachine.prototype,'regradeService'),execute=spyOn(LinuxMachine.prototype,'execute');
+ const dispose=spyOn(LinuxMachine.prototype,'disposeTerminalRecheck').mockResolvedValue(undefined);
+ const regrade=spyOn(LinuxMachine.prototype,'regradeTerminal'),execute=spyOn(LinuxMachine.prototype,'execute');
  try{
   await lab.init();expect(dispose).toHaveBeenCalledWith(original,reviewId);
   expect((await lab.recheck(original.id,reviewId)).state).toBe('cancelled');expect(lab.runs.get(original.id)?.grading).toBe('failed');
@@ -211,7 +211,7 @@ test('worker restart disposes an interrupted recheck without replaying the model
 
 test('closing the worker aborts an in-flight recheck subprocess and preserves the original grade',async()=>{
  const f=await fixture(),original=await failedService(f),lab=new Lab(f.config,'offline-secret');let started=false;
- const regrade=spyOn(LinuxMachine.prototype,'regradeService').mockImplementation(async(state,_task,_script,reviewId,signal)=>{
+ const regrade=spyOn(LinuxMachine.prototype,'regradeTerminal').mockImplementation(async(state,_task,_script,reviewId,signal)=>{
   started=true;await transport.run([process.execPath,'-e','setInterval(()=>{},1000)'],{signal,timeout:2000});
   return {version:1,runId:state.id,reviewId,grading:'passed',reason:null,modelCalls:0,snapshotSha256:'a'.repeat(64),projectSha256:'b'.repeat(64),elapsedSeconds:1};
  });
@@ -220,4 +220,30 @@ test('closing the worker aborts an in-flight recheck subprocess and preserves th
   const begin=Date.now();await lab.close();expect(Date.now()-begin).toBeLessThan(1000);
   expect((await lab.recheck(original.id,accepted.reviewId)).state).toBe('cancelled');expect(lab.runs.get(original.id)?.grading).toBe('failed');
  }finally{await lab.close();regrade.mockRestore();await f.cleanup();}
+});
+
+test('ordinary Terminal recheck uses the worker result queue without a restart script or model execution',async()=>{
+ const f=await fixture();await seed(f,'ordinary');
+ const original={...finished('ordinary'),state:'error' as const,grading:'unavailable' as const,reward:undefined};
+ await save(join(f.layout.run(original.id),'state.json'),original);
+ await save(f.layout.batch(original.batchId),batchSchema.parse({version:1,id:original.batchId,name:'sealed ordinary task',network:'open',concurrency:1,budget:{},createdAt:1,
+  taskRefs:[{dataset:original.dataset,id:original.task}],runIds:[original.id],model:f.config.model,payload:{}}));
+ await f.catalog.record(original);
+ const lab=new Lab(f.config,'unused'),execute=spyOn(LinuxMachine.prototype,'execute');
+ let finish!:()=>void;const gate=new Promise<void>(resolve=>{finish=resolve;});
+ const regrade=spyOn(LinuxMachine.prototype,'regradeTerminal').mockImplementation(async(state,task,script,reviewId)=>{
+  expect(state.id).toBe(original.id);expect(task.id).toBe('ordinary');expect(script).toBeUndefined();await gate;
+  return {version:1,kind:'ordinary',runId:state.id,reviewId,grading:'passed',reason:null,modelCalls:0,projectSha256:'a'.repeat(64),elapsedSeconds:1};
+ });
+ const cleanup=spyOn(transport,'run').mockRejectedValue(new Error('Offline fixture engine unavailable'));
+ let server:ReturnType<typeof serveWorker>|undefined;
+ try{
+  await lab.init();server=serveWorker(lab,0);const client=new Client(server.port);
+  const accepted=await client.request('regrade-terminal',{run:original.id}) as {reviewId:string};
+  await until(()=>regrade.mock.calls.length===1);expect(lab.runs.get(original.id)?.grading).toBe('unavailable');
+  finish();await until(async()=> (await lab.recheck(original.id,accepted.reviewId)).state==='finished');
+  expect(execute).not.toHaveBeenCalled();expect(lab.runs.get(original.id)?.execution).toBe('completed');
+  expect(lab.runs.get(original.id)?.grading).toBe('passed');
+  expect((await TaskCatalog.open(f.config.catalog)).get(original.dataset,original.task).status).toBe('passed');
+ }finally{finish();server?.stop(true);await lab.close();regrade.mockRestore();execute.mockRestore();cleanup.mockRestore();await f.cleanup();}
 });

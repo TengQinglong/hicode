@@ -9,7 +9,7 @@ import {createHash} from 'node:crypto';
 import {parse} from 'dotenv';
 import {z} from 'zod';
 import {EvalLayout} from './host/layout.js';
-import {loadConfig,settingsSchema,modelSchema,submissionSchema,reasoningSchema,runSchema,idSchema,serviceRegradeRequestSchema,serviceRecheckSchema,continuationRequestSchema} from './host/types.js';
+import {loadConfig,settingsSchema,modelSchema,submissionSchema,reasoningSchema,runSchema,idSchema,terminalRegradeRequestSchema,terminalRecheckSchema,continuationRequestSchema} from './host/types.js';
 import {TaskCatalog} from './host/catalog.js';
 import type {CatalogTask} from './host/catalog.js';
 import {taskAdapters,datasetSchema,taskKey} from './host/datasets.js';
@@ -99,21 +99,25 @@ async function main(){
   if(command==='image-inventory'){console.log(JSON.stringify(await imageInventory(layout.root,v.dataset?datasetSchema.parse(v.dataset):undefined),null,2));return;}
   if(command==='regrade'){
     const runId=idSchema.parse(required('run'));
-    if(v['service-restart-script']&&await exists(join(layout.root,'.service.lock'))){
+    if((await readJson(layout.run(runId)+ '/state.json',runSchema)).dataset==='terminal-bench-2.1'&&await exists(join(layout.root,'.service.lock'))){
       if(v['verifier-proxy'])throw Error('Service regrade does not accept --verifier-proxy');
       const client=new Client(workerPort),health=z.object({data:z.string()}).passthrough().parse(await client.request('health'));
       if(health.data!==layout.root)throw Error('Worker belongs to another root');
-      const file=await realpath(resolve(v['service-restart-script'])),info=await stat(file);
-      if(!info.isFile()||info.size>16384)throw Error('Invalid service restart script');
-      const input=serviceRegradeRequestSchema.parse({run:runId,restartScript:await Bun.file(file).text()});
-      console.log(JSON.stringify(serviceRecheckSchema.parse(await client.request('regrade-service',input)),null,2));return;
+      let restartScript:string|undefined;
+      if(v['service-restart-script']){
+        const file=await realpath(resolve(v['service-restart-script'])),info=await stat(file);
+        if(!info.isFile()||info.size>16384)throw Error('Invalid service restart script');
+        restartScript=await Bun.file(file).text();
+      }
+      const input=terminalRegradeRequestSchema.parse({run:runId,restartScript});
+      console.log(JSON.stringify(terminalRecheckSchema.parse(await client.request('regrade-terminal',input)),null,2));return;
     }
     console.log(JSON.stringify(await regradeRun(layout.root,runId,v['verifier-proxy'],v['service-restart-script']),null,2));return;
   }
   if(command==='recheck'){
     const client=new Client(workerPort),health=z.object({data:z.string()}).passthrough().parse(await client.request('health'));
     if(health.data!==layout.root)throw Error('Worker belongs to another root');
-    console.log(JSON.stringify(serviceRecheckSchema.parse(await client.request('recheck?run='+idSchema.parse(required('run'))+'&review='+idSchema.parse(v.review))),null,2));return;
+    console.log(JSON.stringify(terminalRecheckSchema.parse(await client.request('recheck?run='+idSchema.parse(required('run'))+'&review='+idSchema.parse(v.review))),null,2));return;
   }
   const release=await lease(layout.root,'service');
   try{

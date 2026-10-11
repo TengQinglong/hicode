@@ -35,6 +35,7 @@
 - `(dataset,id)` 是题目身份，同名题不能混用。当前支持 Terminal-Bench 2.1、SWE-bench Verified、DeepSWE。2.0 留在离线历史中，没有生产执行分支。
 - 成绩为 passed / unpassed / untested；环境独立为 unprepared / ready / evicted / failed。删除镜像必须更新环境状态，不能删除成绩。
 - worker 是调度、模型凭据、容器、成绩和自动清理的唯一 owner，持有根目录 service lease。register、prepare、gc 和 regrade 必须获得同一 lease，运行服务期间拒绝离线写入。在线服务题补判由 worker 接收，复用同一调度器、台账和冻结执行包，只占一个并发名额；其他题继续执行和提交，操作状态保存在原 Run 的 rechecks 中。同题重跑、准备与补判互斥；关闭取消补判，重启先确认中断补判容器已销毁，清理不明时停止调度。
+- 普通 Terminal 补判使用同一 regrade/recheck 入口，不提供重启脚本；须校验原答案、完成事件与容器销毁回执，直接运行原判题，不调用模型。服务题仍要求审定重启脚本与服务快照。判题 PATH 的首项必须对应所选 verifierPython，原测试启动的 python 子进程使用同一已准备环境。
 - 已登记题的环境可通过 prepare-environments --live 交给 worker 后台准备，其他题的执行继续；活动或待恢复题不得重建。原题和声明先离线审定，准备期间不运行清理，不提交正在构建的题。退出 worker 时等待准备收尾。
 - serve 只读原子记录并转交控制请求，不初始化执行资源。8878 是默认网页端口，8879 是默认 worker 端口。重启网页不停止跑题。
 - 完成定义必须同时满足执行 completed、原判题 passed 和收集 complete。错误、超时、取消不伪装成通过。启动前取消没有判题结论。

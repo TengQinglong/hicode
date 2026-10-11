@@ -39,17 +39,18 @@ export const runSchema = z.object({ version: z.literal(1), network: networkSchem
 export type Run = z.infer<typeof runSchema>;
 export const regradeResultSchema=z.object({version:z.literal(1),runId:idSchema,instanceId:z.string().min(1),patchSha256:z.string().regex(/^[a-f0-9]{64}$/),
   grading:z.enum(['passed','failed','unavailable']),reason:z.string().nullable(),originalExecution:runSchema.shape.execution,modelCalls:z.literal(0)}).strict();
-export const serviceRegradeRequestSchema=z.object({run:idSchema,restartScript:z.string().min(1).max(16384).refine(value=>!value.includes('\0'),'Invalid service restart script')}).strict();
-export type ServiceRegradeRequest=z.infer<typeof serviceRegradeRequestSchema>;
-export const serviceRegradeResultSchema=z.object({version:z.literal(1),runId:idSchema,reviewId:idSchema,grading:z.enum(['passed','failed','unavailable']),
+export const terminalRegradeRequestSchema=z.object({run:idSchema,restartScript:z.string().min(1).max(16384).refine(value=>!value.includes('\0'),'Invalid service restart script').optional()}).strict();
+export type TerminalRegradeRequest=z.infer<typeof terminalRegradeRequestSchema>;
+const serviceRegradeResultSchema=z.object({version:z.literal(1),runId:idSchema,reviewId:idSchema,grading:z.enum(['passed','failed','unavailable']),
   reason:z.string().nullable(),modelCalls:z.literal(0),snapshotSha256:z.string().regex(/^[a-f0-9]{64}$/),
   projectSha256:z.string().regex(/^[a-f0-9]{64}$/),elapsedSeconds:z.number().nonnegative()}).strict();
-export type ServiceRegradeResult=z.infer<typeof serviceRegradeResultSchema>;
+export const terminalRegradeResultSchema=z.union([serviceRegradeResultSchema,serviceRegradeResultSchema.omit({snapshotSha256:true}).extend({kind:z.literal('ordinary')})]);
+export type TerminalRegradeResult=z.infer<typeof terminalRegradeResultSchema>;
 const recheckIdentity={version:z.literal(1),runId:idSchema,reviewId:idSchema};
-export const serviceRecheckSchema=z.discriminatedUnion('state',[
+export const terminalRecheckSchema=z.discriminatedUnion('state',[
   z.object({...recheckIdentity,state:z.literal('queued')}).strict(),
   z.object({...recheckIdentity,state:z.literal('running')}).strict(),
-  z.object({...recheckIdentity,state:z.literal('finished'),result:serviceRegradeResultSchema}).strict(),
+  z.object({...recheckIdentity,state:z.literal('finished'),result:terminalRegradeResultSchema}).strict(),
   z.object({...recheckIdentity,state:z.literal('failed'),error:z.string().max(2000)}).strict(),
   z.object({...recheckIdentity,state:z.literal('cancelled'),error:z.string().max(2000)}).strict(),
   z.object({...recheckIdentity,state:z.literal('retained'),error:z.string().max(2000)}).strict(),

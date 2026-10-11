@@ -6,16 +6,21 @@ import stat
 import subprocess
 import time
 import re
+from pathlib import Path
 
 
 def verifier_environment(config, home):
+    python = config.get('verifierPython', '/opt/hicode-verifier/bin/python')
+    if python not in {'/opt/hicode-verifier/bin/python', '/opt/hicode-task/verifier/bin/python'}:
+        raise ValueError('Invalid verifier interpreter')
     paths=[]
     if config.get('verifierPackages'):
         paths.append('/app/.eval-verifier-python' if config.get('verifierChroot') else '/opt/hicode-terminal/verifier')
     if config.get('packages'):
         paths.append('/app/.eval-python' if config.get('verifierChroot') else '/opt/hicode-terminal/actor')
     paths.append(str(home / '.local/lib/python3.13/site-packages'))
-    return {'PATH':'/opt/hicode-verifier/bin:/opt/python313/bin:'+str(home / '.local/bin')+':'+str(home / 'bin')+':'+os.environ['PATH'],
+    # Original tests may launch `python`; their children must use the pytest environment.
+    return {'PATH':str(Path(python).parent)+':/opt/python313/bin:'+str(home / '.local/bin')+':'+str(home / 'bin')+':'+os.environ['PATH'],
             'HOME':str(home),'LANG':'C.UTF-8','PYTHONPATH':os.pathsep.join(paths)}
 
 

@@ -156,7 +156,7 @@ def restore_checkpoint(root, value, service_paths):
 
 def restore_service(owner, root):
     if not owner.paths: return
-    from service_regrade import validate_snapshot
+    from terminal_regrade import validate_snapshot
     source = Path(root) / 'continuation-service.tar'
     validate_snapshot(source, owner.paths)
     destination = Path(root) / 'project/.continuation-service.tar'

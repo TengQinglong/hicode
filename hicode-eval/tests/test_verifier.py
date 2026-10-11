@@ -15,6 +15,15 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(sealed['PYTHONPATH'].split(os.pathsep)[0],'/app/.eval-verifier-python')
         self.assertEqual(env['PATH'].split(os.pathsep)[:4],['/opt/hicode-verifier/bin','/opt/python313/bin','/task/home/.local/bin','/task/home/bin'])
         self.assertEqual(verifier_environment({},Path('/task/home'))['PYTHONPATH'],'/task/home/.local/lib/python3.13/site-packages')
+
+    def test_original_tests_launch_children_in_the_selected_verifier_environment(self):
+        env=verifier_environment({'verifierPython':'/opt/hicode-task/verifier/bin/python'},Path('/task/home'))
+        self.assertEqual(env['PATH'].split(os.pathsep)[0],'/opt/hicode-task/verifier/bin')
+        self.assertNotIn('/opt/hicode-verifier/bin',env['PATH'].split(os.pathsep)[:2])
+        for invalid in ['/app/python','/opt/hicode-task/actor/bin/python',None]:
+            with self.assertRaisesRegex(ValueError,'Invalid verifier interpreter'):
+                verifier_environment({'verifierPython':invalid},Path('/task/home'))
+
     def run_check(self, code, timeout=5, cancel=False, failed=False, report=True):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'output.txt'

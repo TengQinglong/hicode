@@ -9,11 +9,11 @@ import {taskAdapters,taskKey} from './datasets.js';
 import {EnvironmentStore} from './environments.js';
 import { EvidenceCollectionError, LinuxMachine } from './linux.js';
 import { readJson, save, exists, contained } from './store.js';
-import { runSchema, done, modelSchema,batchSchema, submissionSchema,environmentPreparationSchema,serviceRegradeRequestSchema,serviceRecheckSchema,continuationRequestSchema } from './types.js';
-import type { Config, Run, Batch, Submission,EnvironmentPreparation,ServiceRegradeRequest,ContinuationRequest,ContinuationOrigin } from './types.js';
+import { runSchema, done, modelSchema,batchSchema, submissionSchema,environmentPreparationSchema,terminalRegradeRequestSchema,terminalRecheckSchema,continuationRequestSchema } from './types.js';
+import type { Config, Run, Batch, Submission,EnvironmentPreparation,TerminalRegradeRequest,ContinuationRequest,ContinuationOrigin } from './types.js';
 import {readCheckpoint,verifyCheckpointArchive,environmentDigest} from './continuation.js';
 import {bindingSchema} from './environments.js';
-import {serviceRegradeChanges,ServiceRegradeCleanupError} from './serviceRegrade.js';
+import {terminalRegradeChanges,TerminalRegradeCleanupError} from './terminalRegrade.js';
 import {batchView,catalogView,runView} from './view.js';
 
 import { REPOSITORY_ROOT } from '../paths.js';
@@ -38,7 +38,7 @@ export class Lab {
   private pumping = false;
   private maintenancePending=false;
   private preparationJob:{tasks:ReadonlySet<string>;completion:Promise<void>}|undefined;
-  private readonly rechecks=new Map<string,{reviewId:string;task:string;restartScript:string;controller:AbortController}>();
+  private readonly rechecks=new Map<string,{reviewId:string;task:string;restartScript:string|undefined;controller:AbortController}>();
   private readonly layout:EvalLayout;
   private readonly adapters:ReturnType<typeof taskAdapters>;
   constructor(readonly config: Config, private readonly credential: string) {this.layout=new EvalLayout(config.data);this.adapters=taskAdapters(this.layout);}
@@ -97,10 +97,10 @@ export class Lab {
       for(const name of await readdir(directory)){
         if(!/^[a-f0-9]{16}$/.test(name))continue;
         const path=join(this.layout.recheck(state.id,name),'operation.json');if(!await exists(path))continue;
-        const record=await readJson(path,serviceRecheckSchema);
+        const record=await readJson(path,terminalRecheckSchema);
         if(record.runId!==state.id||record.reviewId!==name||this.runs.has(name))throw Error('Invalid recheck ownership');
         if(!['queued','running','retained'].includes(record.state))continue;
-        await this.machine.disposeServiceRecheck(state,name);
+        await this.machine.disposeTerminalRecheck(state,name);
         await save(path,{version:1,runId:state.id,reviewId:name,state:'cancelled',error:'Worker restarted; interrupted recheck stopped and stored Run result retained'});
       }
     }
@@ -127,20 +127,20 @@ export class Lab {
     this.submissions = operation.catch(() => {});
     return operation;
   }
-  async regrade(input:ServiceRegradeRequest){
+  async regrade(input:TerminalRegradeRequest){
     const operation=this.submissions.then(async()=>{
-      const request=serviceRegradeRequestSchema.parse(input),state=this.runs.get(request.run);
+      const request=terminalRegradeRequestSchema.parse(input),state=this.runs.get(request.run);
       if(this.closed||this.halted||!state)throw Error('Recheck unavailable while worker is closing/blocked or run is unknown');
       const previous=this.rechecks.get(state.id);
       if(previous){if(previous.restartScript!==request.restartScript)throw Error('This run already has a different pending recheck');return this.recheck(state.id,previous.reviewId);}
       const key=taskKey({dataset:state.dataset,id:state.task});
-      if(state.dataset!=='terminal-bench-2.1'||state.execution!=='completed'||state.collection!=='complete'||!['passed','failed'].includes(state.state))
-        throw Error('Recheck requires a completed and fully collected Terminal service run');
+      if(state.dataset!=='terminal-bench-2.1'||state.execution!=='completed'||state.collection!=='complete'||!['passed','failed','error'].includes(state.state))
+        throw Error('Recheck requires a completed and fully collected Terminal run');
       if(this.preparationJob?.tasks.has(key)||[...this.rechecks.values()].some(item=>item.task===key)||[...this.runs.values()].some(run=>
         taskKey({dataset:run.dataset,id:run.task})===key&&(!done(run.state)||run.state==='needs_recovery'||this.jobs.has(run.id))))
         throw Error('This task has an active attempt, recheck, preparation or retained evidence');
       const reviewId=randomBytes(8).toString('hex');
-      const record=serviceRecheckSchema.parse({version:1,runId:state.id,reviewId,state:'queued'});
+      const record=terminalRecheckSchema.parse({version:1,runId:state.id,reviewId,state:'queued'});
       await save(join(this.layout.recheck(state.id,reviewId),'operation.json'),record);
       this.rechecks.set(state.id,{reviewId,task:key,restartScript:request.restartScript,controller:new AbortController()});
       void this.pump();return record;
@@ -149,7 +149,7 @@ export class Lab {
   }
   async recheck(runId:string,reviewId:string){
     this.path(runId);
-    const record=await readJson(join(this.layout.recheck(runId,reviewId),'operation.json'),serviceRecheckSchema);
+    const record=await readJson(join(this.layout.recheck(runId,reviewId),'operation.json'),terminalRecheckSchema);
     if(record.runId!==runId||record.reviewId!==reviewId)throw Error('Recheck identity mismatch');
     return record;
   }
@@ -162,13 +162,13 @@ export class Lab {
         await save(path,{version:1,runId:id,reviewId:pending.reviewId,state:'running'});
         if(!this.machine||!this.taskCatalog)throw Error('Worker not initialized');
         const state=this.runs.get(id)!;
-        const result=await this.machine.regradeService(state,this.taskCatalog.get(state.dataset,state.task),pending.restartScript,pending.reviewId,pending.controller.signal);
+        const result=await this.machine.regradeTerminal(state,this.taskCatalog.get(state.dataset,state.task),pending.restartScript,pending.reviewId,pending.controller.signal);
         pending.controller.signal.throwIfAborted();
-        const changes=serviceRegradeChanges(result);if(changes)await this.update(id,changes);
-        await save(path,serviceRecheckSchema.parse({version:1,runId:id,reviewId:pending.reviewId,state:'finished',result}));
+        const changes=terminalRegradeChanges(result);if(changes)await this.update(id,changes);
+        await save(path,terminalRecheckSchema.parse({version:1,runId:id,reviewId:pending.reviewId,state:'finished',result}));
       }catch(error){
-        if(error instanceof ServiceRegradeCleanupError)this.halted=true;
-        await save(path,{version:1,runId:id,reviewId:pending.reviewId,state:error instanceof ServiceRegradeCleanupError?'retained':pending.controller.signal.aborted?'cancelled':'failed',error:String(error).slice(-2000)});
+        if(error instanceof TerminalRegradeCleanupError)this.halted=true;
+        await save(path,{version:1,runId:id,reviewId:pending.reviewId,state:error instanceof TerminalRegradeCleanupError?'retained':pending.controller.signal.aborted?'cancelled':'failed',error:String(error).slice(-2000)});
       }
     })().catch(()=>{this.halted=true;console.error('Recheck state could not be persisted; scheduling stopped.');})
       .finally(()=>{this.rechecks.delete(id);this.jobs.delete(id);void this.pump();});

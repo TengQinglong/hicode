@@ -1,9 +1,10 @@
 import io
+import json
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
-from service_regrade import validate_snapshot
+from terminal_regrade import validate_snapshot, validate_completion
 
 
 class ServiceRegradeTest(unittest.TestCase):
@@ -39,3 +40,15 @@ class ServiceRegradeTest(unittest.TestCase):
     def test_rejects_duplicate_members(self):
         with self.assertRaises(ValueError):
             validate_snapshot(self.archive([self.member('etc/passwd'),self.member('etc/passwd')]),['/etc'])
+
+    def test_ordinary_recheck_requires_persisted_sealed_completion(self):
+        def record(sealed=True, saved=True, pending=False):
+            rows=[{'type':'ready'}, {'type':'agent_event','event':{'type':'model_stream_start'}}]
+            if pending:rows.append({'type':'agent_event','event':{'type':'tool_call_start','toolCallId':'unpaired'}})
+            rows.extend([{'type':'agent_event','event':{'type':'turn_end','input':{'persistence_status':'saved' if saved else 'failed'}}},
+                         {'type':'settled','sealed':sealed,'reason':'completed','runningAgents':0,'pendingAgentMessages':0}])
+            return ''.join(json.dumps({'version':1,'sequence':i,'sessionId':'fixture',**row})+'\n' for i,row in enumerate(rows,1)).encode()
+        validate_completion(record())
+        for data in [record(sealed=False),record(saved=False),record(pending=True),record()+b'{']:
+            with self.assertRaisesRegex(ValueError,'sealed, saved'):
+                validate_completion(data)

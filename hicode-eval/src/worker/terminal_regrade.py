@@ -1,4 +1,4 @@
-"""Replay a sealed service snapshot and run the original verifier, without a model."""
+"""Recheck a sealed Terminal answer, optionally restoring its service, without a model."""
 import hashlib
 import json
 import os
@@ -10,7 +10,7 @@ import sys
 import tarfile
 import time
 
-from protocol import atomic_json, namespace_argv
+from protocol import atomic_json, namespace_argv, Events
 from service_namespace import ServiceNamespace, service_paths, verifier_options, ACCOUNT_COUNT
 from dataset_runtime import dataset_runtime
 
@@ -39,6 +39,13 @@ def validate_snapshot(path, paths):
                 raise ValueError('Service snapshot member traverses a link')
 
 
+def validate_completion(data):
+    events = Events()
+    for offset in range(0, len(data), 65536):events.accept(data[offset:offset + 65536])
+    if not events.ready or not events.complete() or events.settled['reason'] != 'completed':
+        raise ValueError('Ordinary recheck requires sealed, saved completion events')
+
+
 def main():
     root = Path(sys.argv[1])
     import re
@@ -49,15 +56,26 @@ def main():
     if identity.get('version')!=1 or identity.get('runId')!=root.parent.name or identity.get('reviewId')!=root.name:
         raise ValueError('Invalid recheck identity')
     uid = 20000
-    paths = service_paths(config)
-    if not paths or config['dataset'] != 'terminal-bench-2.1':
-        raise ValueError('Recheck requires a reviewed Terminal service')
+    paths = service_paths(config) if config.get('service') is not None else None
+    if config['dataset'] != 'terminal-bench-2.1':
+        raise ValueError('Recheck requires a Terminal task')
+    if paths is None and identity.get('kind') != 'ordinary':
+        raise ValueError('Ordinary recheck identity missing')
     snapshot = root / 'service-system.tar'
     restart = root / 'service-restart.sh'
-    for path, key in [(snapshot, 'snapshotSha256'), (restart, 'restartSha256')]:
-        if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != identity[key]:
-            raise ValueError('Recheck input hash mismatch')
-    validate_snapshot(snapshot, paths)
+    if paths is not None:
+        for path, key in [(snapshot, 'snapshotSha256'), (restart, 'restartSha256')]:
+            if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != identity[key]:
+                raise ValueError('Recheck input hash mismatch')
+        validate_snapshot(snapshot, paths)
+    else:
+        completion = root / 'completion-events.jsonl'
+        if completion.is_symlink() or not completion.is_file() or completion.stat().st_size > 256*1024*1024:
+            raise ValueError('Invalid completion event evidence')
+        data=completion.read_bytes()
+        if hashlib.sha256(data).hexdigest()!=identity.get('eventsSha256'):
+            raise ValueError('Completion event hash mismatch')
+        validate_completion(data)
     subprocess.run(['useradd', '--uid', str(uid), '--user-group', '--no-create-home', 'eval-recheck'], check=True)
     account = pwd.getpwuid(uid)
     project, home, logs = root / 'project', root / 'home', root / 'logs'
@@ -66,7 +84,7 @@ def main():
         path.mkdir(parents=True, exist_ok=True)
     subprocess.run(['chown', '-hR', f'{uid}:{account.pw_gid}', str(project), str(home), str(logs), str(root / 'actor-events'), str(control)], check=True)
     os.chmod(root, 0o755)
-    owner = ServiceNamespace(root, uid, paths, network=config['network'],**verifier_options(config['service']))
+    owner = ServiceNamespace(root, uid, paths, network=config['network'],**verifier_options(config['service'])) if paths is not None else None
     dataset = dataset_runtime(config)
     cancelled = [False]
     signal.signal(signal.SIGTERM, lambda *_: cancelled.__setitem__(0, True))
@@ -76,12 +94,24 @@ def main():
     def base(args, *, actor=False, verifier=False):
         return namespace_argv(args, project, home, logs, control,
                               root / 'tests' if verifier else None,
+                              writable_tests=dataset.writable_tests(config) if verifier else False,
+                              workspace_aliases=dataset.workspace_aliases(config),
+                              writable_runtime_bin=dataset.writable_runtime_bin(config),
                               actor_release=config['release'] if actor else None,
                               actor_events=root / 'actor-events' if actor else None,
                               verifier_release=config['release'] if verifier else None,
                               isolated_network=actor and config['network'] == 'isolated')
 
     def namespace(args, *, verifier=False, setup=False):
+        if owner is None:
+            if config.get('verifierRootOverlay') or config.get('verifierChroot'):
+                raise ValueError('Ordinary recheck does not support alternate verifier roots')
+            result=base(args,verifier=verifier)
+            packages=[]
+            if verifier:
+                for path in ['/opt/hicode-verifier','/opt/hicode-terminal/verifier']:
+                    if Path(path).exists():packages+=['--ro-bind',path,path]
+            return result[:-len(args)]+packages+args
         if verifier:
             def view(argv):
                 result = base(argv, verifier=True)
@@ -92,38 +122,43 @@ def main():
             return owner.verifier_argv(args, view)
         return owner.actor_argv(args)
 
+    def demote():
+        os.setgid(account.pw_gid);os.setuid(uid)
+
     def command(args, *, timeout=30, extra=None, output_path=None):
         if cancelled[0]: raise RuntimeError('Recheck cancelled')
         with (output_path or logs / 'commands.txt').open('a') as output:
             return subprocess.run(args, env={**os.environ, **(extra or {})}, stdout=output,
-                                  stderr=subprocess.STDOUT, timeout=timeout, check=True)
+                                  stderr=subprocess.STDOUT, timeout=timeout, check=True,preexec_fn=demote if owner is None else None)
 
     grade, reason = 'unavailable', None
     try:
-        owner.prepare()
-        owner.start(lambda args: base(args, actor=True), {'PATH':os.environ['PATH'], 'HOME':str(home), 'LANG':'C.UTF-8'})
-        # Restore only inside the mapped, disposable service filesystem. Hidden tests
-        # are absent from its minimal mount view and no gateway or credentials exist.
-        destination = project / '.service-snapshot.tar'
-        destination.write_bytes(snapshot.read_bytes())
-        os.chown(destination, uid, account.pw_gid)
-        try: command(owner.actor_argv(['tar', '--numeric-owner', '-xf', '/app/.service-snapshot.tar', '-C', '/']), timeout=60)
-        finally: destination.unlink(missing_ok=True)
-        script = project / '.service-restart.sh'
-        script.write_bytes(restart.read_bytes()); os.chown(script, uid, account.pw_gid)
-        try: command(owner.actor_argv(['bash', '/app/.service-restart.sh']), timeout=90)
-        finally: script.unlink(missing_ok=True)
+        if owner is not None:
+            owner.prepare()
+            owner.start(lambda args: base(args, actor=True), {'PATH':os.environ['PATH'], 'HOME':str(home), 'LANG':'C.UTF-8'})
+            # Restore only inside the mapped, disposable service filesystem. Hidden tests
+            # are absent from its minimal mount view and no gateway or credentials exist.
+            destination = project / '.service-snapshot.tar'
+            destination.write_bytes(snapshot.read_bytes())
+            os.chown(destination, uid, account.pw_gid)
+            try: command(owner.actor_argv(['tar', '--numeric-owner', '-xf', '/app/.service-snapshot.tar', '-C', '/']), timeout=60)
+            finally: destination.unlink(missing_ok=True)
+            script = project / '.service-restart.sh'
+            script.write_bytes(restart.read_bytes()); os.chown(script, uid, account.pw_gid)
+            try: command(owner.actor_argv(['bash', '/app/.service-restart.sh']), timeout=90)
+            finally: script.unlink(missing_ok=True)
         grade, output = dataset.grade(root=root, config=config, uid=uid, gid=account.pw_gid,
                                       project=project, home=home, logs=logs, command=command,
-                                      namespace=namespace, demote=None, cancelled=lambda:cancelled[0])
+                                      namespace=namespace, demote=demote if owner is None else None, cancelled=lambda:cancelled[0])
         if grade == 'unavailable': reason = output[-2000:]
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         reason = str(error)[-2000:]
     finally:
-        owner.close()
+        if owner is not None:owner.close()
     atomic_json(root / 'result.json', {'version':1, 'runId':identity['runId'], 'reviewId':identity['reviewId'],
                 'grading':grade, 'reason':reason, 'modelCalls':0,
-                'snapshotSha256':identity['snapshotSha256'], 'projectSha256':identity['projectSha256'],
+                'projectSha256':identity['projectSha256'],
+                **({'snapshotSha256':identity['snapshotSha256']} if owner is not None else {'kind':'ordinary'}),
                 'elapsedSeconds':round(time.monotonic()-started, 3)})
 
 

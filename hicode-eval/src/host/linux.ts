@@ -7,7 +7,7 @@ import type {SweTask} from './sweTasks.js';
 import type {RegradeInput} from './regrade.js';
 import {taskAdapters} from './datasets.js';
 import { run, readJson, save, runEvidenceTree, exists } from './store.js';
-import type { Batch, Config, Run,ServiceRegradeResult,ContinuationOrigin } from './types.js';
+import type { Batch, Config, Run,TerminalRegradeResult,ContinuationOrigin } from './types.js';
 import {verifyCheckpointArchive,environmentDigest} from './continuation.js';
 import {regradeResultSchema,runSchema,containerSchema} from './types.js';
 import type {Dataset} from './datasets.js';
@@ -16,7 +16,7 @@ import {RunContainers} from './containers.js';
 import {EnvironmentStore} from './environments.js';
 import {TaskCatalog} from './catalog.js';
 import type {CatalogTask} from './catalog.js';
-import {regradeService} from './serviceRegrade.js';
+import {regradeTerminal} from './terminalRegrade.js';
 import {EvalLayout} from './layout.js';
 import {WorkerBundle} from './workerBundle.js';
 
@@ -100,13 +100,13 @@ export class LinuxMachine {
     await this.containers.remove(reviewId);
   }
   async freeze():Promise<void>{this.workerBundle??=await WorkerBundle.capture(EVAL_ROOT);}
-  async regradeService(state:Run,task:CatalogTask,restartScript:string,reviewId:string,signal:AbortSignal):Promise<ServiceRegradeResult>{
-    const backend=this.backend(state.dataset);if(backend!==this)return backend.regradeService(state,task,restartScript,reviewId,signal);
+  async regradeTerminal(state:Run,task:CatalogTask,restartScript:string|undefined,reviewId:string,signal:AbortSignal):Promise<TerminalRegradeResult>{
+    const backend=this.backend(state.dataset);if(backend!==this)return backend.regradeTerminal(state,task,restartScript,reviewId,signal);
     await this.freeze();if(!this.workerBundle)throw Error('Worker package not frozen');
-    return regradeService(this.config,state,task,restartScript,this.workerBundle,reviewId,signal);
+    return regradeTerminal(this.config,state,task,restartScript,this.workerBundle,reviewId,signal);
   }
-  async disposeServiceRecheck(state:Run,reviewId:string):Promise<void>{
-    const backend=this.backend(state.dataset);if(backend!==this)return backend.disposeServiceRecheck(state,reviewId);
+  async disposeTerminalRecheck(state:Run,reviewId:string):Promise<void>{
+    const backend=this.backend(state.dataset);if(backend!==this)return backend.disposeTerminalRecheck(state,reviewId);
     const path=new EvalLayout(this.config.data).recheck(state.id,reviewId),receipt=join(path,'container.json');
     if(await exists(receipt))await readJson(receipt,z.object({reviewId:z.literal(reviewId),container:z.literal(this.containers.name(reviewId)),context:z.literal(this.config.context)}).strict());
     await this.containers.remove(reviewId);await save(join(path,'container-disposed.json'),{reviewId,at:new Date().toISOString()});
