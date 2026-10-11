@@ -13,9 +13,11 @@ import * as publicTasks from '../src/host/publicTasks.js';
 import {publicTaskProfile} from '../src/host/publicTasks.js';
 import {serveWorker} from '../src/host/server.js';
 import {Client} from '../src/host/client.js';
+import * as deepTasks from '../src/host/deepTasks.js';
+import * as deepContinuation from '../src/host/deepContinuation.js';
 
-async function stopped(f:Awaited<ReturnType<typeof fixture>>){
- const task=await seed(f,'training-or-service'),state={...finished(task.id),model:f.config.model.model,state:'error' as const,execution:'timeout' as const,grading:'failed' as const};
+async function stopped(f:Awaited<ReturnType<typeof fixture>>,id='a'.repeat(16),taskId='training-or-service',batchId='f'.repeat(16)){
+ const task=await seed(f,taskId),state={...finished(task.id,id),batchId,model:f.config.model.model,state:'error' as const,execution:'timeout' as const,grading:'failed' as const};
  const root=f.layout.run(state.id),evidence=join(root,'evidence');await mkdir(evidence,{recursive:true});
  await cp(task.source,join(root,'task',task.id),{recursive:true,preserveTimestamps:true});
  await save(join(root,'task-files.json'),await tree(task.source));
@@ -39,6 +41,33 @@ test('continuation rejects edited checkpoints and uncollected attempts without m
   await writeFile(join(f.layout.run(state.id),'evidence/continuation.tar.gz'),'edited fixture');
   await expect(readCheckpoint(f.layout,state)).rejects.toThrow('size changed');
  }finally{await f.cleanup();}
+});
+
+test('multiple saved sessions publish one batch with independent checkpoint identities and shared concurrency',async()=>{
+ const f=await fixture(),a=await stopped(f),b=await stopped(f,'b'.repeat(16),'second-task','e'.repeat(16));
+ const lab=new Lab(f.config,'offline-secret');
+ const profile=publicTaskProfile({fixture:{hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPrelude:'none'}},'fixture');
+ const validate=spyOn(publicTasks,'validatePublicTask').mockResolvedValue(profile);
+ const resolve=spyOn(EnvironmentStore.prototype,'resolve').mockImplementation(async task=>task.id===a.task.id?a.task.binding:b.task.binding);
+ const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined),dispose=spyOn(LinuxMachine.prototype,'disposeRun').mockResolvedValue(undefined);
+ const cancel=spyOn(LinuxMachine.prototype,'cancel').mockResolvedValue(undefined);
+ let finish!:()=>void;const gate=new Promise<void>(r=>{finish=r;});const seen=new Set<string>();
+ const execute=spyOn(LinuxMachine.prototype,'execute').mockImplementation(async(run,_path,_key,phase,_model,continuation)=>{
+  const original=run.task===a.task.id?a:b;
+  expect(continuation?.runId).toBe(original.state.id);expect(continuation?.checkpoint).toEqual(original.checkpoint);
+  expect(run.budget.agentSeconds).toBe(1800);seen.add(run.id);await phase('Running HiCode');await gate;
+  return {type:'result',execution:'completed',grading:'failed',uid:20000};
+ });
+ try{
+  await lab.init();const request={runs:[a.state.id,b.state.id],agentSeconds:1800,prompt:'继续'};
+  const batch=await lab.continueBatch(request);expect(batch.runIds).toHaveLength(2);expect(batch.concurrency).toBe(2);
+  expect(batch.continueOf).toBeUndefined();expect(Object.keys(batch.continuations!)).toEqual(batch.runIds);
+  expect((await lab.continueBatch(request)).id).toBe(batch.id);
+  const deadline=Date.now()+2000;while(seen.size!==2){if(Date.now()>deadline)throw Error('Batch did not start both sessions');await Bun.sleep(5);}
+  for(const original of [a,b])expect(await readJson(join(f.layout.run(original.state.id),'state.json'),runSchema)).toEqual(original.state);
+  finish();await lab.close();expect(execute).toHaveBeenCalledTimes(2);
+  const restarted=new Lab(f.config,'offline-secret');await restarted.init();await restarted.close();
+ }finally{finish();await lab.close();validate.mockRestore();resolve.mockRestore();prepare.mockRestore();dispose.mockRestore();cancel.mockRestore();execute.mockRestore();await f.cleanup();}
 });
 
 test('live continuation freezes original model, restores the checkpoint, adds time, and leaves original scores intact',async()=>{
@@ -79,4 +108,46 @@ test('changed runtime and provider connections cannot silently continue an old a
   await expect(lab.continueRun({run:state.id,agentSeconds:60,prompt:'继续'})).rejects.toThrow('original model connection');
   expect(lab.batches.size).toBe(1);
  }finally{await lab.close();await f.cleanup();}
+});
+
+test('explicit DeepSWE Actor recovery resumes its saved session, records input provenance and retains the old result',async()=>{
+ const f=await fixture(),saved=await stopped(f);
+ const state=runSchema.parse({...saved.state,dataset:'deep-swe',network:'isolated'}),root=f.layout.run(state.id);
+ const environment={...saved.task.binding,task: 'deep-swe:'+state.task};
+ await save(join(root,'state.json'),state);await save(join(root,'environment.json'),environment);
+ const source=f.layout.source({id:state.task,dataset:'deep-swe'});
+ await cp(saved.task.source,source,{recursive:true});
+ await f.catalog.register([{id:state.task,dataset:'deep-swe',source}]);await f.catalog.record(state);
+ const parent=await readJson(f.layout.batch(state.batchId),batchSchema);
+ await save(f.layout.batch(parent.id),{...parent,network:'isolated',taskRefs:[{dataset:'deep-swe',id:state.task}]});
+ const archive=join(root,'evidence/continuation.tar.gz');let closed=0,executed=false,finish!:()=>void;
+ const gate=new Promise<void>(r=>{finish=r;});
+ const recover=spyOn(deepContinuation,'prepareDeepActor').mockImplementation(async(_layout,run)=>{
+  expect(run.id).toBe(state.id);return {checkpoint:saved.checkpoint,archive,close:async()=>{closed++;}};
+ });
+ const validate=spyOn(deepTasks,'validateDeepTask').mockResolvedValue({kind:'deep-swe',repository:'https://github.com/fixture/repo',baseCommit:'a'.repeat(40),
+  declaredImage:'public.ecr.aws/d3j8x8q7/swe-bench-202605:fixture',image:'public.ecr.aws/d3j8x8q7/swe-bench-202605@sha256:'+'a'.repeat(64),
+  architecture:'amd64',agentSeconds:10800,verifierSeconds:1800,hashes:{},runtimeEnvironment:{}});
+ const resolve=spyOn(EnvironmentStore.prototype,'resolve').mockResolvedValue(environment);
+ const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined),dispose=spyOn(LinuxMachine.prototype,'disposeRun').mockResolvedValue(undefined);
+ const cancel=spyOn(LinuxMachine.prototype,'cancel').mockResolvedValue(undefined);
+ const execute=spyOn(LinuxMachine.prototype,'execute').mockImplementation(async(run,_path,_key,phase,model,continuation)=>{
+  expect(run.network).toBe('isolated');expect(run.budget.agentSeconds).toBe(1800);expect(model).toEqual(parent.model);
+  expect(continuation?.checkpoint.sessionId).toBe('original-session');expect(continuation?.inputSource).toBe('sealed-deep-actor');
+  expect(continuation?.prompt).toBe('继续');executed=true;await phase('Running HiCode');await gate;
+  return {type:'result',execution:'completed',grading:'failed',uid:20000};
+ });
+ const lab=new Lab(f.config,'offline-secret');
+ try{
+  await lab.init();const request={run:state.id,agentSeconds:1800,prompt:'继续',restoreActor:true};
+  const batch=await lab.continueRun(request);
+  expect(batch.continueOf?.inputSource).toBe('sealed-deep-actor');expect(closed).toBe(1);
+  expect((await lab.continueRun(request)).id).toBe(batch.id);expect(recover).toHaveBeenCalledTimes(1);
+  await expect(lab.continueRun({...request,restoreActor:false})).rejects.toThrow('different inputs');
+  const deadline=Date.now()+2000;while(!executed){if(Date.now()>deadline)throw Error('Saved Actor did not start');await Bun.sleep(5);}
+  expect(await readJson(join(root,'state.json'),runSchema)).toEqual(state);
+  finish();await lab.close();expect(execute).toHaveBeenCalledTimes(1);
+ }finally{
+  finish();await lab.close();recover.mockRestore();validate.mockRestore();resolve.mockRestore();prepare.mockRestore();dispose.mockRestore();cancel.mockRestore();execute.mockRestore();await f.cleanup();
+ }
 });

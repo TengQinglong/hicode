@@ -42,16 +42,45 @@ function environmentBuilder(definition?:DependencyRecipe){
 /** Only recipe inputs enter builds. The cache machine and run files are never imported. */
 export class EnvironmentStore {
   private readonly dependencyBuilds=new Map<string,Promise<Layer>>();
-  constructor(readonly root:string,private readonly context:string,private readonly backends:DatasetBackends={},private readonly buildProxy?:string){}
+  constructor(readonly root:string,private readonly context:string,private readonly backends:DatasetBackends={},private readonly buildProxy?:string,private readonly signal?:AbortSignal){}
   private routed(task:CatalogTask){
     const backend=this.backends[task.dataset];
-    return backend&&backend.context!==this.context?new EnvironmentStore(this.root,backend.context,{},this.buildProxy):null;
+    return backend&&backend.context!==this.context?new EnvironmentStore(this.root,backend.context,{},this.buildProxy,this.signal):null;
   }
   private docker(...args:string[]){return ['docker','--context',this.context,...args];}
+  private execute(command:string[],options:Parameters<typeof run>[1]={}){
+    return run(command,{...options,signal:this.signal});
+  }
   private bindingPath(task:CatalogTask){return environmentBindingPath(this.root,task);}
+  private async imageRuntime(dataset:CatalogTask['dataset'],materialize=false){
+    const layout=EvalLayout.fromEnvironments(this.root);
+    const images=await readJson(join(layout.runtime,'images.json'),baseImagesSchema);
+    let dockerfile=await readFile(layout.runtimeDockerfile(dataset),'utf8');
+    for(const [name,ref] of Object.entries(images)){
+      const placeholder='{{runtime_'+name+'}}';
+      if(!dockerfile.includes(placeholder))continue;
+      let source=ref;
+      if(materialize){
+        const digestId='sha256:'+ref.split('@sha256:')[1];
+        let image;
+        try{image=await this.inspect(ref);}
+        catch{
+          try{image=await this.inspect(digestId);}
+          catch{await this.execute(this.docker('pull','--platform','linux/arm64',ref),{timeout:600000});image=await this.inspect(ref);}
+        }
+        if(image.Architecture!=='arm64'||image.Id!==digestId)throw Error('Reviewed native runtime image identity changed: '+name);
+        source='hicode-runtime-'+name+':'+image.Id.slice(7);
+        await this.execute(this.docker('tag',image.Id,source));
+      }
+      dockerfile=dockerfile.replaceAll(placeholder,source);
+    }
+    if(dockerfile.split('{{source}}').length!==2||/\{\{[^}]+\}\}/.test(dockerfile.replace('{{source}}','')))
+      throw Error('Dataset runtime Dockerfile has unresolved or repeated image placeholders');
+    return {dockerfile,images};
+  }
   private async inspect(name:string){
-    return z.array(z.object({Id:imageId,Config:z.object({Labels:z.record(z.string()).nullable().optional()})})).length(1)
-      .parse(JSON.parse(await run(this.docker('image','inspect',name))))[0]!;
+    return z.array(z.object({Id:imageId,Architecture:z.string().optional(),Config:z.object({Labels:z.record(z.string()).nullable().optional()})})).length(1)
+      .parse(JSON.parse(await this.execute(this.docker('image','inspect',name))))[0]!;
   }
   private async verifyImage(layer:Layer){
     const image=await this.inspect(layer.imageId);
@@ -64,8 +93,8 @@ export class EnvironmentStore {
       throw error;
     }
   }
-  private async build(kind:Layer['kind'],parent:string,recipeSha256:string,stage:string,dockerfile:string){
-    const key=digest(JSON.stringify({version:1,kind,parent,recipeSha256,dockerfile}));
+  private async build(kind:Layer['kind'],parent:string,recipeSha256:string,stage:string,dockerfile:string,platform?:'amd64'){
+    const key=digest(JSON.stringify({version:1,kind,parent,recipeSha256,dockerfile,platform:platform??null}));
     const directory=join(this.root,'layers',key),receipt=join(directory,'layer.json');
     await mkdir(directory,{recursive:true,mode:0o700});
     const release=await lease(directory,'build');
@@ -75,7 +104,7 @@ export class EnvironmentStore {
         if(await this.available(layer)){await this.verifyImage(layer);return layer;}
       }
       const tag='hicode-env-'+kind+':'+key;
-      if(await run(this.docker('image','ls','--quiet','--filter','reference='+tag))){
+      if(await this.execute(this.docker('image','ls','--quiet','--filter','reference='+tag))){
         const image=await this.inspect(tag);
         const layer:Layer={version:1,kind,key,imageId:image.Id,parentImage:imageId.parse(parent),recipeSha256,createdAt:new Date().toISOString()};
         await this.verifyImage(layer);await save(receipt,layer);return layer;
@@ -84,7 +113,7 @@ export class EnvironmentStore {
       await writeFile(join(stage,'Dockerfile'),source);
       // Keep only the explicit build context and immutable image receipt for reconstruction.
       try {
-        const output=await run(this.docker('build',...(this.buildProxy?['--build-arg','HTTP_PROXY='+this.buildProxy,'--build-arg','HTTPS_PROXY='+this.buildProxy]:[]),'--network=default','--pull=false','--progress=plain','-t',tag,stage),{timeout:1800000,includeStderr:true});
+        const output=await this.execute(this.docker('build',...(platform?['--platform','linux/'+platform]:[]),...(this.buildProxy?['--build-arg','HTTP_PROXY='+this.buildProxy,'--build-arg','HTTPS_PROXY='+this.buildProxy]:[]),'--network=default','--pull=false','--progress=plain','-t',tag,stage),{timeout:1800000,includeStderr:true});
         await writeFile(join(directory,'build.log'),output.slice(-32768));
       }catch(error){
         const log=join(directory,'build.log');await writeFile(log,String(error));
@@ -97,7 +126,7 @@ export class EnvironmentStore {
   }
   private async childDockerfile(parent:Layer,body:string){
     const tag='hicode-env-parent:'+parent.imageId.slice(7);
-    await run(this.docker('tag',parent.imageId,tag));
+    await this.execute(this.docker('tag',parent.imageId,tag));
     return 'FROM '+tag+'\nUSER root\n'+body;
   }
   async prepareBase():Promise<Layer>{
@@ -118,7 +147,7 @@ export class EnvironmentStore {
         if(previous.recipeSha256===recipeSha256&&await this.available(previous)){await this.verifyImage(previous);return previous;}
       }
       for(const ref of Object.values(images)){
-        try{await this.inspect(ref);}catch{await run(this.docker('pull',ref),{timeout:180000});}
+        try{await this.inspect(ref);}catch{await this.execute(this.docker('pull',ref),{timeout:180000});}
       }
       const parent=(await this.inspect(images.system)).Id;
       const layer=await this.build('base',parent,recipeSha256,stage,dockerfile);
@@ -138,9 +167,13 @@ export class EnvironmentStore {
         throw Error('The target project must come from the frozen task source, not a package in the dependency image');
       }
     }
-    const recipe='image' in metadata?digest(await readFile(EvalLayout.fromEnvironments(this.root).runtimeDockerfile(task.dataset),'utf8')+
-      await readFile(join(REPOSITORY_ROOT,'package.json'),'utf8')+await readFile(join(REPOSITORY_ROOT,'bun.lock'),'utf8')+
-      (metadata.runtimeTools?.length?'\n'+JSON.stringify(metadata.runtimeTools):'')):digest((await Promise.all([environmentBuilder(dependencies),'venv_paths.py'].map(name=>readFile(join(EVAL_ROOT,'src/worker',name),'utf8')))).join('\n')+
+    let recipe:string;
+    if('image' in metadata){
+      const runtime=await this.imageRuntime(task.dataset);
+      recipe=digest(runtime.dockerfile+JSON.stringify(runtime.images)+
+        await readFile(join(REPOSITORY_ROOT,'package.json'),'utf8')+await readFile(join(REPOSITORY_ROOT,'bun.lock'),'utf8')+
+        (metadata.runtimeTools?.length?'\n'+JSON.stringify(metadata.runtimeTools):''));
+    }else recipe=digest((await Promise.all([environmentBuilder(dependencies),'venv_paths.py'].map(name=>readFile(join(EVAL_ROOT,'src/worker',name),'utf8')))).join('\n')+
       JSON.stringify(dependencies??null)+await readFile(join(EVAL_ROOT,'src/datasets/reviewed_test_deps.py'),'utf8'));
     if(task.preparation){
       if(await realpath(task.preparation.directory)!==resolve(task.preparation.directory))throw Error('Symlinked preparation directory');
@@ -216,14 +249,14 @@ export class EnvironmentStore {
     const stage=join(EvalLayout.fromEnvironments(this.root).builds,'stage-'+randomUUID());await mkdir(stage);
     try {
       let source;
-      try{source=await this.inspect(metadata.image);}catch{await run(this.docker('pull','--platform','linux/amd64',metadata.image),{timeout:600000});source=await this.inspect(metadata.image);}
-      const arch=await run(this.docker('image','inspect','--format','{{.Architecture}}',source.Id));
+      try{source=await this.inspect(metadata.image);}catch{await this.execute(this.docker('pull','--platform','linux/amd64',metadata.image),{timeout:600000});source=await this.inspect(metadata.image);}
+      const arch=await this.execute(this.docker('image','inspect','--format','{{.Architecture}}',source.Id));
       if(arch!==metadata.architecture)throw Error('Reviewed image architecture changed');
-      await run(this.docker('tag',source.Id,'hicode-env-source:'+source.Id.slice(7)));
-      const base=await this.build('base',source.Id,digest(metadata.image),stage,'FROM hicode-env-source:'+source.Id.slice(7)+'\nUSER root\n');
+      await this.execute(this.docker('tag',source.Id,'hicode-env-source:'+source.Id.slice(7)));
+      const base=await this.build('base',source.Id,digest(metadata.image),stage,'FROM hicode-env-source:'+source.Id.slice(7)+'\nUSER root\n',metadata.architecture);
       for(const name of ['package.json','bun.lock'])await cp(join(REPOSITORY_ROOT,name),join(stage,name));
-      const template=await readFile(EvalLayout.fromEnvironments(this.root).runtimeDockerfile(task.dataset),'utf8');
-      const parentTag='hicode-env-parent:'+base.imageId.slice(7);await run(this.docker('tag',base.imageId,parentTag));
+      const template=(await this.imageRuntime(task.dataset,true)).dockerfile;
+      const parentTag='hicode-env-parent:'+base.imageId.slice(7);await this.execute(this.docker('tag',base.imageId,parentTag));
       let dockerfile=template.replace('{{source}}',parentTag);
       if(metadata.runtimeTools?.includes('go-ctrf-json-reporter'))
         dockerfile+='\nRUN install -m 755 /root/go/bin/go-ctrf-json-reporter /usr/local/bin/go-ctrf-json-reporter && mkdir -p /opt/hicode-go && cp -a /root/go/pkg /opt/hicode-go/pkg && chmod -R a+rX /opt/hicode-go\n'+
@@ -231,7 +264,7 @@ export class EnvironmentStore {
       if(metadata.runtimeTools?.includes('rust-toolchain'))
         dockerfile+='\nRUN mkdir -p /opt/hicode-rust && cp -a /root/.cargo /opt/hicode-rust/cargo && cp -a /root/.rustup /opt/hicode-rust/rustup && chmod -R a+rX /opt/hicode-rust\n'+
           'ENV CARGO_HOME=/opt/hicode-rust/cargo RUSTUP_HOME=/opt/hicode-rust/rustup CARGO_NET_OFFLINE=true PATH=/opt/hicode-rust/cargo/bin:${PATH}\n';
-      const dependencies=await this.build('dependencies',base.imageId,identity.recipe,stage,dockerfile);
+      const dependencies=await this.build('dependencies',base.imageId,identity.recipe,stage,dockerfile,metadata.architecture);
       const binding:EnvironmentBinding={version:1,task:taskKey(task),sourceHash:identity.hash,base,dependencies,preparation:null};
       await save(this.bindingPath(task),binding);return binding;
     }finally{await rm(stage,{recursive:true,force:true});}
@@ -255,7 +288,7 @@ export class EnvironmentStore {
         body+='RUN chmod -R a+rX /opt/hicode-swe/source-cache\n';
       if('repo' in identity.metadata){
         const metadata=identity.metadata;
-        const pins=z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.+-]*$/)).parse(JSON.parse(await run(['python3','-c',
+        const pins=z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*==[0-9][A-Za-z0-9.+-]*$/)).parse(JSON.parse(await this.execute(['python3','-c',
           'import sys,json;sys.path.insert(0,sys.argv[1]);from reviewed_test_deps import reviewed_test_dependencies;print(json.dumps(reviewed_test_dependencies(sys.argv[2],sys.argv[3],sys.argv[4])))',
           join(EVAL_ROOT,'src/datasets'),metadata.repo,metadata.version,join(task.source!,'repository')])));
         if(pins.length){

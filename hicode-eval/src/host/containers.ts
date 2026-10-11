@@ -1,8 +1,10 @@
 import {createHash} from 'node:crypto';
+import {isIP} from 'node:net';
 import {z} from 'zod';
 import type {Config} from './types.js';
 import {idSchema} from './types.js';
 import {run} from './store.js';
+import {resolvePublicAddresses} from '../../../src/tools/webFetch/network.js';
 
 const inspectSchema=z.array(z.object({Id:z.string(),Image:z.string(),State:z.object({Running:z.boolean()}),
   Config:z.object({Labels:z.record(z.string())})})).length(1);
@@ -14,14 +16,25 @@ export class RunContainers {
   name(id:string){idSchema.parse(id);return 'hicode-run-'+this.owner.slice(0,12)+'-'+id;}
   private network(id:string){return this.name(id)+'-net';}
   private docker(...args:string[]){return ['docker','--context',this.config.context,...args];}
-  async create(id:string,image:string):Promise<string>{
+  private async modelHost(baseUrl:string|undefined){
+    if(!baseUrl)return [];
+    const target=new URL(baseUrl);
+    if(target.protocol!=='https:'||isIP(target.hostname)!==0||!target.hostname.includes('.'))return [];
+    const addresses=await resolvePublicAddresses(target.hostname);
+    const ipv4=[...new Set(addresses.filter(value=>value.family===4).map(value=>value.address))];
+    if(!ipv4.length)throw Error('Model endpoint has no public IPv4 address for the evaluation container');
+    return ipv4.flatMap(address=>['--add-host',target.hostname+':'+address]);
+  }
+  async create(id:string,image:string,modelBaseUrl?:string):Promise<string>{
     if(!/^sha256:[a-f0-9]{64}$/.test(image))throw Error('An immutable prepared image is required');
     const name=this.name(id),network=this.network(id);
+    const modelHost=await this.modelHost(modelBaseUrl);
     await run(this.docker('network','create','--label','dev.hicode.owner='+this.owner,'--label','dev.hicode.run='+id,network));
     try {
       await run(this.docker('create','--name',name,'--init','--user','root','--network',network,
         '--memory',String(this.config.memoryMb)+'m','--cpus',String(this.config.cpus),'--pids-limit','1024',
         '--security-opt','seccomp=unconfined','--security-opt','apparmor=hicode-development','--security-opt','systempaths=unconfined',
+        ...modelHost,
         '--label','dev.hicode.role=attempt','--label','dev.hicode.owner='+this.owner,'--label','dev.hicode.run='+id,
         image,'sleep','infinity'));
       await run(this.docker('start',name));await this.assert(id);return name;

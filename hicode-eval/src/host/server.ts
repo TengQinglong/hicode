@@ -7,13 +7,16 @@ import type {Lab} from './manager.js';
 import {Client} from './client.js';
 import {EvaluationView} from './view.js';
 import {EVAL_ROOT} from '../paths.js';
-import {submissionSchema,idSchema,environmentPreparationSchema,terminalRegradeRequestSchema,continuationRequestSchema} from './types.js';
+import {submissionSchema,idSchema,environmentPreparationSchema,terminalRegradeRequestSchema,continuationRequestSchema,batchContinuationRequestSchema} from './types.js';
 import {exists} from './store.js';
+import {taskRegistrationSchema} from './taskRegistration.js';
 
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}});
 const healthSchema=z.object({data:z.string(),schedulingBlocked:z.boolean()}).strict();
 const mutations={submit:submissionSchema,'prepare-environments':environmentPreparationSchema,'cancel-batch':z.object({batch:idSchema}).strict(),
+  'register-tasks':taskRegistrationSchema,
   'continue-run':continuationRequestSchema,
+  'continue-batch':batchContinuationRequestSchema,
   'regrade-terminal':terminalRegradeRequestSchema,
   'resume-batch':z.object({batch:idSchema}).strict(),'recover-run':z.object({run:idSchema}).strict(),
   'retry-run':z.object({run:idSchema}).strict(),report:z.object({batch:idSchema,text:z.string().trim().min(1).max(200000)}).strict(),
@@ -83,7 +86,9 @@ export function serveWorker(lab:Lab,port:number){
       const name=mutation(url.pathname.slice(5));if(!url.pathname.startsWith('/api/')||!name)return json({error:'Not found'},404);
       const body:unknown=await request.json();
       if(name==='submit')return json({batch:await lab.submit(submissionSchema.parse(body))});
+      if(name==='register-tasks')return json(await lab.registerTasks(taskRegistrationSchema.parse(body)));
       if(name==='continue-run')return json({batch:await lab.continueRun(continuationRequestSchema.parse(body))});
+      if(name==='continue-batch')return json({batch:await lab.continueBatch(batchContinuationRequestSchema.parse(body))});
       if(name==='prepare-environments')return json(await lab.prepareEnvironments(environmentPreparationSchema.parse(body)));
       if(name==='regrade-terminal')return json(await lab.regrade(terminalRegradeRequestSchema.parse(body)));
       if(name==='report'){const args=mutations.report.parse(body);await lab.report(args.batch,args.text);return json({ok:true});}

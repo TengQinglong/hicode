@@ -111,7 +111,7 @@ export function validatePinnedAddresses(url: URL, addresses: readonly string[]):
     return [...new Set(addresses)].map(address => ({address, family: isIP(address) === 4 ? 4 : 6}));
 }
 
-async function resolvePublicAddresses(hostname: string) {
+export async function resolvePublicAddresses(hostname: string) {
     const normalized = normalizedHostname(hostname);
     if (isIP(normalized) !== 0) {
         if (!isPublicAddress(normalized)) {

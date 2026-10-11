@@ -36,8 +36,8 @@ export async function deepExecution(state:Run,source:string,definition:string):P
   if(state.network!=='isolated')throw Error('DeepSWE requires the original no-network contract');
   const deep=await validateDeepTask(state.task,source,definition);
   return {originalAgentSeconds:deep.agentSeconds,verifierSeconds:deep.verifierSeconds,setupAllowance:600,
-    runnerPython:'python3',verifierSource:join(source,'tests'),
-    job:{dataset:'deep-swe',deep:{id:state.task,baseCommit:deep.baseCommit,runtimeEnvironment:deep.runtimeEnvironment},initializer:null,packages:[],verifierPackages:[]},
+    runnerPython:'/opt/hicode-control/bin/python3',verifierSource:join(source,'tests'),
+    job:{dataset:'deep-swe',continuationEnabled:true,deep:{id:state.task,baseCommit:deep.baseCommit,runtimeEnvironment:deep.runtimeEnvironment},initializer:null,packages:[],verifierPackages:[]},
     stage:async({container,remote,docker})=>{
       await run(docker('exec',container,'mkdir','-p','/logs/artifacts'));
       const head=await run(docker('exec',container,'git','-C','/app','rev-parse','HEAD'));

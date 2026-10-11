@@ -63,7 +63,9 @@ export async function collectResources(config:Config,catalog:TaskCatalog,runs:re
       if(!layer)continue;const key=context+'|'+layer.imageId;
       let image=images.get(key);if(!image){image={context,id:layer.imageId,key:layer.key,kind:layer.kind,tasks:new Set()};images.set(key,image);}
       if(image.key!==layer.key)throw Error('Conflicting image receipts');image.tasks.add(taskKey(task));
-      if(layer.kind==='base'||task.status!=='passed')protectedImages.add(key);
+      // DeepSWE bases wrap the official per-task image; they are not the
+      // common runtime. Keep them only while an unpassed task still uses them.
+      if((layer.kind==='base'&&task.dataset!=='deep-swe')||task.status!=='passed')protectedImages.add(key);
     }
   }
   const deleted:string[]=[],blocked:{image:string;reason:string}[]=[],candidates:string[]=[];
@@ -72,11 +74,15 @@ export async function collectResources(config:Config,catalog:TaskCatalog,runs:re
     const docker=(...args:string[])=>['docker','--context',context,...args];
     let local:Set<string>,containers:Set<string>;
     try{
-      local=new Set((await run(docker('image','ls','-a','--no-trunc','--format','{{.ID}}'),{timeout:15000})).split('\n'));
-      containers=new Set((await run(docker('ps','-a','--no-trunc','--format','{{.Image}}'),{timeout:15000})).split('\n'));
+      // QEMU-backed AMD64 engines can take well over 15 seconds to enumerate
+      // a large image store even when the daemon is healthy. This is an
+      // inventory boundary, not an execution timeout.
+      local=new Set((await run(docker('image','ls','-a','--no-trunc','--format','{{.ID}}'),{timeout:60000})).split('\n'));
+      containers=new Set((await run(docker('ps','-a','--no-trunc','--format','{{.Image}}'),{timeout:60000})).split('\n'));
     }catch{blocked.push({image:context,reason:'Docker engine unavailable; no deletion performed'});continue;}
     present.set(context,local);
-    const eligible=[...images.entries()].filter(([key,i])=>i.context===context&&!protectedImages.has(key)&&local.has(i.id)).sort((a,b)=>(a[1].kind==='task'?0:1)-(b[1].kind==='task'?0:1));
+    const order:Record<string,number>={task:0,dependencies:1,base:2};
+    const eligible=[...images.entries()].filter(([key,i])=>i.context===context&&!protectedImages.has(key)&&local.has(i.id)).sort((a,b)=>order[a[1].kind]!-order[b[1].kind]!);
     for(const [,image] of eligible){
       if(containers.has(image.id)){blocked.push({image:image.id,reason:'Container reference'});continue;}
       const info=z.array(z.object({Id:z.string(),Config:z.object({Labels:z.record(z.string()).nullable()}),RepoTags:z.array(z.string()).nullable()})).length(1).parse(JSON.parse(await run(docker('image','inspect',image.id))))[0]!;
@@ -87,7 +93,7 @@ export async function collectResources(config:Config,catalog:TaskCatalog,runs:re
       try{for(const tag of tags)await run(docker('image','rm',tag));if(!tags.length)await run(docker('image','rm',image.id));}
       catch{blocked.push({image:image.id,reason:'Docker retained a referenced image'});}
     }
-    if(apply)present.set(context,new Set((await run(docker('image','ls','-a','--no-trunc','--format','{{.ID}}'),{timeout:15000})).split('\n')));
+    if(apply)present.set(context,new Set((await run(docker('image','ls','-a','--no-trunc','--format','{{.ID}}'),{timeout:60000})).split('\n')));
     if(apply)for(const [,image] of eligible)if(!present.get(context)!.has(image.id))deleted.push(image.id);
   }
   if(apply){

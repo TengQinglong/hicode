@@ -86,6 +86,7 @@ export interface MemoryTaskSnapshot {
 }
 export interface StartMemoryTaskInput {signal:AbortSignal;turnId:string;background:boolean;baseline?:readonly string[];}
 export interface TaskReviewEvidence {
+    /** Recent trigger interval; activity includes the entire currently visible History. */
     fromRound: number;
     toRound: number;
     requirements: string;

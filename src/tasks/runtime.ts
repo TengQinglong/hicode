@@ -324,7 +324,7 @@ class TaskRuntime implements TaskRuntimeLike {
                 throw new Error("Task review owner is unavailable");
             }
             if (!Number.isSafeInteger(evidence.fromRound) || !Number.isSafeInteger(evidence.toRound) || evidence.fromRound < 1 ||
-                evidence.toRound !== evidence.fromRound + 9 || evidence.requirements.length > 17_000 || evidence.activity.length > 24_000) {
+                evidence.toRound !== evidence.fromRound + 9) {
                 throw new Error("Invalid frozen task review evidence");
             }
             if ([...this.tasks.values()].some(task => isReviewTask(task) && task.owner.sessionId === binding.sessionId && task.status === "running")) {

@@ -222,8 +222,10 @@ try:
         if events.complete():
             if events.settled['reason']!='completed':raise RuntimeError('Agent stopped: '+events.settled['reason'])
             status='completed';break
-        if submitted is None and time.monotonic()-startup>40:raise RuntimeError('TUI ready event missing')
-        if submitted is not None and not events.started and time.monotonic()-submitted>15:raise RuntimeError('Prompt submission was not acknowledged; no model request started')
+        # Restoring a large persisted conversation on an emulated backend can
+        # take longer than a fresh TUI. This is separate from the model budget.
+        if submitted is None and time.monotonic()-startup>(300 if continuation is not None else 40):raise RuntimeError('TUI ready event missing')
+        if submitted is not None and not events.started and time.monotonic()-submitted>(120 if continuation is not None else 15):raise RuntimeError('Prompt submission was not acknowledged; no model request started')
         if tmux('display-message','-p','-t','hicode:0.0','#{pane_dead}').strip()=='1':raise RuntimeError('HiCode exited before completion')
         time.sleep(.5)
     else:status='timeout'

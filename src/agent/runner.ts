@@ -125,9 +125,8 @@ async function runAgentCore(
     const turnId = ctx.turnId;
     const draft = new ResponseDraft(emitEvent);
     let iterations = 0;
-    const taskReview = new TaskReviewProgress(ctx, contentText(userInput), options.inputOrigin ?? "user", history);
+    const taskReview = new TaskReviewProgress(ctx, history);
     const onEvent = async (event: AgentEvent): Promise<void> => {
-        taskReview.record(event, iterations);
         if (event.type === "assistant_text") {
             const responseId = await draft.finish("committed");
             await emitEvent({...event, ...(responseId ? {responseId} : {})});
@@ -182,7 +181,7 @@ async function runAgentCore(
     const appendQueuedInputs = async (inputs: readonly QueuedAgentInput[]) => {
         const accepted = inputs.filter(input => !ctx.taskJoin || ctx.taskJoin.accepts(input));
         for (const input of accepted) {
-            taskReview.recordInput(input, iterations);
+            if (input.source === "user_input") taskReview.steer();
             history.push({role: "user", origin: input.source === "user_input" ? "user" : input.source === "agent_message" ? (options.inputOrigin === "assignment" ? "assignment" : "agent") : "task_notification", content: input.content});
         }
         for (const input of accepted) {
@@ -205,7 +204,7 @@ async function runAgentCore(
             i++
         ) {
             iterations = i + 1;
-            if (i > 0) taskReview.completedRound(i);
+            if (i > 0) taskReview.completedRound(i, history);
             // Capture terminal delegates even for headless Hosts without a UI notification pump.
             const completedDelegates = await ctx.taskJoin?.collect() ?? [];
             await appendQueuedInputs(completedDelegates);

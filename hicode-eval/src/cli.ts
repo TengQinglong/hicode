@@ -3,18 +3,17 @@ import {loadHiCodeSettings} from '../../src/settings/index.js';
 import {createHiCodeStorageLayout} from '../../src/persistence/index.js';
 import {PROVIDER_BASE_URLS} from '../../src/llm/providerRegistry.js';
 import {parseArgs} from 'node:util';
-import {join,resolve,dirname} from 'node:path';
-import {readdir,cp,rm,copyFile,mkdir,realpath,mkdtemp,rename,stat} from 'node:fs/promises';
-import {createHash} from 'node:crypto';
+import {join,resolve} from 'node:path';
+import {readdir,rm,copyFile,realpath,mkdtemp,rename,stat} from 'node:fs/promises';
 import {parse} from 'dotenv';
 import {z} from 'zod';
+import {registerTasks,taskRegistrationSchema} from './host/taskRegistration.js';
 import {EvalLayout} from './host/layout.js';
 import {loadConfig,settingsSchema,modelSchema,submissionSchema,reasoningSchema,runSchema,idSchema,terminalRegradeRequestSchema,terminalRecheckSchema,continuationRequestSchema} from './host/types.js';
 import {TaskCatalog} from './host/catalog.js';
-import type {CatalogTask} from './host/catalog.js';
-import {taskAdapters,datasetSchema,taskKey} from './host/datasets.js';
+import {datasetSchema,taskKey} from './host/datasets.js';
 import {EnvironmentStore} from './host/environments.js';
-import {readJson,save,run,exists,contained,tree} from './host/store.js';
+import {readJson,save,run,exists,contained} from './host/store.js';
 import {lease} from './host/lease.js';
 import {Lab} from './host/manager.js';
 import {Client} from './host/client.js';
@@ -27,15 +26,18 @@ import {EVAL_ROOT,REPOSITORY_ROOT} from './paths.js';
 
 async function main(){
   const {positionals,values:v}=parseArgs({args:process.argv.slice(2),allowPositionals:true,options:{
-    preparation:{type:'string'},script:{type:'string'},root:{type:'string'},help:{type:'boolean'},file:{type:'string'},dataset:{type:'string'},tasks:{type:'string'},ids:{type:'string'},run:{type:'string'},batch:{type:'string'},apply:{type:'boolean'},
-    port:{type:'string',default:'8878'},'worker-port':{type:'string',default:'8879'},'model-config':{type:'string'},reasoning:{type:'string'},'snapshot-worktree':{type:'boolean'},'build-proxy':{type:'string'},'build-cache':{type:'boolean'},live:{type:'boolean'},'verifier-proxy':{type:'string'},'service-restart-script':{type:'string'},review:{type:'string'},'agent-seconds':{type:'string'},prompt:{type:'string'}
+    definition:{type:'string'},preparation:{type:'string'},script:{type:'string'},root:{type:'string'},help:{type:'boolean'},file:{type:'string'},dataset:{type:'string'},tasks:{type:'string'},ids:{type:'string'},run:{type:'string'},batch:{type:'string'},apply:{type:'boolean'},
+    port:{type:'string',default:'8878'},'worker-port':{type:'string',default:'8879'},'model-config':{type:'string'},reasoning:{type:'string'},'snapshot-worktree':{type:'boolean'},'build-proxy':{type:'string'},'build-cache':{type:'boolean'},live:{type:'boolean'},'verifier-proxy':{type:'string'},'service-restart-script':{type:'string'},review:{type:'string'},'agent-seconds':{type:'string'},prompt:{type:'string'},'restore-actor':{type:'boolean'}
   }});
   const command=positionals[0];
-  if(v.help||!command){console.log('HiCode Eval · current root only\n  init --root DIR [--model-config FILE]\n  prepare --root DIR [--snapshot-worktree]\n  register --root DIR --dataset DATASET --tasks DIR [--ids ID1,ID2]\n  prepare-environments --root DIR [--ids DATASET:ID1,DATASET:ID2] [--build-proxy URL]\n  worker --root DIR [--worker-port 8879]\n  serve --root DIR [--port 8878] [--worker-port 8879]\n  submit --file FILE [--reasoning EFFORT] | status [--batch ID] | catalog | cancel --batch ID | recover --run ID | retry --run ID\n  image-inventory --root DIR [--dataset DATASET]\n  gc --root DIR [--apply] [--build-cache]\n  regrade --root DIR --run ID [--verifier-proxy URL | --service-restart-script FILE]\n  recheck --root DIR --run ID --review ID\n  continue --root DIR --run ID --agent-seconds SECONDS [--prompt TEXT]\nAll operations read the root README first. No old format, old data-dir or independent catalog paths.');return;}
+  if(v.help||!command){console.log('HiCode Eval · current root only\n  init --root DIR [--model-config FILE]\n  prepare --root DIR [--snapshot-worktree]\n  register --root DIR --dataset DATASET --tasks DIR [--ids ID1,ID2] [--definition FILE] [--live]\n  prepare-environments --root DIR [--ids DATASET:ID1,DATASET:ID2] [--build-proxy URL]\n  worker --root DIR [--worker-port 8879]\n  serve --root DIR [--port 8878] [--worker-port 8879]\n  submit --file FILE [--reasoning EFFORT] | status [--batch ID] | catalog | cancel --batch ID | recover --run ID | retry --run ID\n  image-inventory --root DIR [--dataset DATASET]\n  gc --root DIR [--apply] [--build-cache]\n  regrade --root DIR --run ID [--verifier-proxy URL | --service-restart-script FILE]\n  recheck --root DIR --run ID --review ID\n  continue --root DIR --run ID --agent-seconds SECONDS [--prompt TEXT] [--restore-actor]\nAll operations read the root README first. No old format, old data-dir or independent catalog paths.');return;}
   if(positionals.length!==1||!v.root)throw Error('Supply one command and --root');
   if((v['agent-seconds']!==undefined||v.prompt!==undefined)&&command!=='continue')throw Error('--agent-seconds/--prompt are only supported by continue');
+  if(v['restore-actor']&&command!=='continue')throw Error('--restore-actor is only supported by continue');
   if(v['service-restart-script']!==undefined&&command!=='regrade')throw Error('--service-restart-script is only supported by regrade');
   if(v.reasoning!==undefined&&command!=='submit')throw Error('--reasoning is only supported by submit; retry preserves the original batch reasoning');
+  if(v.live&& !['register','prepare-environments'].includes(command))throw Error('--live is supported only by register and prepare-environments');
+  if([v.definition,v.preparation,v.script].some(value=>value!==undefined)&&command!=='register')throw Error('--definition/--preparation/--script are supported only by register');
   const reasoning=v.reasoning===undefined?undefined:reasoningSchema.parse({effort:v.reasoning});
   const layout=new EvalLayout(v.root);
   if(contained(REPOSITORY_ROOT,layout.root))throw Error('Evaluation data must be outside the checkout');
@@ -54,6 +56,17 @@ async function main(){
     await copyFile(join(EVAL_ROOT,'templates/data-README.md'),join(layout.root,'README.md'));console.log(JSON.stringify({root:layout.root,initialized:true}));return;
   }
   const config=await loadConfig(layout.root);
+  const registration=()=>{
+    if(!!v.preparation!==!!v.script)throw Error('Specify --preparation and --script together');
+    return taskRegistrationSchema.parse({dataset:required('dataset'),source:resolve(required('tasks')),
+      ...(v.ids?{ids:v.ids.split(',')}:{}),...(v.definition?{definition:resolve(v.definition)}:{}),
+      ...(v.preparation&&v.script?{preparation:{directory:resolve(v.preparation),script:v.script}}:{})});
+  };
+  if(command==='register'&&v.live){
+    const client=new Client(workerPort),health=z.object({data:z.string()}).passthrough().parse(await client.request('health'));
+    if(health.data!==layout.root)throw Error('Worker belongs to another data root');
+    console.log(JSON.stringify(await client.request('register-tasks',registration())));return;
+  }
   if(command==='prepare-environments'&&v.live){
     if(!v.ids)throw Error('Live preparation requires explicit --ids DATASET:ID');
     const client=new Client(workerPort),health=z.object({data:z.string()}).passthrough().parse(await client.request('health'));
@@ -91,7 +104,7 @@ async function main(){
     else if(command==='recover')result=await client.request('recover-run',{run:idSchema.parse(required('run'))});
     else if(command==='continue'){
       if(v['agent-seconds']===undefined)throw Error('Continue requires --agent-seconds for the additional time');
-      result=await client.request('continue-run',continuationRequestSchema.parse({run:required('run'),agentSeconds:Number(v['agent-seconds']),prompt:v.prompt}));
+      result=await client.request('continue-run',continuationRequestSchema.parse({run:required('run'),agentSeconds:Number(v['agent-seconds']),prompt:v.prompt,restoreActor:v['restore-actor']??false}));
     }
     else result=await client.request('retry-run',{run:idSchema.parse(required('run'))});
     console.log(JSON.stringify(result,null,2));return;
@@ -99,7 +112,7 @@ async function main(){
   if(command==='image-inventory'){console.log(JSON.stringify(await imageInventory(layout.root,v.dataset?datasetSchema.parse(v.dataset):undefined),null,2));return;}
   if(command==='regrade'){
     const runId=idSchema.parse(required('run'));
-    if((await readJson(layout.run(runId)+ '/state.json',runSchema)).dataset==='terminal-bench-2.1'&&await exists(join(layout.root,'.service.lock'))){
+    if(['terminal-bench-2.1','deep-swe'].includes((await readJson(layout.run(runId)+ '/state.json',runSchema)).dataset)&&await exists(join(layout.root,'.service.lock'))){
       if(v['verifier-proxy'])throw Error('Service regrade does not accept --verifier-proxy');
       const client=new Client(workerPort),health=z.object({data:z.string()}).passthrough().parse(await client.request('health'));
       if(health.data!==layout.root)throw Error('Worker belongs to another root');
@@ -128,40 +141,7 @@ async function main(){
       try{await run(['python3','-B',join(EVAL_ROOT,'src/host/prepare.py'),'--source',REPOSITORY_ROOT,'--payload',join(stage,'payload'),...(v['snapshot-worktree']?['--snapshot-worktree']:[])],{timeout:60000});await rename(join(stage,'payload'),layout.payload);console.log(layout.payload);}
       finally{await rm(stage,{recursive:true,force:true});}return;
     }
-    if(command==='register'){
-      if(await exists(join(layout.state,'import.json')))throw Error('Interrupted import; run gc --apply before registering');
-      const dataset=datasetSchema.parse(required('dataset')),input=await realpath(resolve(required('tasks'))),selected=v.ids?new Set(v.ids.split(',')):undefined;
-      const names=(await readdir(input,{withFileTypes:true})).filter(d=>d.isDirectory()&&!d.isSymbolicLink()&&(!selected||selected.has(d.name))).map(d=>d.name);
-      if(!names.length||selected&&names.length!==selected.size)throw Error('Every selected task needs a validated source');
-      if(!!v.preparation!==!!v.script)throw Error('Specify --preparation and --script together');
-      const script=v.script?z.string().regex(/^[A-Za-z0-9_.-]+\.sh$/).parse(v.script):undefined;
-      const preparation=v.preparation?await realpath(resolve(v.preparation)):undefined;
-      const stage=await mkdtemp(join(layout.builds,'import-'));const entries:Pick<CatalogTask,'id'|'dataset'|'source'|'preparation'>[]=[];
-      try{
-        for(const id of names){
-          const task={dataset,id},source=join(input,id),target=layout.source(task);
-          if(catalog.list().some(t=>taskKey(t)===taskKey(task))||await exists(target))throw Error('Task/source already exists: '+taskKey(task));
-          await taskAdapters(layout)[dataset].validate(id,source);const before=await taskAdapters(layout)[dataset].snapshot(source);
-          const staged=join(stage,id);await mkdir(staged);await cp(source,join(staged,'source'),{recursive:true,errorOnExist:true,force:false,verbatimSymlinks:true,preserveTimestamps:true});
-          if(JSON.stringify(await taskAdapters(layout)[dataset].snapshot(join(staged,'source')))!==JSON.stringify(before))throw Error('Source changed during import');
-          let prepared:CatalogTask['preparation'];
-          if(preparation&&script){
-            const files=await tree(preparation);if(!files[script])throw Error('Preparation script missing');
-            await cp(preparation,join(staged,'preparation'),{recursive:true,errorOnExist:true,force:false});
-            if(JSON.stringify(await tree(join(staged,'preparation')))!==JSON.stringify(files))throw Error('Preparation changed during import');
-            const directory=join(layout.preparations,dataset,id);if(await exists(directory))throw Error('Preparation path exists');
-            prepared={directory,script,sha256:createHash('sha256').update(JSON.stringify(files)).digest('hex')};
-          }
-          entries.push({...task,source:target,...(prepared?{preparation:prepared}:{})});
-        }
-        await save(join(layout.state,'import.json'),{version:1,tasks:entries.map(t=>({dataset:t.dataset,id:t.id}))});
-        for(const entry of entries){
-          await mkdir(dirname(entry.source!),{recursive:true});await rename(join(stage,entry.id,'source'),entry.source!);
-          if(entry.preparation){await mkdir(dirname(entry.preparation.directory),{recursive:true});await rename(join(stage,entry.id,'preparation'),entry.preparation.directory);}
-        }
-        await catalog.register(entries);await rm(join(layout.state,'import.json'));console.log(JSON.stringify({registered:entries.length}));
-      }finally{await rm(stage,{recursive:true,force:true});}return;
-    }
+    if(command==='register'){console.log(JSON.stringify(await registerTasks(layout,catalog,registration())));return;}
     if(command==='prepare-environments'){
       const selected=v.ids?new Set(v.ids.split(',')):undefined;
       if(selected&&[...selected].some(k=>!catalog.list().some(t=>taskKey(t)===k)))throw Error('Use registered DATASET:ID identities');

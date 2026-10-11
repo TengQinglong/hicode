@@ -33,15 +33,17 @@ for(const code of [0,1,2,52])terminal.parser.registerOscHandler(code,()=>true);
 let selected=null,selectedBatch=null,expandedBatch=null,revision='',generation=0,timer=null,refreshPending=false,ticking=false;
 let selectionController=new AbortController(),preparationRequest=null;
 let actionPending=false,actionNotice='',actionNoticeRun=null;
-let continueRunId=null;
-$('continue-cancel').onclick=()=>{$('continue-form').hidden=true;continueRunId=null;};
+let continuationInput=null;
+$('continue-cancel').onclick=()=>{$('continue-form').hidden=true;continuationInput=null;};
 $('continue-form').onsubmit=async event=>{
-  event.preventDefault();if(actionPending||!continueRunId)return;
-  const id=continueRunId,minutes=Number($('continue-minutes').value),prompt=$('continue-prompt').value.trim()||'继续完成原任务。';
+  event.preventDefault();if(actionPending||!continuationInput)return;
+  const {id,restoreActor}=continuationInput,minutes=Number($('continue-minutes').value),prompt=$('continue-prompt').value.trim()||'继续完成原任务。';
   if(!Number.isInteger(minutes)||minutes<1||minutes>180){actionNoticeRun=id;actionNotice='追加时间需为 1–180 分钟。';refresh();return;}
   actionPending=true;actionNoticeRun=id;actionNotice='正在恢复之前的文件与会话…';$('continue-submit').disabled=true;
   try{
-    const result=await api('continue-run',{run:id,agentSeconds:minutes*60,prompt});actionNotice='';$('continue-form').hidden=true;continueRunId=null;
+    const result=continuationInput.runIds
+      ?await api('continue-batch',{runs:continuationInput.runIds,agentSeconds:minutes*60,prompt,restoreActors:restoreActor})
+      :await api('continue-run',{run:id,agentSeconds:minutes*60,prompt,restoreActor});actionNotice='';$('continue-form').hidden=true;continuationInput=null;
     if(selected===id)openAttempt(result.batch.id,result.batch.runIds[0]);
   }catch(error){actionNotice=error.message;}
   finally{actionPending=false;$('continue-submit').disabled=false;refresh();}
@@ -53,6 +55,7 @@ const names={queued:'排队',preparing:'准备环境',running:'执行中',waitin
 const runLabel=run=>run.state==='error'&&run.execution==='completed'&&run.grading==='unavailable'?'判题异常 · 无法判定':names[run.displayState]||run.displayState;
 const datasetNames={'deep-swe':'DeepSWE 1.1','terminal-bench-2.1':'Terminal-Bench 2.1','swe-bench-verified':'SWE-bench Verified'};
 const runTitle=run=>(datasetNames[run.dataset]||run.dataset)+' · '+run.task;
+const continuationFor=(batch,id)=>batch.continuations?.[id]||(batch.runIds?.length===1?batch.continueOf:undefined);
 async function api(path,body,signal){
   const requestSignal=body===undefined?AbortSignal.any([AbortSignal.timeout(10000),...(signal?[signal]:[])]):undefined;
   const send=()=>fetch('/api/'+path,body===undefined?{signal:requestSignal}:{method:'POST',headers:{'X-Eval-Request':'1','Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -101,6 +104,7 @@ async function tick(){if(ticking)return;ticking=true;try{
     $('batch-title').textContent='还没有评测批次';$('batch-detail').textContent='提交题目清单后，在这里查看执行过程和判题结果。';
     $('summary').replaceChildren();$('title').textContent='选择任务查看执行过程';$('detail').textContent='';$('statuses').replaceChildren();$('terminal-status').textContent='';$('attach').textContent='';$('preparation').textContent='尚未开始。';$('terminal-empty').textContent='提交批次后，任务会依次运行并自动判题。';
     $('run-action').hidden=true;$('continue-action').hidden=true;$('continue-form').hidden=true;$('previous-attempt').hidden=true;$('action-message').hidden=true;
+    $('continue-batch-action').hidden=true;
   }
   $('batches').replaceChildren(...data.batches.map(b=>{
     const group=document.createElement('div');
@@ -123,26 +127,34 @@ async function tick(){if(ticking)return;ticking=true;try{
   if(run){
     const finished=['passed','failed','error','cancelled','needs_recovery'].includes(run.state);
     const child=data.batches.find(b=>b.retryOf?.runId===run.id),recovery=run.state==='needs_recovery';
-    const continued=data.batches.find(b=>b.continueOf?.runId===run.id);
+    const continued=data.batches.find(b=>b.runIds?.some(id=>continuationFor(b,id)?.runId===run.id));
     $('continue-action').hidden=!run.continuable&&!continued;
     $('continue-action').disabled=actionPending||(!continued&&(data.schedulingBlocked||data.workerConnected===false));
     $('continue-action').textContent=continued?'查看续跑任务':'继续作答';
     $('continue-action').onclick=()=>{
-      if(continued){openAttempt(continued.id,continued.runIds[0]);return;}
-      continueRunId=run.id;$('continue-form').hidden=false;$('continue-minutes').value=String(Math.ceil(run.budget.agentSeconds/60));
+      if(continued){openAttempt(continued.id,continued.runIds.find(id=>continuationFor(continued,id)?.runId===run.id));return;}
+      continuationInput={id:run.id,restoreActor:run.continuationSource==='sealed-deep-actor'};$('continue-form').hidden=false;$('continue-minutes').value=String(Math.ceil(run.budget.agentSeconds/60));
       $('continue-prompt').value='继续完成原任务。';
     };
-    if(continueRunId&&continueRunId!==run.id){continueRunId=null;$('continue-form').hidden=true;}
+    if(continuationInput&&continuationInput.id!==run.id){continuationInput=null;$('continue-form').hidden=true;}
+    const continuable=data.runs.filter(r=>r.batchId===batch.id&&r.continuable&&!data.batches.some(b=>
+      b.runIds?.some(id=>continuationFor(b,id)?.runId===r.id)));
+    $('continue-batch-action').hidden=continuable.length<2;
+    $('continue-batch-action').disabled=actionPending||data.schedulingBlocked||data.workerConnected===false;
+    $('continue-batch-action').onclick=()=>{
+      continuationInput={id:run.id,runIds:continuable.map(r=>r.id),restoreActor:continuable.some(r=>r.continuationSource==='sealed-deep-actor')};
+      $('continue-form').hidden=false;$('continue-minutes').value=String(Math.ceil(run.budget.agentSeconds/60));$('continue-prompt').value='继续';
+    };
     $('run-action').hidden=run.state==='passed'||(!finished&&!child);$('run-action').disabled=actionPending||(!child&&!recovery&&data.schedulingBlocked);
     $('run-action').textContent=child?'查看重跑任务':recovery?'恢复结果':'重新运行';
     $('run-action').title=child?'打开已创建的尝试':recovery?'核验已有证据，不再次调用模型':'保留原记录，沿用原题、模型和预算开始新的模型执行';
     $('run-action').onclick=()=>child?openAttempt(child.id,child.runIds[0]):actOnRun(run.id,recovery?'recover-run':'retry-run');
-    const origin=batch.retryOf||batch.continueOf,previous=origin&&data.runs.find(r=>r.id===origin.runId);
+    const continuation=continuationFor(batch,run.id),origin=batch.retryOf||continuation,previous=origin&&data.runs.find(r=>r.id===origin.runId);
     $('previous-attempt').hidden=!previous;$('previous-attempt').onclick=()=>{if(previous)openAttempt(previous.batchId,previous.id);};
     $('action-message').hidden=actionNoticeRun!==run.id||!actionNotice;$('action-message').textContent=actionNoticeRun===run.id?actionNotice:'';
     $('terminal-status').textContent=run.state==='needs_recovery'?'收尾异常，等待核验已有结果与现场':finished?'任务已结束 · 判题'+(label[run.grading]||run.grading)+' · 下方为保存的终端画面':run.state==='verifying'?'Agent 已停止作答，正在自动判题。':'终端实时更新';
     $('attach').textContent='证据目录：'+run.evidencePath+'\n'+(finished?'任务已结束；当前显示保存的终端内容。':run.container?.attach||'容器尚未启动');
-    $('title').textContent=runTitle(run);$('detail').textContent=run.id+' · '+(origin?'第 '+origin.attempt+' 次尝试 · ':'')+(batch.continueOf?'恢复原会话 · 追加 ':'')+limit(run.budget.agentSeconds)+' 上限 · '+(runLabel(run)||'正在准备')+(run.continuable&&Number.isFinite(run.checkpointElapsedSeconds)?' · 此前执行 '+limit(Math.round(run.checkpointElapsedSeconds)):'');
+    $('title').textContent=runTitle(run);$('detail').textContent=run.id+' · '+(origin?'第 '+origin.attempt+' 次尝试 · ':'')+(continuation?'恢复原会话 · 追加 ':'')+limit(run.budget.agentSeconds)+' 上限 · '+(runLabel(run)||'正在准备')+(run.continuable&&Number.isFinite(run.checkpointElapsedSeconds)?' · 此前执行 '+limit(Math.round(run.checkpointElapsedSeconds)):'');
     $('statuses').replaceChildren(...[['执行',run.execution],['判题',run.grading],['数据',run.collection]].map(([name,value])=>{const e=document.createElement('span');e.textContent=name+' · '+(label[value]||value);e.dataset.state=value;return e;}));
     $('preparation-title').textContent='执行与判题记录 · '+(run.preparation?.phase||'等待开始');
     if($('terminal-shell').hidden){$('terminal-empty').textContent=run.state==='queued'?(data.schedulingBlocked?'调度暂停，需先处理异常任务；当前排队与并发名额无关。':'正在排队，前面的任务结束后自动开始。'):run.state==='preparing'?'正在准备工作目录和运行环境。':finished?(run.note?'没有保存的终端画面。\n\n'+run.note:'没有保存的终端画面，可展开证据目录检查日志。'):'等待终端输出…';}

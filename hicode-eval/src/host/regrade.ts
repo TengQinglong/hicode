@@ -12,6 +12,7 @@ import {isDeepStrictEqual} from 'node:util';
 import {EVAL_ROOT} from '../paths.js';
 import {lease} from './lease.js';
 import {terminalRegradeChanges} from './terminalRegrade.js';
+import {evidencePathMap} from './evidencePaths.js';
 import {TaskCatalog} from './catalog.js';
 
 const patchManifestSchema = z.object({sha256:z.string().regex(/^[a-f0-9]{64}$/), baseCommit:z.string(), baselineCommit:z.string(), revision:z.string(), method:z.literal('host-owned-tree-diff')}).strict();
@@ -38,7 +39,7 @@ export async function regradeRun(data: string, runId: string, verifierProxy?: st
     const original = join(data,'runs',runId);
     const state = await readJson(join(original,'state.json'),runSchema);
     if(state.id!==runId)throw Error('Regrade run identity mismatch');
-    if(state.dataset==='terminal-bench-2.1'){
+    if(state.dataset==='terminal-bench-2.1'||state.dataset==='deep-swe'){
       if(proxy!==null)throw Error('Terminal regrade does not accept a proxy');
       const catalog=await TaskCatalog.open(config.catalog),controller=new AbortController();
       const cancel=()=>controller.abort();process.once('SIGINT',cancel);process.once('SIGTERM',cancel);
@@ -48,7 +49,7 @@ export async function regradeRun(data: string, runId: string, verifierProxy?: st
           if(!stat.isFile()||stat.size>16384)throw Error('Invalid service restart script');restartScript=await Bun.file(scriptPath).text();}
         const result=await new LinuxMachine(config).regradeTerminal(state,catalog.get(state.dataset,state.task),restartScript,randomBytes(8).toString('hex'),controller.signal);
         controller.signal.throwIfAborted();const changes=terminalRegradeChanges(result);
-        if(changes){const current=runSchema.parse({...state,...changes,updatedAt:Date.now()/1000});await save(join(original,'state.json'),current);await catalog.record(current);}
+        if(changes){const current=runSchema.parse({...state,...changes,...(state.dataset==='deep-swe'?{execution:'completed'}:{}),updatedAt:Date.now()/1000});await save(join(original,'state.json'),current);await catalog.record(current);}
         return {...result,evidencePath:join(original,'rechecks',result.reviewId)};
       }finally{process.removeListener('SIGINT',cancel);process.removeListener('SIGTERM',cancel);}
     }
@@ -115,6 +116,9 @@ async function recoverCollectedPatch(original:string,taskRoot:string,output:stri
   const receipt=await readJson(join(original,'collection.json'),z.object({complete:z.literal(true),files:z.record(file)}).strict(),32*1024*1024);
   const expected=Object.fromEntries(Object.entries(receipt.files).filter(([name])=>name.startsWith('project/')).map(([name,value])=>[name.slice(8),value]));
   if(!Object.keys(expected).length || !isDeepStrictEqual(await runEvidenceTree(project),expected))throw Error('Collected project differs from its sealed receipt');
+  const pathMap=await evidencePathMap(join(original,'evidence'),receipt.files);
+  if(pathMap&&z.object({entries:z.array(z.object({stored:z.string()}))}).parse(JSON.parse(pathMap.toString('utf8'))).entries.some(entry=>entry.stored.startsWith('project/')))
+    throw Error('Case-distinct collected files require Linux restoration; refusing host patch reconstruction');
   const copy=join(output,'recovered-project'),patch=join(output,'model.patch');
   try{
     await cp(project,copy,{recursive:true,dereference:false,verbatimSymlinks:true,errorOnExist:true,force:false});

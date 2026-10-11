@@ -1,7 +1,7 @@
 import {REASONING_EFFORTS, validateReasoningEffort} from "../../../src/llm/reasoningPolicy.js";
 import { z } from 'zod';
 import { LLM_PROVIDER_NAMES } from '../../../src/llm/providerRegistry.js';
-import {datasetSchema,taskRefSchema} from './datasets.js';
+import {datasetSchema,taskRefSchema} from './taskIdentity.js';
 import {EvalLayout} from './layout.js';
 import {readJson} from './store.js';
 export const idSchema = z.string().regex(/^[a-f0-9]{16}$/);
@@ -23,9 +23,15 @@ export const checkpointSchema=z.object({version:z.literal(1),runId:idSchema,sess
   sha256:z.string().regex(/^[a-f0-9]{64}$/),bytes:z.number().int().positive().max(8*1024**3)}).strict();
 export type Checkpoint=z.infer<typeof checkpointSchema>;
 export const continuationRequestSchema=z.object({run:idSchema,agentSeconds:z.number().int().min(30).max(10800),
+  restoreActor:z.boolean().default(false),
   prompt:z.string().trim().min(1).max(4096).refine(value=>!value.includes('\0')).default('继续完成原任务。')}).strict();
-export type ContinuationRequest=z.infer<typeof continuationRequestSchema>;
+export type ContinuationRequest=z.input<typeof continuationRequestSchema>;
+export const batchContinuationRequestSchema=z.object({runs:z.array(idSchema).min(2).max(200),
+  agentSeconds:continuationRequestSchema.shape.agentSeconds,prompt:continuationRequestSchema.shape.prompt,
+  restoreActors:z.boolean().default(false)}).strict();
+export type BatchContinuationRequest=z.input<typeof batchContinuationRequestSchema>;
 const continuationOriginSchema=retryOriginSchema.extend({checkpoint:checkpointSchema,prompt:continuationRequestSchema.shape.prompt,
+  inputSource:z.enum(['checkpoint','sealed-deep-actor']).default('checkpoint'),
   environmentSha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 export type ContinuationOrigin=z.infer<typeof continuationOriginSchema>;
 export const submissionSchema = z.object({ reasoning: reasoningSchema.optional(), name: batchName, network: networkSchema.optional(), tasks: z.array(z.object({ id: z.string().min(1), dataset:datasetSchema, agentSeconds: z.number().int().min(30).max(10800).optional() }).strict()).min(1).max(200), concurrency }).strict();
@@ -33,8 +39,11 @@ export const environmentPreparationSchema=z.object({tasks:z.array(taskRefSchema)
 export type EnvironmentPreparation=z.infer<typeof environmentPreparationSchema>;
 export type Submission = z.infer<typeof submissionSchema>;
 // The batch records its default; resolved execution limits belong to each Run.
-export const batchSchema = z.object({ name: batchName, network: networkSchema.default('open'), taskRefs:z.array(taskRefSchema).min(1).max(200), concurrency, budget: budgetSchema, version: z.literal(1), id: idSchema, createdAt: z.number(), runIds: z.array(idSchema), model: modelSchema, payload: z.record(z.unknown()), retryOf:retryOriginSchema.optional(),continueOf:continuationOriginSchema.optional(),cancelledAt: z.number().optional(), report: z.object({ text: z.string().trim().min(1).max(200000), updatedAt: z.number() }).optional() }).strict();
+export const batchSchema = z.object({ name: batchName, network: networkSchema.default('open'), taskRefs:z.array(taskRefSchema).min(1).max(200), concurrency, budget: budgetSchema, version: z.literal(1), id: idSchema, createdAt: z.number(), runIds: z.array(idSchema), model: modelSchema, payload: z.record(z.unknown()), retryOf:retryOriginSchema.optional(),continueOf:continuationOriginSchema.optional(),continuations:z.record(idSchema,continuationOriginSchema).optional(),cancelledAt: z.number().optional(), report: z.object({ text: z.string().trim().min(1).max(200000), updatedAt: z.number() }).optional() }).strict();
 export type Batch = z.infer<typeof batchSchema>;
+export function continuationFor(batch:Batch,runId:string):ContinuationOrigin|undefined{
+  return batch.continuations?.[runId]??(batch.runIds.length===1?batch.continueOf:undefined);
+}
 export const runSchema = z.object({ version: z.literal(1), network: networkSchema.default('open'), id: idSchema, batchId: idSchema, task: z.string().min(1), dataset: datasetSchema, state: z.enum(['queued', 'preparing', 'running', 'verifying', 'passed', 'failed', 'error', 'cancelled', 'cancelling', 'needs_recovery']), createdAt: z.number(), updatedAt: z.number(), startedAt: z.number().optional(), finishedAt: z.number().optional(), model: z.string(),  budget: budgetSchema, execution: z.enum(['pending', 'completed', 'timeout', 'cancelled', 'failed']).default('pending'), grading: z.enum(['pending', 'passed', 'failed', 'unavailable']).default('pending'), collection: z.enum(['pending', 'complete', 'retained']).default('pending'), note: z.string().optional(), reward: z.number().optional() }).strict();
 export type Run = z.infer<typeof runSchema>;
 export const regradeResultSchema=z.object({version:z.literal(1),runId:idSchema,instanceId:z.string().min(1),patchSha256:z.string().regex(/^[a-f0-9]{64}$/),

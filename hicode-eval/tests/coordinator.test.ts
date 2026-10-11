@@ -95,6 +95,32 @@ test('worker preparation returns immediately, lets other tasks finish, and block
  }finally{finishBuild();finishExecution();worker?.stop(true);await lab.close();validate.mockRestore();resolve.mockRestore();prepare.mockRestore();build.mockRestore();execute.mockRestore();dispose.mockRestore();boundary.mockRestore();await f.cleanup();}
 });
 
+test('closing aborts the routed environment build and leaves queued preparations unstarted',async()=>{
+ const f=await fixture(),first=await seed(f,'first-build'),second=await seed(f,'next-build'),lab=new Lab(f.config,'unused');
+ f.config.datasetBackends={'terminal-bench-2.1':{context:'offline-routed',cpus:1,memoryMb:2048}};
+ await f.catalog.setEnvironment(first,'unprepared');await f.catalog.setEnvironment(second,'unprepared');
+ await save(join(f.layout.environments,'base.json'),first.binding.base);
+ const metadata=publicTaskProfile({first:{hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPrelude:'none'}},'first');
+ const validate=spyOn(publicTasks,'validatePublicTask').mockResolvedValue(metadata);
+ let started!:()=>void,builds=0;const building=new Promise<void>(resolve=>{started=resolve;});
+ const boundary=spyOn(transport,'run').mockImplementation(async(argv,options)=>{
+  if(argv.includes('build')){
+   builds++;expect(argv).toContain('offline-routed');const signal=options?.signal;if(!signal)throw Error('Build has no cancellation owner');
+   started();return new Promise<string>((_resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));
+  }
+  if(argv.includes('inspect'))return JSON.stringify([{Id:first.binding.base.imageId,Config:{Labels:{'dev.hicode.environment':first.binding.base.key}}}]);
+  return '';
+ });
+ try{
+  await lab.init();await lab.prepareEnvironments({tasks:[first,second].map(t=>({dataset:t.dataset,id:t.id}))});await building;
+  await lab.close();expect(builds).toBe(1);
+  const progress=JSON.parse(await Bun.file(join(f.layout.state,'preparation.json')).text());
+  expect(progress.running).toBe(false);expect(progress.failed).toEqual([]);expect(progress.cancelled).toEqual([first,second].map(t=>t.dataset+':'+t.id));
+  const catalog=await TaskCatalog.open(f.layout.catalog);
+  expect(catalog.get(first.dataset,first.id).environment).toBe('unprepared');expect(catalog.get(second.dataset,second.id).environment).toBe('unprepared');
+ }finally{await lab.close();validate.mockRestore();boundary.mockRestore();await f.cleanup();}
+});
+
 test.each(['qwen-token-plan','ark-agent-plan'] as const)('%s reasoning is frozen through batch, execution manifest and retry even after the service default changes',async source=>{
  const f=await fixture(),task=await seed(f,'reasoning'),second=await seed(f,'default-choice','d');
  f.config.model={...f.config.model,source,model:'deepseek-v4.1-flash',reasoning:{effort:'high'}};

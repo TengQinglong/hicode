@@ -13,6 +13,7 @@ import time
 from protocol import atomic_json, namespace_argv, Events
 from service_namespace import ServiceNamespace, service_paths, verifier_options, ACCOUNT_COUNT
 from dataset_runtime import dataset_runtime
+from evidence_export import read_map, restore
 
 
 def validate_snapshot(path, paths):
@@ -55,10 +56,17 @@ def main():
     identity = json.loads((root / 'input.json').read_text())
     if identity.get('version')!=1 or identity.get('runId')!=root.parent.name or identity.get('reviewId')!=root.name:
         raise ValueError('Invalid recheck identity')
+    if 'pathMapSha256' in identity:
+        data=read_map(root / 'evidence-paths.json')
+        if hashlib.sha256(data).hexdigest()!=identity['pathMapSha256']:
+            raise ValueError('Evidence path map hash mismatch')
+        restore(root / 'project', json.loads(data), 'project')
     uid = 20000
     paths = service_paths(config) if config.get('service') is not None else None
-    if config['dataset'] != 'terminal-bench-2.1':
-        raise ValueError('Recheck requires a Terminal task')
+    if config['dataset'] not in {'terminal-bench-2.1', 'deep-swe'}:
+        raise ValueError('Unsupported sealed-answer recheck')
+    if config['dataset'] == 'deep-swe' and (paths is not None or config['network'] != 'isolated'):
+        raise ValueError('DeepSWE recheck must remain isolated')
     if paths is None and identity.get('kind') != 'ordinary':
         raise ValueError('Ordinary recheck identity missing')
     snapshot = root / 'service-system.tar'

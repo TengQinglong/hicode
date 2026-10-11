@@ -1,5 +1,6 @@
 import {describe, expect, test} from "bun:test";
 import {consumeOpenAICompatibleSSE} from "../../src/llm/providers/openAICompatibleStream.js";
+import {ProviderStreamError} from "../../src/llm/providers/openAICompatibleStreamCodec.js";
 
 function streamFromChunks(chunks: readonly string[]): ReadableStream<Uint8Array> {
     const encoder = new TextEncoder();
@@ -12,6 +13,27 @@ function streamFromChunks(chunks: readonly string[]): ReadableStream<Uint8Array>
 }
 
 describe("OpenAI-compatible stream consumption", () => {
+    test("网关流错误保留诊断并拒绝未完成的工具调用", async () => {
+        const message = "Model gateway failed: stage=read_stream, kind=timeout, elapsed_ms=600000";
+        const operation = consumeOpenAICompatibleSSE({
+            body: streamFromChunks([
+                `data: ${JSON.stringify({choices: [{delta: {tool_calls: [{index: 0, id: "call-1", type: "function", function: {name: "write_file", arguments: '{"path":"x"}'}}]}}]})}\n\n`,
+                `data: ${JSON.stringify({error: {code: "model_gateway_timeout", message, stage: "read_stream", elapsed_ms: 600000}})}\n\n`,
+            ]),
+            signal: new AbortController().signal,
+            onActivity() {},
+        });
+        expect.assertions(3);
+        try {
+            await operation;
+        } catch (error) {
+            expect(error).toBeInstanceOf(ProviderStreamError);
+            if (!(error instanceof ProviderStreamError)) throw error;
+            expect(error.code).toBe("model_gateway_timeout");
+            expect(error.message).toContain(message);
+        }
+    });
+
     test("SSE heartbeat 只报告传输活动，不伪造模型输出进度", async () => {
         let activity = 0;
         const progress: string[] = [];

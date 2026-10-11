@@ -38,6 +38,7 @@ const executionConfig=configSchema.parse({...settings,...backend,datasetBackends
 await save(layout.settings,settings);await save(layout.catalog,{version:1,updatedAt:new Date().toISOString(),tasks:[]});
 await mkdir(join(layout.datasets,task.dataset),{recursive:true});
 await cp(new EvalLayout(current.data).definition(task.dataset),layout.definition(task.dataset));
+await cp(new EvalLayout(current.data).runtime,layout.runtime,{recursive:true,errorOnExist:true,force:false,preserveTimestamps:true});
 const runtimeDockerfile=new EvalLayout(current.data).runtimeDockerfile(task.dataset);
 if(await exists(runtimeDockerfile))await cp(runtimeDockerfile,layout.runtimeDockerfile(task.dataset));
 await mkdir(join(layout.source(task),'..'),{recursive:true});await cp(task.source,layout.source(task),{recursive:true,errorOnExist:true,force:false,preserveTimestamps:true});

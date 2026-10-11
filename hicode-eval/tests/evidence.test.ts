@@ -6,6 +6,25 @@ import {mkdtemp, writeFile, symlink, rm, readFile, mkdir, chmod, open} from 'nod
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {evidenceTree, runEvidenceTree, tree} from '../src/host/store.js';
+import {evidencePathMap} from '../src/host/evidencePaths.js';
+
+test('export path mappings require a matching sealed receipt and safe relative paths',async()=>{
+  const root=(await import('node:fs/promises')).realpath;
+  const directory=await root(await mkdtemp(join(tmpdir(),'hicode-evidence-map-')));
+  const file=join(directory,'.hicode-evidence-paths.json');
+  try{
+    expect(await evidencePathMap(directory,{})).toBeUndefined();
+    const content=JSON.stringify({version:1,entries:[{stored:'project/encoded',original:'project/INCLUDE'}]});
+    await writeFile(file,content);const receipt=await runEvidenceTree(directory);
+    expect((await evidencePathMap(directory,receipt))?.toString()).toBe(content);
+    await expect(evidencePathMap(directory,{})).rejects.toThrow('Unsealed');
+    await writeFile(file,content+' ');await expect(evidencePathMap(directory,receipt)).rejects.toThrow('size');
+    await writeFile(file,JSON.stringify({version:1,entries:[{stored:'project/../escape',original:'project/INCLUDE'}]}));
+    await expect(evidencePathMap(directory,await runEvidenceTree(directory))).rejects.toThrow('Invalid evidence path');
+    await rm(file);await symlink('/tmp',file);
+    await expect(evidencePathMap(directory,await runEvidenceTree(directory))).rejects.toThrow('receipt');
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
 
 test('evidence records dangling, external and cyclic links without reading their targets; sources reject links', async () => {
   const root = await mkdtemp(join(tmpdir(), 'hicode-evidence-'));
@@ -92,7 +111,7 @@ printf '%s\n' '{"type":"result","execution":"completed","grading":"${uploadFailu
       expect(await readFile(join(path,'live/screen.txt'),'utf8')).toBe('final screen');
       if(uploadFailure)throw Error('hidden tests upload failed fixture-secret');
     }
-    if(command.includes('fixture-machine:/eval/runs/'+state.id+'/.')){
+    if(command.includes('fixture-machine:/eval/evidence-export/'+state.id+'/.')){
       copies++;
       expect(acknowledgements).toEqual(['accepted',uploadFailure?'failed':'ready']);
       if(finalFailure)throw Error('temporary snapshot transport failure');

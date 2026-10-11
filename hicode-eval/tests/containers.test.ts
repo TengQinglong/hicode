@@ -2,6 +2,7 @@ import {test,expect,spyOn} from 'bun:test';
 import {RunContainers} from '../src/host/containers.js';
 import {configSchema} from '../src/host/types.js';
 import * as transport from '../src/host/store.js';
+import * as network from '../../src/tools/webFetch/network.js';
 
 const config=()=>configSchema.parse({version:1,data:'/tmp/fake-runs',context:'offline',machine:'cache',concurrency:5,budget:{},model:{source:'qwen',model:'fake',apiKeyEnv:'UNUSED',baseUrl:'https://offline.invalid/v1'}});
 test('each attempt has its own network, identity and bounded resources without shared volumes',async()=>{
@@ -28,6 +29,25 @@ test('container ownership mismatch fails closed',async()=>{
  const runtime=new RunContainers(config());
  const fake=spyOn(transport,'run').mockResolvedValue(JSON.stringify([{Id:'other',Image:'sha256:'+'b'.repeat(64),State:{Running:true},Config:{Labels:{'dev.hicode.owner':'another service'}}}]));
  try{await expect(runtime.assert('a'.repeat(16))).rejects.toThrow('ownership');}finally{fake.mockRestore();}
+});
+
+test('model HTTPS domains are pinned only to host-resolved public IPv4 addresses',async()=>{
+ const runtime=new RunContainers(config()),id='a'.repeat(16),image='sha256:'+'b'.repeat(64),calls:string[][]=[];
+ const resolve=spyOn(network,'resolvePublicAddresses').mockResolvedValue([
+  {address:'203.0.114.10',family:4},{address:'2001:4860:4860::8888',family:6},
+ ]);
+ const fake=spyOn(transport,'run').mockImplementation(async argv=>{
+  calls.push(argv);
+  if(argv.includes('inspect'))return JSON.stringify([{Id:'container',Image:image,State:{Running:true},Config:{Labels:{'dev.hicode.role':'attempt','dev.hicode.owner':runtime.owner,'dev.hicode.run':id}}}]);
+  return '';
+ });
+ try{
+  await runtime.create(id,image,'https://models.example.com/v1');
+  const create=calls.find(call=>call.includes('create')&&call.includes('--memory'))!;
+  expect(create).toContain('models.example.com:203.0.114.10');
+  expect(create.some(value=>value.includes('2001:4860'))).toBe(false);
+  expect(resolve).toHaveBeenCalledWith('models.example.com');
+ }finally{resolve.mockRestore();fake.mockRestore();}
 });
 
 test('invalid attempt/image identifiers never reach Docker',async()=>{

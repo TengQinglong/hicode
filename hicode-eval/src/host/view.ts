@@ -5,6 +5,7 @@ import {TaskCatalog} from './catalog.js';
 import {EvalLayout} from './layout.js';
 import {taskKey} from './datasets.js';
 import {readJson,exists} from './store.js';
+import {deepActorElapsed} from './deepContinuation.js';
 import {batchSchema,runSchema,idSchema,done,liveSchema,containerSchema,loadConfig,checkpointSchema} from './types.js';
 import type {Batch,Run,Config} from './types.js';
 
@@ -32,14 +33,18 @@ export async function runView(path:string,run:Run){
   const preparation=await exists(join(path,'preparation.json'))?await readJson(join(path,'preparation.json'),z.object({
     phase:z.string(),cached:z.boolean().optional(),image:z.string().optional(),updatedAt:z.number()})):undefined;
   let checkpointElapsedSeconds:number|undefined;
+  let continuationSource:'checkpoint'|'sealed-deep-actor'|null=null;
   if(done(run.state)&&run.state!=='needs_recovery'&&run.state!=='passed'&&run.collection==='complete'&&['timeout','cancelled','failed'].includes(run.execution)){
     const file=join(path,'evidence','continuation.json');
     if(await exists(file))try{
       const checkpoint=await readJson(file,checkpointSchema,4096);
-      if(checkpoint.runId===run.id)checkpointElapsedSeconds=checkpoint.elapsedSeconds;
+      if(checkpoint.runId===run.id){checkpointElapsedSeconds=checkpoint.elapsedSeconds;continuationSource='checkpoint';}
     }catch{ /* Invalid metadata disables the action; execution performs full hash checks. */ }
+    if(!await exists(file)&&run.dataset==='deep-swe')try{
+      checkpointElapsedSeconds=await deepActorElapsed(path,run);continuationSource='sealed-deep-actor';
+    }catch{ /* Unsealed Actor evidence cannot offer recovery. */ }
   }
-  return {...run,continuable:checkpointElapsedSeconds!==undefined,checkpointElapsedSeconds,preparation,evidencePath:path,displayState:done(run.state)?run.state:live?.phase??run.state,live,container};
+  return {...run,continuable:checkpointElapsedSeconds!==undefined,continuationSource,checkpointElapsedSeconds,preparation,evidencePath:path,displayState:done(run.state)?run.state:live?.phase??run.state,live,container};
 }
 
 function validateChild(batch:Batch,run:Run){

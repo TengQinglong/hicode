@@ -10,10 +10,10 @@ class Element {
   replaceChildren(...children: Element[]) { this.children = children; }
   setAttribute(name: string, value: string) { this.attributes[name] = value; }
 }
-test('continue form sends additional time and follow-up text once while keeping the terminal read-only',async()=>{
+test.each(['checkpoint','sealed-deep-actor'] as const)('continue form requests the displayed input source without exposing verifier files (%s)',async source=>{
  const elements=new Map<string,Element>();const el=(id:string)=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id)!;};
  const old={id:'first',batchId:'old-batch',task:'service',dataset:'terminal-bench-2.1',state:'error',displayState:'error',
-  execution:'timeout',grading:'failed',collection:'complete',continuable:true,budget:{agentSeconds:4200}};
+  execution:'timeout',grading:'failed',collection:'complete',continuable:true,continuationSource:source,budget:{agentSeconds:4200}};
  const batch={id:'old-batch',name:'stopped',createdAt:1,model:{model:'fake'},concurrency:1,payload:{},state:'finished',
   counts:{total:1,completed:1,active:0,queued:0,passed:0,failed:0,errors:1,cancelled:0}};
  const status={batches:[batch],runs:[old],concurrency:5,schedulingBlocked:false};
@@ -35,7 +35,7 @@ test('continue form sends additional time and follow-up text once while keeping 
  expect(el('continue-form').hidden).toBe(false);expect(el('continue-minutes').value).toBe('70');
  el('continue-minutes').value='30';el('continue-prompt').value='继续，从已有权重恢复。';
  await el('continue-form').onsubmit!({preventDefault(){}});
- expect(commands).toEqual([{url:'/api/continue-run',body:{run:'first',agentSeconds:1800,prompt:'继续，从已有权重恢复。'}}]);
+ expect(commands).toEqual([{url:'/api/continue-run',body:{run:'first',agentSeconds:1800,prompt:'继续，从已有权重恢复。',restoreActor:source==='sealed-deep-actor'}}]);
  expect(el('continue-form').hidden).toBe(true);
 });
 test.each(['passed','failed','needs_recovery','error','setup_error'])('batch viewer distinguishes completion, collection and grading failures (%s)', async state => {

@@ -3,6 +3,7 @@ import {callOpenAICompatible} from "../../src/llm/providers/openAICompatible.js"
 import {createLLMCaller} from "../../src/llm/index.js";
 import {expect, test, spyOn} from "bun:test";
 import {createTaskReviewRunner, type TaskReviewRunner} from "../../src/tasks/review.js";
+import type {Message} from "../../src/llm/types.js";
 import type {StartTaskReviewInput, TaskReviewSnapshot} from "../../src/tasks/types.js";
 import {TaskReviewProgress} from "../../src/agent/taskReview.js";
 import {prepareAgentInvoke} from "../../src/agent/invokePreparation.js";
@@ -108,7 +109,7 @@ test("a delayed review is injected once at the request tail with the frozen roun
     });
 });
 
-test("busy reviews do not stack; changed user requirements invalidate old results and preserve bounded evidence", async () => {
+test("busy reviews do not stack; user steering invalidates frozen feedback without losing earlier History", async () => {
     await withTempProject(async cwd => {
         const ctx = createTestContext(cwd, {taskReviewEnabled: true});
         const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner);
@@ -118,29 +119,33 @@ test("busy reviews do not stack; changed user requirements invalidate old result
         const inputs: StartTaskReviewInput[] = [];
         session.startReview = input => {inputs.push(input); return inputs.length === 1 ? first.promise : second.promise;};
         const active = createTestContext(cwd, {tasks: session, taskReviewEnabled: true});
-        const progress = new TaskReviewProgress(active, "Original target", "user", [{role: "user", origin: "user", content: "Earlier original requirement"}]);
+        const history: Message[] = [{role: "user", origin: "user", content: "Earlier original requirement"}];
+        const progress = new TaskReviewProgress(active, history);
+        history.push({role: "user", origin: "user", content: "Original target"});
         const snapshot: TaskReviewSnapshot = {id: "t_0123456789ab", kind: "review", status: "completed", owner: {sessionId: active.sessionId, turnId: active.turnId},
             startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), fromRound: 1, toRound: 10, resultPreview: report};
         try {
             for (let round = 1; round <= 20; round++) {
-                progress.record({type: "tool_call_end", turnId: active.turnId, toolCallId: `call-${round}`, result: "large".repeat(10_000), outcome: "failed"}, round);
-                if (round === 10) progress.recordInput({id: "receipt", source: "task_notification", taskId: "t_0123456789ab",
-                    content: "Background command completed with exit code 0"}, round);
-                progress.completedRound(round);
+                history.push({role: "user", origin: "task_notification", content: `CHECK_${round}: ` + "large".repeat(600)});
+                if (round === 10) history.push({role: "user", origin: "task_notification", content: "Background command completed with exit code 0"});
+                progress.completedRound(round, history);
             }
             expect(inputs).toHaveLength(1);
             expect(inputs[0]?.evidence.activity).toContain("Background command completed with exit code 0");
-            expect(inputs[0]?.evidence.activity.length).toBeLessThanOrEqual(24_000);
-            expect(inputs[0]?.evidence.activity).toContain("Evidence omitted");
-            progress.steer("New restriction: do not change the public interface");
+            expect(inputs[0]?.evidence.activity.length).toBeGreaterThan(24_000);
+            expect(inputs[0]?.evidence.activity).not.toContain("Evidence omitted");
+            expect(inputs[0]?.evidence.activity).not.toContain("CHECK_11");
+            history.push({role: "user", origin: "user", content: "New restriction: do not change the public interface"});
+            progress.steer();
             expect(inputs[0]?.signal.aborted).toBe(true);
             first.resolve(snapshot); await first.promise; await Promise.resolve();
             expect(progress.takeReminder()).toBeUndefined();
-            progress.completedRound(30);
+            progress.completedRound(30, history);
             expect(inputs).toHaveLength(2);
-            expect(inputs[1]?.evidence.requirements).toContain("Original target");
-            expect(inputs[1]?.evidence.requirements).toContain("Earlier original requirement");
-            expect(inputs[1]?.evidence.requirements).toContain("do not change the public interface");
+            expect(inputs[1]?.evidence.activity).toContain("Original target");
+            expect(inputs[1]?.evidence.activity).toContain("Earlier original requirement");
+            expect(inputs[1]?.evidence.activity).toContain("CHECK_1:");
+            expect(inputs[1]?.evidence.activity).toContain("do not change the public interface");
             progress.close(); second.resolve({...snapshot, fromRound: 21, toRound: 30});
             await second.promise;
             expect(progress.takeReminder()).toBeUndefined();
@@ -148,7 +153,7 @@ test("busy reviews do not stack; changed user requirements invalidate old result
     });
 });
 
-test("review evidence keeps tool results without copying UI diffs when unverified claims overflow the window", async () => {
+test("review freezes the full visible History, marks recent rounds and excludes provider reasoning", async () => {
     await withTempProject(async cwd => {
         const base = createTestContext(cwd);
         const runtime = createTaskRuntimeForTest(cwd, base.shellRunner);
@@ -161,49 +166,135 @@ test("review evidence keeps tool results without copying UI diffs when unverifie
                 fromRound: input.evidence.fromRound, toRound: input.evidence.toRound, resultPreview: report};
         };
         const ctx = createTestContext(cwd, {tasks: session, taskReviewEnabled: true});
-        const progress = new TaskReviewProgress(ctx, "Preserve existing behavior", "user", []);
+        const history: Message[] = [{role: "user", origin: "user", content: "Preserve existing behavior"}];
+        const progress = new TaskReviewProgress(ctx, history);
         try {
-            for (let round = 1; round <= 10; round++) {
-                progress.record({type: "tool_call_end", turnId: ctx.turnId, toolCallId: `check-${round}`,
-                    result: `CHECK_${round}: only focused tests ran`, outcome: "ok"}, round);
-                if (round === 5) {
-                    progress.record({type: "tool_call_start", turnId: ctx.turnId, toolCallId: "edit",
-                        name: "edit_file", args: '{"path":"source.py","old_string":"old","new_string":"new"}'}, round);
-                    progress.record({type: "tool_call_end", turnId: ctx.turnId, toolCallId: "edit", result: "Output storage failed",
-                        outcome: "output_failed", uiData: {type: "file_change", change: {
-                            version: 1, path: "source.py", kind: "update", diffStatus: "complete", linesAdded: 1, linesRemoved: 1,
-                            hunks: [{oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
-                                lines: [{type: "remove", content: "UI_ONLY_OLD"}, {type: "add", content: "UI_ONLY_NEW"}]}],
-                        }}}, round);
-                    progress.record({type: "tool_call_start", turnId: ctx.turnId, toolCallId: "rejected-edit",
-                        name: "edit_file", args: '{"path":"unchanged.py"}'}, round);
-                    progress.record({type: "tool_call_end", turnId: ctx.turnId, toolCallId: "rejected-edit",
-                        result: "No file was written", outcome: "failed"}, round);
-                }
-                for (let n = 0; n < 20; n++) {
-                    progress.record({type: "assistant_text", phase: "commentary", content: "All work is complete. ".repeat(150)}, round);
-                }
-                progress.recordInput({id: `agent-${round}`, source: "agent_message", content: "Everything is correct."}, round);
+            for (let round = 1; round <= 20; round++) {
+                history.push({role: "assistant", content: "Unverified claim",
+                    reasoning: {scope: "a".repeat(64), content: "PRIVATE_PROVIDER_REASONING"},
+                    tool_calls: [{id: `check-${round}`, type: "function", function: {name: "bash", arguments: '{"command":"stestr run"}'}}]});
+                history.push({role: "tool", tool_call_id: `check-${round}`, content: `CHECK_${round}: ` + "details".repeat(400) + ` END_${round}`});
+                progress.completedRound(round, history);
+                await Promise.resolve(); await Promise.resolve();
             }
-            progress.recordInput({id: "shell-receipt", taskId: "t_111111111111", source: "task_notification",
-                content: "Background check failed: counterexample remains"}, 10);
-            progress.completedRound(10);
-            expect(inputs).toHaveLength(1);
-            const evidence = inputs[0]!.evidence;
-            expect(evidence.requirements).toContain("Preserve existing behavior");
-            for (let round = 1; round <= 10; round++) expect(evidence.activity).toContain(`CHECK_${round}:`);
-            expect(evidence.activity).toContain('"path":"source.py","old_string":"old","new_string":"new"');
-            expect(evidence.activity).toContain("outcome=output_failed: Output storage failed");
-            expect(evidence.activity).not.toContain("Committed file change");
-            expect(evidence.activity).not.toContain("UI_ONLY_OLD");
-            expect(evidence.activity).not.toContain("UI_ONLY_NEW");
-            expect(evidence.activity).toContain("execution not yet confirmed");
-            expect(evidence.activity).toContain("No file was written");
-            expect(evidence.activity).toContain("Background check failed: counterexample remains");
-            expect(evidence.activity).toContain("claim (not independently verified)");
-            expect(evidence.activity).toContain("Evidence omitted");
-            expect(evidence.activity.length).toBeLessThanOrEqual(24_000);
-            expect(evidence.activity.indexOf("CHECK_1:")).toBeLessThan(evidence.activity.indexOf("CHECK_10:"));
+            expect(inputs).toHaveLength(2);
+            const evidence = inputs[1]!.evidence;
+            expect(evidence.activity).toContain("Preserve existing behavior");
+            expect(evidence.activity).toContain("Round 1\n");
+            expect(evidence.activity).toContain("Round 11 (recent interval)");
+            for (let round = 1; round <= 20; round++) {
+                expect(evidence.activity).toContain(`CHECK_${round}:`);
+                expect(evidence.activity).toContain(`END_${round}`);
+            }
+            expect(evidence.activity).toContain('"tool_call_id":"check-1"');
+            expect(evidence.activity).toContain("stestr run");
+            expect(evidence.activity).not.toContain("PRIVATE_PROVIDER_REASONING");
+            expect(evidence.activity).not.toContain("Evidence omitted");
+            expect(evidence.activity.length).toBeGreaterThan(24_000);
+            history.push({role: "user", origin: "task_notification", content: "LATER_PROGRESS"});
+            expect(evidence.activity).not.toContain("LATER_PROGRESS");
+        } finally {progress.close(); await runtime.close();}
+    });
+});
+
+test.each(["activity", "requirements"] as const)("over-budget %s skips model calls, records a diagnostic and allows a later smaller review", async field => {
+    await withTempProject(async cwd => {
+        const ctx = createTestContext(cwd, {fastModel: "deepseek-v4.1-flash", fastProvider: "deepseek"});
+        const fake = createFakeLLM([assistantText(report)]);
+        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined,
+            createTaskReviewRunner({callLLM: fake.callLLM}));
+        const session = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
+        try {
+            const result = await session.startReview({parentContext: ctx, signal: ctx.signal,
+                evidence: {fromRound: 1, toRound: 10, requirements: "task", activity: "checks", [field]: "x".repeat(300_000)}});
+            expect(result.status).toBe("cancelled");
+            expect(result.outputIssue).toContain("review skipped: estimated input");
+            expect(result.outputIssue).toContain("limit 150000");
+            expect(result.resultPreview).toBeUndefined();
+            expect(fake.calls).toHaveLength(0);
+            expect(await session.pendingNotifications()).toEqual([]);
+            const next = await session.startReview({parentContext: ctx, signal: ctx.signal,
+                evidence: {fromRound: 11, toRound: 20, requirements: "task", activity: "x".repeat(296_000)}});
+            expect(next.status).toBe("completed");
+            expect(fake.calls).toHaveLength(1);
+            await runtime.close();
+            const restored = createTaskRuntimeForTest(cwd, ctx.shellRunner);
+            try {
+                expect((await restored.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore}).list())
+                    .find(task => task.id === result.id)?.outputIssue).toBe(result.outputIssue);
+            } finally {await restored.close();}
+        } finally {await runtime.close();}
+    });
+});
+
+test("review respects a smaller fast-model input window without truncating history", async () => {
+    await withTempProject(async cwd => {
+        const ctx = createTestContext(cwd);
+        const fake = createFakeLLM([]);
+        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined,
+            createTaskReviewRunner({callLLM: fake.callLLM}));
+        try {
+            const result = await runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore})
+                .startReview({parentContext: ctx, signal: ctx.signal,
+                    evidence: {fromRound: 1, toRound: 10, requirements: "task", activity: "x".repeat(220_000)}});
+            expect(result.outputIssue).toContain("limit 108000");
+            expect(fake.calls).toHaveLength(0);
+        } finally {await runtime.close();}
+    });
+});
+
+test("an oversized review does not interrupt the main Agent or call the reviewer", async () => {
+    await withTempProject(async cwd => {
+        const base = createTestContext(cwd, {model: "deepseek-v4.1-flash", provider: "deepseek",
+            fastModel: "deepseek-v4.1-flash", fastProvider: "deepseek"});
+        const reviewFinished = deferred<void>();
+        let reviews = 0;
+        const factory: TaskReviewRunner = async () => {reviews++; return report;};
+        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, factory);
+        const session = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
+        session.subscribe(event => {if (event.type === "task_finished" && event.task.kind === "review") reviewFinished.resolve();});
+        const ctx = createTestContext(cwd, {tasks: session, taskReviewEnabled: true,
+            model: base.model, provider: base.provider, fastModel: base.fastModel, fastProvider: base.fastProvider});
+        const fake = createFakeLLM([...steps(), async () => {await reviewFinished.promise; return assistantText("done");}]);
+        const history = createInitialHistory(cwd, base.model);
+        history.push({role: "user", origin: "user", content: "x".repeat(300_000)});
+        try {
+            const result = await runAgentForTest("Finish the task", history, () => {}, ctx, {callLLM: fake.callLLM, ...bindings});
+            expect(result.reason).toBe("completed");
+            expect(fake.calls).toHaveLength(11);
+            expect(reviews).toBe(0);
+            const review = (await session.list()).find(task => task.kind === "review");
+            expect(review?.status).toBe("cancelled");
+            expect(review?.outputIssue).toContain("review skipped");
+            expect(JSON.stringify(history)).not.toContain("<task-review>");
+        } finally {await runtime.close();}
+    });
+});
+
+test("compaction replaces review evidence instead of retaining a second history cache", async () => {
+    await withTempProject(async cwd => {
+        const ctx = createTestContext(cwd, {taskReviewEnabled: true});
+        const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner);
+        const session = runtime.forSession({sessionId: ctx.sessionId, toolResultStore: ctx.toolResultStore});
+        const inputs: StartTaskReviewInput[] = [];
+        session.startReview = async input => {
+            inputs.push(input);
+            return {id: "t_0123456789ab", kind: "review", status: "completed",
+                owner: {sessionId: ctx.sessionId, turnId: ctx.turnId}, startedAt: new Date().toISOString(),
+                fromRound: input.evidence.fromRound, toRound: input.evidence.toRound, resultPreview: report};
+        };
+        const active = createTestContext(cwd, {tasks: session, taskReviewEnabled: true});
+        const history: Message[] = [{role: "user", origin: "user", content: "OLD_RAW_HISTORY"}];
+        const progress = new TaskReviewProgress(active, history);
+        try {
+            progress.completedRound(10, history);
+            await Promise.resolve(); await Promise.resolve();
+            history.splice(0, history.length, {role: "user", origin: "compaction", content: "SUMMARY: stestr is the confirmed runner"});
+            progress.completedRound(20, history);
+            expect(inputs).toHaveLength(2);
+            expect(inputs[1]?.evidence.activity).toContain("Compacted history; earlier details may be summarized");
+            expect(inputs[1]?.evidence.activity).toContain("SUMMARY: stestr");
+            expect(inputs[1]?.evidence.activity).not.toContain("OLD_RAW_HISTORY");
         } finally {progress.close(); await runtime.close();}
     });
 });
@@ -214,10 +305,10 @@ test("review calls the LLM directly with only a short dedicated prompt and froze
         const fake = createFakeLLM([options => {
             expect(options.messages).toHaveLength(2);
             expect(options.messages[0]?.role).toBe("system");
-            expect(String(options.messages[0]?.content).length).toBeLessThan(1_200);
+            expect(String(options.messages[0]?.content).length).toBeLessThan(2_000);
             expect(options.messages[0]?.content).not.toContain("coding agent");
             expect(options.messages[0]?.content).toContain("plain-text paragraph");
-            expect(options.messages[1]?.content).toContain("Coverage: rounds 1-10");
+            expect(options.messages[1]?.content).toContain("recent interval: rounds 1-10");
             expect(options.messages[1]?.content).toContain("Original goal");
             expect(options.messages[1]?.content).toContain("round 9: reproduction failed");
             expect(options.tools).toEqual([]);

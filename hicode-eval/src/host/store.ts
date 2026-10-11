@@ -76,13 +76,18 @@ async function scanTree(root: string, recordLinks = false, maxFiles = 20000, max
 }
 export async function run(command: string[], options: { cwd?: string; env?: Record<string, string>; timeout?: number; includeStderr?: boolean; signal?:AbortSignal } = {}): Promise<string> {
   options.signal?.throwIfAborted();
-  const proc = Bun.spawn(command, { cwd: options.cwd, env: options.env, stdout: 'pipe', stderr: 'pipe' });
-  const abort=()=>{proc.kill('SIGKILL');};
+  const proc = Bun.spawn(command, { cwd: options.cwd, env: options.env, stdout: 'pipe', stderr: 'pipe',detached:process.platform!=='win32' });
+  const stop=()=>{
+    if(process.platform==='win32'){proc.kill('SIGKILL');return;}
+    try{process.kill(-proc.pid,'SIGKILL');}
+    catch(error){if(!(error instanceof Error&&'code' in error&&error.code==='ESRCH'))throw error;}
+  };
+  const abort=()=>{stop();};
   options.signal?.addEventListener('abort',abort,{once:true});
   if(options.signal?.aborted)abort();
   const timeout = options.timeout ?? 30000;
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; proc.kill('SIGKILL'); }, timeout);
+  const timer = setTimeout(() => { timedOut = true; stop(); }, timeout);
   try {
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     options.signal?.throwIfAborted();

@@ -3,9 +3,11 @@ import http.server
 import json
 from pathlib import Path
 import socket
+import ssl
 import tempfile
 import threading
 import unittest
+from unittest.mock import Mock, patch
 from model_proxy import Gateway, validate_request
 
 
@@ -100,6 +102,64 @@ class ModelProxyTest(unittest.TestCase):
         self.assertEqual(status,403)
         self.assertIn(b'data_inspection_failed',body)
         self.assertNotIn(b'server-secret',body)
+
+    def test_gateway_failures_identify_stage_and_kind_without_exception_text(self):
+        self.start()
+        for method, error, stage, kind in [
+            ('connect', socket.timeout('server-secret'), 'connect', 'timeout'),
+            ('connect', TimeoutError('server-secret'), 'connect', 'timeout'),
+            ('connect', socket.gaierror('server-secret'), 'connect', 'dns'),
+            ('connect', ssl.SSLError('server-secret'), 'connect', 'tls'),
+            ('request', ConnectionResetError('server-secret'), 'send_request', 'connection'),
+            ('getresponse', http.client.BadStatusLine('server-secret'), 'wait_response', 'protocol'),
+        ]:
+            with self.subTest(stage=stage, kind=kind):
+                upstream = Mock()
+                closed = threading.Event()
+                upstream.close.side_effect = closed.set
+                getattr(upstream, method).side_effect = error
+                with patch('model_proxy.http.client.HTTPConnection', return_value=upstream), patch('model_proxy.sys.stderr') as stderr:
+                    status, body = self.request()
+                    self.assertTrue(closed.wait(2))
+                self.assertEqual(status, 502)
+                details = json.loads(body)['error']
+                self.assertEqual(details['stage'], stage)
+                self.assertEqual(details['code'], 'model_gateway_' + kind)
+                self.assertGreaterEqual(details['elapsed_ms'], 0)
+                self.assertNotIn(b'server-secret', body)
+                self.assertNotIn('server-secret', str(stderr.write.call_args_list))
+                upstream.close.assert_called_once()
+
+    def test_stream_timeout_reports_error_without_completion_or_second_http_response(self):
+        self.start()
+        upstream = Mock()
+        response = upstream.getresponse.return_value
+        response.status = 200
+        response.getheader.return_value = 'text/event-stream'
+        response.read1.side_effect = [b'data: {"delta":"partial"}\n\n', TimeoutError('server-secret')]
+        with patch('model_proxy.http.client.HTTPConnection', return_value=upstream), patch('model_proxy.sys.stderr') as stderr:
+            status, body = self.request()
+        self.assertEqual(status, 200)
+        self.assertIn(b'data: {"delta":"partial"}', body)
+        event = json.loads(body.split(b'data: ')[-1])['error']
+        self.assertEqual(event['stage'], 'read_stream')
+        self.assertEqual(event['code'], 'model_gateway_timeout')
+        self.assertNotIn(b'[DONE]', body)
+        self.assertNotIn(b'HTTP/', body)
+        self.assertNotIn(b'server-secret', body)
+        self.assertNotIn('server-secret', str(stderr.write.call_args_list))
+
+    def test_error_body_timeout_keeps_gateway_diagnostics(self):
+        self.start()
+        upstream = Mock()
+        response = upstream.getresponse.return_value
+        response.status = 429
+        response.read.side_effect = TimeoutError('server-secret')
+        with patch('model_proxy.http.client.HTTPConnection', return_value=upstream), patch('model_proxy.sys.stderr'):
+            status, body = self.request()
+        self.assertEqual(status, 502)
+        self.assertEqual(json.loads(body)['error']['stage'], 'read_error_response')
+        self.assertNotIn(b'server-secret', body)
 
     def test_client_cancel_closes_slow_upstream(self):
         self.start('/slow')

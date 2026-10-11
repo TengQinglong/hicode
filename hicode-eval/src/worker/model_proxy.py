@@ -8,13 +8,27 @@ import select
 import socket
 import socketserver
 import ssl
+import sys
 import threading
+import time
 from urllib.parse import urlsplit
 
 MAX_REQUEST = 16 * 1024 * 1024
 FIELDS = {'model', 'messages', 'tools', 'tool_choice', 'stream', 'stream_options',
           'thinking', 'enable_thinking', 'preserve_thinking', 'reasoning', 'reasoning_effort',
           'temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'parallel_tool_calls', 'provider'}
+
+
+def gateway_failure(error, stage, started):
+    # Only fixed classifications cross the boundary; exception text may contain secrets.
+    kind = next((name for cls, name in (
+        (socket.gaierror, 'dns'), (ssl.SSLError, 'tls'), (socket.timeout, 'timeout'), (TimeoutError, 'timeout'),
+        (ConnectionError, 'connection'), (http.client.HTTPException, 'protocol'),
+        (OSError, 'io'), (ValueError, 'invalid_response'),
+    ) if isinstance(error, cls)), 'unknown')
+    elapsed = max(0, round((time.monotonic() - started) * 1000))
+    return {'error': {'code': 'model_gateway_' + kind, 'stage': stage, 'elapsed_ms': elapsed,
+                      'message': f'Model gateway failed: stage={stage}, kind={kind}, elapsed_ms={elapsed}'}}
 
 
 def validate_reasoning(value, policy):
@@ -174,7 +188,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         watcher = None
         upstream_socket = None
         headers_sent = False
+        started = time.monotonic()
+        stage = 'connect'
         try:
+            # HTTPSConnection.connect includes DNS, TCP and TLS establishment.
             upstream.connect()
             upstream_socket = upstream.sock
             upstream_socket.settimeout(600)
@@ -188,14 +205,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             return
                     except OSError:return
             watcher = threading.Thread(target=watch_disconnect, daemon=True);watcher.start()
+            stage = 'send_request'
             upstream.request('POST', self.server.endpoint, body=body,
                              headers={'Content-Type':'application/json', 'Authorization':'Bearer '+self.server.credential,
                                       'Accept':'text/event-stream', 'Accept-Encoding':'identity'})
+            stage = 'wait_response'
             response = upstream.getresponse()
             if 300 <= response.status < 400:
                 self.send_error(502, 'Model endpoint redirects are not allowed');return
             if response.status >= 400:
                 code = None
+                stage = 'read_error_response'
                 try:
                     error = json.loads(response.read(65536)).get('error', {})
                     candidate = error.get('code') if isinstance(error, dict) else None
@@ -203,22 +223,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         code = candidate
                 except (ValueError, AttributeError):pass
                 payload = json.dumps({'error': {'message': f'Model service returned HTTP {response.status}', 'code': code}}).encode()
+                stage = 'forward_response'
                 self.send_response(response.status);self.send_header('Content-Type','application/json')
                 self.send_header('Content-Length',str(len(payload)));self.end_headers()
                 headers_sent=True;self.wfile.write(payload);return
+            stage = 'forward_response'
             self.send_response(response.status)
             self.send_header('Content-Type', response.getheader('Content-Type', 'text/event-stream'))
             self.send_header('Connection', 'close')
             self.end_headers();headers_sent = True
             while True:
+                stage = 'read_stream'
                 chunk = response.read1(65536)
                 if not chunk:break
+                stage = 'forward_stream'
                 self.wfile.write(chunk);self.wfile.flush()
-        except (OSError, ValueError, http.client.HTTPException):
-            # Do not put credentials, request bodies or upstream exception text into logs.
-            if not headers_sent:
-                try:self.send_error(502, 'Model gateway connection failed')
-                except OSError:pass
+        except (OSError, ValueError, http.client.HTTPException) as error:
+            failure = gateway_failure(error, stage, started)
+            payload = json.dumps(failure).encode()
+            print('Model gateway ' + payload.decode(), file=sys.stderr, flush=True)
+            try:
+                if not headers_sent:
+                    self.send_response(502);self.send_header('Content-Type', 'application/json')
+                    self.send_header('Content-Length', str(len(payload)));self.end_headers()
+                    self.wfile.write(payload)
+                elif stage == 'read_stream':
+                    # Report a failed stream, never a successful completion or a second HTTP response.
+                    self.wfile.write(b'\n\ndata: ' + payload + b'\n\n');self.wfile.flush()
+            except OSError:pass
         finally:
             finished.set()
             if watcher:watcher.join(timeout=1)

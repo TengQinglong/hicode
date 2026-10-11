@@ -57,16 +57,20 @@ export class TaskCatalog {
     return task;
   }
   async register(entries:readonly Pick<CatalogTask,'id'|'dataset'|'source'|'preparation'>[]):Promise<void>{
-    const layout=new EvalLayout(dirname(dirname(this.path)));
-    for(const entry of entries)if(entry.source!==layout.source(entry))throw Error('Register only root-owned sources');
-    const tasks=new Map(this.document.tasks.map(task=>[taskKey(task),task]));
-    for(const entry of entries){
-      const key=taskKey(entry),previous=tasks.get(key);
-      tasks.set(key,catalogTaskSchema.parse({...previous,...entry,status:previous?.status??'untested',environment:previous?.environment??'unprepared',results:previous?.results??[]}));
-    }
-    const next=catalogSchema.parse({version:1,updatedAt:new Date().toISOString(),tasks:[...tasks.values()].sort((a,b)=>taskKey(a).localeCompare(taskKey(b)))});
-    await save(this.path,next);this.document=next;
+    const operation=this.writes.then(async()=>{
+      const layout=new EvalLayout(dirname(dirname(this.path)));
+      const tasks=new Map(this.document.tasks.map(task=>[taskKey(task),task]));
+      for(const entry of entries){
+        if(entry.source!==layout.source(entry))throw Error('Register only root-owned sources');
+        const key=taskKey(entry);
+        if(tasks.has(key))throw Error('Task already registered: '+key);
+        tasks.set(key,catalogTaskSchema.parse({...entry,status:'untested',environment:'unprepared',results:[]}));
+      }
+      const next=catalogSchema.parse({version:1,updatedAt:new Date().toISOString(),tasks:[...tasks.values()].sort((a,b)=>taskKey(a).localeCompare(taskKey(b)))});
+      await save(this.path,next);this.document=next;
+    });this.writes=operation.catch(()=>{});await operation;
   }
+
   async setEnvironment(task:Pick<CatalogTask,'dataset'|'id'>,environment:CatalogTask['environment']):Promise<void>{
     const key=taskKey(task);this.get(task.dataset,task.id);
     const operation=this.writes.then(async()=>{

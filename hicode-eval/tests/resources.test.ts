@@ -6,8 +6,38 @@ import {collectResources,archivePassedRun} from '../src/host/resources.js';
 import * as transport from '../src/host/store.js';
 import {runSchema} from '../src/host/types.js';
 import {TaskCatalog} from '../src/host/catalog.js';
+import {bindingSchema,environmentBindingPath} from '../src/host/environments.js';
 
 // Fake only the process boundary; real layout, receipts, catalog and archives are exercised.
+test('DeepSWE passed-only bases are removed after their dependencies while shared bases survive',async()=>{
+ const f=await fixture();
+ const make=async(id:string,baseLetter:string,dependencyLetter:string,passed:boolean)=>{
+  const ref={id,dataset:'deep-swe' as const},source=f.layout.source(ref);await mkdir(source,{recursive:true});
+  const layer=(letter:string,kind:'base'|'dependencies',parent:string)=>({version:1,kind,key:letter.repeat(64),imageId:'sha256:'+letter.repeat(64),parentImage:parent,recipeSha256:'9'.repeat(64),createdAt:new Date().toISOString()});
+  const base=layer(baseLetter,'base','sha256:'+'8'.repeat(64));
+  const binding=bindingSchema.parse({version:1,task:'deep-swe:'+id,sourceHash:'7'.repeat(64),base,dependencies:layer(dependencyLetter,'dependencies',base.imageId),preparation:null});
+  await f.catalog.register([{...ref,source}]);await f.catalog.setEnvironment(ref,'ready');
+  await transport.save(environmentBindingPath(f.config.environments,ref),binding);
+  if(passed)await f.catalog.record({...finished(id,dependencyLetter.repeat(16)),dataset:'deep-swe'});
+  return binding;
+ };
+ const shared=await make('passed-shared','b','c',true),pending=await make('pending-shared','b','d',false),exclusive=await make('passed-exclusive','e','f',true);
+ const present=new Set([shared.base.imageId,shared.dependencies.imageId,pending.dependencies.imageId,exclusive.base.imageId,exclusive.dependencies.imageId]);
+ const removed:string[]=[];
+ const fake=spyOn(transport,'run').mockImplementation(async args=>{
+  if(args.includes('ls'))return [...present].join('\n');if(args.includes('ps'))return '';
+  if(args.includes('inspect')){const id=args.at(-1)!;return JSON.stringify([{Id:id,Config:{Labels:{'dev.hicode.environment':id.slice(7)}},RepoTags:['hicode-env-layer:'+id.slice(7)]}]);}
+  if(args.includes('rm')){const id='sha256:'+args.at(-1)!.split(':')[1];removed.push(id);present.delete(id);return '';}
+  throw Error('Unexpected boundary');
+ });
+ try{
+  const result=await collectResources(f.config,f.catalog,[],true);
+  expect(result.deleted).toContain(exclusive.base.imageId);
+  expect(removed.indexOf(exclusive.dependencies.imageId)).toBeLessThan(removed.indexOf(exclusive.base.imageId));
+  expect(present.has(shared.base.imageId)).toBe(true);expect(present.has(pending.dependencies.imageId)).toBe(true);
+  expect(f.catalog.get('deep-swe','passed-exclusive').environment).toBe('evicted');
+ }finally{fake.mockRestore();await f.cleanup();}
+});
 test('cleanup preserves shared images, evicts passed-only images, and updates the ledger',async()=>{
  const f=await fixture();const a=await seed(f,'passed-shared','c'),b=await seed(f,'untested-shared','c'),c=await seed(f,'passed-only','d');
  await f.catalog.record(finished(a.id));await f.catalog.record(finished(c.id,'e'.repeat(16)));

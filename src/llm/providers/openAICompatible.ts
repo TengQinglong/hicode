@@ -22,7 +22,7 @@ const LLM_RETRY_BASE_DELAY_MS = 800;
 const LLM_STREAM_IDLE_TIMEOUT_MS = 300_000;
 const LLM_STREAM_IDLE_WARNING_MS = 60_000;
 const LLM_OUTPUT_STALL_TIMEOUT_MS = 60_000;
-const LLM_MAX_OUTPUT_STALL_RETRIES = 2;
+const STALLS_BEFORE_THINKING_FALLBACK = 2;
 const MAX_ERROR_RESPONSE_BYTES = 64 * 1024;
 
 interface OpenAICompatibleCallerConfig {
@@ -301,9 +301,7 @@ async function callOpenAICompatibleCore(
     const requestTimeoutMs = config.streamIdleTimeoutMs;
     const outputStallTimeoutMs = config.outputStallTimeoutMs;
     let outputStallRetries = 0;
-    let responseRetries = 0;
-    let truncationRetries = 0;
-    let providerStreamErrorRetries = 0;
+    let outputWasTruncated = false;
     let completedRetryUsage = emptyUsage();
 
     if (options.signal) throwIfTurnAborted(options.signal);
@@ -330,14 +328,14 @@ async function callOpenAICompatibleCore(
         if (options.signal) throwIfTurnAborted(options.signal);
         const disableThinking =
             endpoint.disableThinkingOnFinalStallRetry === true &&
-            outputStallRetries >= LLM_MAX_OUTPUT_STALL_RETRIES;
+            outputStallRetries >= STALLS_BEFORE_THINKING_FALLBACK;
         const requestBody = createRequestBody(
             options,
             endpoint.requestFields,
             disableThinking,
             reasoningScope
         );
-        const recoveryMessage = truncationRetries > 0 ? [{role: "system", content: "The previous response exceeded the output limit and was discarded; none of its tool calls were executed. Continue from the last completed history. Return a concise next step with at most one small tool call. Split large changes across subsequent calls rather than emitting a complete large file or a long explanation."}] : [];
+        const recoveryMessage = outputWasTruncated ? [{role: "system", content: "The previous response exceeded the output limit and was discarded; none of its tool calls were executed. Continue from the last completed history. Return a concise next step with at most one small tool call. Split large changes across subsequent calls rather than emitting a complete large file or a long explanation."}] : [];
         requestBody.messages = [...wireMessages, ...recoveryMessage];
         const requestJson = JSON.stringify(requestBody);
         if (hasImages && Buffer.byteLength(requestJson) > 20 * 1024 * 1024) {
@@ -379,15 +377,12 @@ async function callOpenAICompatibleCore(
         const recover = async (failure: {
             reason: LLMRetryInfo["reason"];
             message: string;
-            allowed: boolean;
             immediate?: boolean;
             details?: {usage?: TokenUsage; rawResponse: Record<string, unknown>};
         }): Promise<void> => {
-            const canRetry = failure.allowed && attempt < LLM_MAX_ATTEMPTS;
+            const canRetry = attempt < LLM_MAX_ATTEMPTS;
             requestSignal.cleanup();
-            const retryStatus = canRetry ? "; retrying the model request"
-                : attempt < LLM_MAX_ATTEMPTS ? "; retry limit for this error reached"
-                : "; retry budget exhausted";
+            const retryStatus = canRetry ? "; retrying the model request" : "; retry budget exhausted";
             const message = `${failure.message} (attempted ${attempt}/${LLM_MAX_ATTEMPTS} times); tools from this response were not executed${retryStatus}`;
             finishPromptLog({
                 ...failure.details,
@@ -432,7 +427,7 @@ async function callOpenAICompatibleCore(
                 finishPromptLog({error: `Timed out waiting for the first stream event (${requestTimeoutMs}ms)`});
                 throw new Error(`LLM timed out waiting for the first stream event (${requestTimeoutMs}ms)`);
             }
-            await recover({reason: "connection", message: `LLM fetch failed: ${redactSecret(formatError(error), endpoint.apiKey)}`, allowed: true});
+            await recover({reason: "connection", message: `LLM fetch failed: ${redactSecret(formatError(error), endpoint.apiKey)}`});
             continue;
         }
 
@@ -446,7 +441,7 @@ async function callOpenAICompatibleCore(
                 );
                 const retryable = isRetryableStatus(response.status);
                 if (retryable) {
-                    await recover({reason: "http", message: `LLM API error: ${response.status} - ${text.slice(0, 500)}`, allowed: true});
+                    await recover({reason: "http", message: `LLM API error: ${response.status} - ${text.slice(0, 500)}`});
                     continue;
                 }
                 finishPromptLog({
@@ -460,8 +455,7 @@ async function callOpenAICompatibleCore(
             }
 
             if (!response.body) {
-                const allowed = responseRetries++ < 1;
-                await recover({reason: "empty_stream", message: `${endpoint.displayName} stream response has no body`, allowed});
+                await recover({reason: "empty_stream", message: `${endpoint.displayName} stream response has no body`});
                 continue;
             }
             requestSignal.reset();
@@ -502,7 +496,7 @@ async function callOpenAICompatibleCore(
                     streamed.usage
                 );
                 await recover({
-                    reason: "empty_response", allowed: true,
+                    reason: "empty_response",
                     message: "LLM returned an empty response: no valid text or tool calls (reasoning is not a substitute for text)",
                     details: {usage: streamed.usage, rawResponse: responseDetails},
                 });
@@ -558,20 +552,18 @@ async function callOpenAICompatibleCore(
                 const progressDescription = lastStreamProgress
                     ? ` (last phase: ${lastStreamProgress.phase}${lastStreamProgress.toolName ? `:${lastStreamProgress.toolName}` : ""}; received approximately ${lastStreamProgress.estimatedOutputTokens} tokens)`
                     : "(no valid output delta received yet)";
-                const canRetry =
-                    outputStallRetries < LLM_MAX_OUTPUT_STALL_RETRIES &&
-                    attempt < LLM_MAX_ATTEMPTS;
+                const canRetry = attempt < LLM_MAX_ATTEMPTS;
                 const nextRetryDisablesThinking =
                     canRetry &&
                     endpoint.disableThinkingOnFinalStallRetry === true &&
-                    outputStallRetries + 1 >= LLM_MAX_OUTPUT_STALL_RETRIES;
+                    outputStallRetries + 1 >= STALLS_BEFORE_THINKING_FALLBACK;
                 const retryDescription = nextRetryDisablesThinking
                     ? "; disabling deep reasoning for one final retry"
                     : canRetry
                       ? "; retrying once with the original parameters"
                       : "";
                 if (canRetry) outputStallRetries += 1;
-                await recover({reason: "output_stall", allowed: canRetry, immediate: true,
+                await recover({reason: "output_stall", immediate: true,
                     message: `LLM output has had no new delta for ${outputStallTimeoutMs} ms${retryDescription}${progressDescription}`});
                 continue;
             }
@@ -583,20 +575,19 @@ async function callOpenAICompatibleCore(
             }
             if (error instanceof ProviderStreamError) {
                 // A provider error inside an otherwise accepted stream may be intermittent
-                // regardless of its vendor-specific code. Retry the untouched request once.
-                await recover({reason: "provider", allowed: providerStreamErrorRetries++ < 1,
+                // regardless of its vendor-specific code. Use the shared request budget.
+                await recover({reason: "provider",
                     message: redactSecret(error.message, endpoint.apiKey).slice(0, 1000),
                     details: {rawResponse: {providerErrorCode: redactSecret(String(error.code), endpoint.apiKey)}}});
                 continue;
             }
             if (error instanceof OpenAICompatibleProtocolError) {
-                const truncated = error.diagnostic.code === "output_truncated";
-                const allowed = truncated ? truncationRetries++ < 1 : responseRetries++ < 1;
+                if (error.diagnostic.code === "output_truncated") outputWasTruncated = true;
                 completedRetryUsage = addUsage(completedRetryUsage, error.usage);
                 const code = error.diagnostic.code;
                 await recover({
                     reason: code === "output_truncated" ? "output_truncated" : code === "stream_disconnected" || code === "empty_stream" || code === "invalid_json" ? code : "protocol",
-                    message: error.message, allowed,
+                    message: error.message,
                     details: {usage: error.usage, rawResponse: {stream: true, provider: endpoint.displayName, protocolFailure: error.diagnostic}},
                 });
                 continue;

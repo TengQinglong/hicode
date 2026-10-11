@@ -7,6 +7,7 @@ import type {Submission} from '../src/host/types.js';
 import {fixture} from './helpers/root.js';
 import {TaskCatalog} from '../src/host/catalog.js';
 import {EVAL_ROOT} from '../src/paths.js';
+import {taskRegistrationSchema} from '../src/host/taskRegistration.js';
 
 test('fresh root is initialized without Docker, credentials or historical records',async()=>{
  const temporary=await realpath(await mkdtemp(join(tmpdir(),'eval-cli-'))),root=join(temporary,'data');
@@ -64,5 +65,24 @@ test('submit CLI reasoning overrides the file without changing it; invalid value
   const invalid=await invoke('submit',['--file',file,'--reasoning','ultra']);expect(invalid.code).not.toBe(0);
   const retry=await invoke('retry',['--run','a'.repeat(16),'--reasoning','max']);expect(retry.code).not.toBe(0);expect(retry.error).toContain('retry preserves');
   expect(received.map(s=>s.reasoning?.effort)).toEqual(['high','max','default']);expect(JSON.parse(await Bun.file(file).text())).toEqual(input);
+ }finally{server.stop(true);await f.cleanup();}
+});
+
+test('register --live transfers reviewed paths to the worker without taking its service lease',async()=>{
+ const f=await fixture();let received:unknown;
+ await mkdir(join(f.layout.root,'.service.lock'));
+ const server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(request){
+  const path=new URL(request.url).pathname;
+  if(path==='/'||path==='/api/health')return Response.json({data:f.layout.root},{headers:{'Set-Cookie':'fixture=local; Path=/'}});
+  if(path==='/api/register-tasks'){received=taskRegistrationSchema.parse(await request.json());return Response.json({registered:1});}
+  return new Response('Unexpected call',{status:500});
+ }});
+ try{
+  const proc=Bun.spawn(['bun',join(EVAL_ROOT,'src/cli.ts'),'register','--live','--root',f.layout.root,'--worker-port',String(server.port),
+    '--dataset','deep-swe','--tasks','/external/tasks','--ids','candidate','--definition','/external/reviewed.json'],
+    {env:{PATH:process.env.PATH,HOME:join(f.layout.root,'unused-user')},stdout:'pipe',stderr:'pipe'});
+  const [output,error,code]=await Promise.all([new Response(proc.stdout).text(),new Response(proc.stderr).text(),proc.exited]);
+  expect(code).toBe(0);expect(error).toBe('');expect(JSON.parse(output)).toEqual({registered:1});
+  expect(received).toEqual({dataset:'deep-swe',source:'/external/tasks',ids:['candidate'],definition:'/external/reviewed.json'});
  }finally{server.stop(true);await f.cleanup();}
 });

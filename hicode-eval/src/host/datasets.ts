@@ -1,39 +1,47 @@
-import {z} from 'zod';
+import type {Dataset} from './taskIdentity.js';
+export {datasetSchema,taskRefSchema,taskKey} from './taskIdentity.js';
+export type {Dataset,TaskRef} from './taskIdentity.js';
 import {validateDeepTask,deepExecution} from './deepTasks.js';
 import {validatePublicTask,publicTaskNetwork} from './publicTasks.js';
 import {validateSweTask, sweTree} from './sweTasks.js';
 import {tree} from './store.js';
 import {terminalExecution} from './terminalExecution.js';
 import {sweExecution} from './sweExecution.js';
+import type {prepareDeepActor} from './deepContinuation.js';
 import type {EvalLayout} from './layout.js';
 import type {Run} from './types.js';
 import type {DatasetExecution} from './executionPlan.js';
 
-export const datasetSchema=z.enum(['terminal-bench-2.1','swe-bench-verified','deep-swe']);
-export type Dataset=z.infer<typeof datasetSchema>;
-export const taskRefSchema=z.object({dataset:datasetSchema,id:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,180}$/)}).strict();
-export type TaskRef=z.infer<typeof taskRefSchema>;
-export function taskKey(task:TaskRef):string{return task.dataset+':'+task.id;}
-
 export type TaskMetadata=Awaited<ReturnType<typeof validateDeepTask>>|Awaited<ReturnType<typeof validateSweTask>>|Awaited<ReturnType<typeof validatePublicTask>>;
 type TaskAdapter={
   canContinue:boolean;
+  recoverActor:((state:Run)=>ReturnType<typeof prepareDeepActor>)|null;
   network:(source:string)=>Promise<'open'|'isolated'>;
   validate:(id:string,source:string)=>Promise<TaskMetadata>;
   snapshot:(source:string)=>ReturnType<typeof tree>;
   execution:(state:Run,source:string)=>Promise<DatasetExecution>;
 };
 
+/** Registration validates against a staged declaration before publishing it. */
+export function taskInputs(dataset:Dataset,definition:string):Pick<TaskAdapter,'validate'|'snapshot'>{
+  const inputs={
+    'terminal-bench-2.1':{validate:(id:string,source:string)=>validatePublicTask(id,source,definition),snapshot:tree},
+    'deep-swe':{validate:(id:string,source:string)=>validateDeepTask(id,source,definition),snapshot:tree},
+    'swe-bench-verified':{validate:validateSweTask,snapshot:sweTree},
+  };
+  return inputs[dataset];
+}
+
 export function taskAdapters(layout:EvalLayout):Record<Dataset,TaskAdapter>{
   return {
     'terminal-bench-2.1':{
       canContinue:true,
+      recoverActor:null,
       network:publicTaskNetwork,
-      validate:(id,source)=>validatePublicTask(id,source,layout.definition('terminal-bench-2.1')),
-      snapshot:tree,
+      ...taskInputs('terminal-bench-2.1',layout.definition('terminal-bench-2.1')),
       execution:(state,source)=>terminalExecution(state,source,layout.definition('terminal-bench-2.1')),
     },
-    'deep-swe':{canContinue:false,network:async()=> 'isolated',validate:(id,source)=>validateDeepTask(id,source,layout.definition('deep-swe')),snapshot:tree,execution:(state,source)=>deepExecution(state,source,layout.definition('deep-swe'))},
-    'swe-bench-verified':{canContinue:false,network:async()=> 'open',validate:validateSweTask,snapshot:sweTree,execution:sweExecution},
+    'deep-swe':{canContinue:true,recoverActor:async state=>(await import('./deepContinuation.js')).prepareDeepActor(layout,state),network:async()=> 'isolated',...taskInputs('deep-swe',layout.definition('deep-swe')),execution:(state,source)=>deepExecution(state,source,layout.definition('deep-swe'))},
+    'swe-bench-verified':{canContinue:false,recoverActor:null,network:async()=> 'open',...taskInputs('swe-bench-verified',layout.definition('swe-bench-verified')),execution:sweExecution},
   };
 }

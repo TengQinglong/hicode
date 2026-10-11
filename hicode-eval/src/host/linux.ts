@@ -129,8 +129,12 @@ export class LinuxMachine {
   }
   private async collect(id: string, path: string): Promise<void> {
     const stage = join(path, 'collecting'); await rm(stage, { recursive: true, force: true }); await mkdir(stage);
+    const exported='/eval/evidence-export/'+id;
+    // Preserve Linux case-distinct names and links in a reversible storage view.
+    await run(this.docker('exec',this.containers.name(id),'python3','/opt/hicode-eval/evidence_export.py',
+      'export','/eval/runs/'+id,exported),{timeout:300000});
     // Native build outputs can span several GiB; export has a separate bounded window.
-    await run(this.docker('cp', this.containers.name(id) + ':/eval/runs/' + id + '/.', stage), { timeout: 300000 });
+    await run(this.docker('cp', this.containers.name(id) + ':'+exported+'/.', stage), { timeout: 300000 });
     const files = await runEvidenceTree(stage);
     const previous = join(path, 'evidence.previous');
     // A prior interrupted rotation may have left both generations. The new stage
@@ -199,7 +203,7 @@ export class LinuxMachine {
     try {
     await save(join(path,'environment.json'),environment);
     await save(join(path,'container.json'),{session:state.id,id:container,attach:'docker --context '+this.config.context+' exec -it '+container+' bash'});
-    await this.containers.create(state.id,(environment.preparation??environment.dependencies).imageId);
+    await this.containers.create(state.id,(environment.preparation??environment.dependencies).imageId,model.baseUrl);
     await run(this.docker('exec',container,'mkdir','-p','/opt/hicode-eval','/opt/hicode-eval/eval_datasets'));
     const worker=join(path,'worker');await this.workerBundle.writeTo(worker);
     await save(join(path,'worker.json'),{version:1,sha256:this.workerBundle.sha256});

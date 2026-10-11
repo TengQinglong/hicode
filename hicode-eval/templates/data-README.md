@@ -13,11 +13,11 @@
 | `state/catalog.json` | 当前系统唯一题目成绩和环境状态，worker 或离线持锁命令写入 | 保留，不手改成绩，不导入假 Run |
 | `state/batches/` | worker 创建的批次与尝试关联 | 保留小型元数据 |
 | `state/maintenance*.json` | 最近清理结果或错误，由资源管理写入 | 仅保留最新回执，不形成第二套台账 |
-| `state/preparation.json` | worker 后台环境准备的当前进度与结果 | 仅保留最近一次；就绪状态以 catalog 为准 |
+| `state/preparation.json` | worker 后台环境准备的当前进度与结果 | 仅保留最近一次；取消另列 cancelled，不计依赖失败；就绪状态以 catalog 为准 |
 | `state/validation.json` | 最近一次本地假模型 Linux 链路快检回执；与成绩分离 | 只保留最新回执，不计真实模型通过 |
 | `datasets/<dataset>/definition.json`、`recipes/`、`runtime.Dockerfile` | 按数据集逐项审定的输入/依赖/运行声明；register 和 prepare 校验 | 存在 Data，不批量导入旧 config，不保存真实 Key或历史评分 |
 | `environments/runtime/` | 当前公共运行底座的固定 images.json 与 Dockerfile | 从公开固定来源建立，配方变化重新准备 |
-| `state/import.json` | register 的原子导入 journal | 中断后由离线 gc 回收未入账输入，不能当作第二台账 |
+| `state/import.json` | register 的原子导入 journal | 中断后由持锁 gc 回收未入账题包/准备输入；已追加的审定声明保留，不代表登记或就绪，不能当作第二台账 |
 | `datasets/<dataset>/tasks/<id>/` | register 校验并复制的冻结题包 | 未测、未通过保留；通过后可由持锁资源清理释放 |
 | `environments/tasks/`、`layers/` | 当前环境绑定、层身份及最多 32 KiB 构建日志 | 保留小型重建依据；存在回执不等于镜像可用 |
 | `environments/preparations/` | 审定的特殊准备输入 | 仅保留仍被题目引用的材料 |
@@ -34,9 +34,9 @@
 
 - `(dataset,id)` 是题目身份，同名题不能混用。当前支持 Terminal-Bench 2.1、SWE-bench Verified、DeepSWE。2.0 留在离线历史中，没有生产执行分支。
 - 成绩为 passed / unpassed / untested；环境独立为 unprepared / ready / evicted / failed。删除镜像必须更新环境状态，不能删除成绩。
-- worker 是调度、模型凭据、容器、成绩和自动清理的唯一 owner，持有根目录 service lease。register、prepare、gc 和 regrade 必须获得同一 lease，运行服务期间拒绝离线写入。在线服务题补判由 worker 接收，复用同一调度器、台账和冻结执行包，只占一个并发名额；其他题继续执行和提交，操作状态保存在原 Run 的 rechecks 中。同题重跑、准备与补判互斥；关闭取消补判，重启先确认中断补判容器已销毁，清理不明时停止调度。
+- worker 是调度、模型凭据、容器、成绩和自动清理的唯一 owner，持有根目录 service lease。register、prepare、gc 和 regrade 必须获得同一 lease，运行服务期间拒绝离线写入。新题可通过 register --live 交持锁 worker 登记；只追加所选新题声明和冻结题包，不覆盖已登记题目或修改已有声明，其他题继续执行。登记与提交/清理共用控制队列，台账登记与成绩/环境更新共用同一写入队列。离线和在线登记复用校验与原子导入。请求超时先查 catalog，不能盲目重复登记。在线服务题补判由 worker 接收，复用同一调度器、台账和冻结执行包，只占一个并发名额；其他题继续执行和提交，操作状态保存在原 Run 的 rechecks 中。同题重跑、准备与补判互斥；关闭取消补判，重启先确认中断补判容器已销毁，清理不明时停止调度。
 - 普通 Terminal 补判使用同一 regrade/recheck 入口，不提供重启脚本；须校验原答案、完成事件与容器销毁回执，直接运行原判题，不调用模型。服务题仍要求审定重启脚本与服务快照。判题 PATH 的首项必须对应所选 verifierPython，原测试启动的 python 子进程使用同一已准备环境。
-- 已登记题的环境可通过 prepare-environments --live 交给 worker 后台准备，其他题的执行继续；活动或待恢复题不得重建。原题和声明先离线审定，准备期间不运行清理，不提交正在构建的题。退出 worker 时等待准备收尾。
+- 已登记题的环境可通过 prepare-environments --live 交给 worker 后台准备，其他题的执行继续；活动或待恢复题不得重建。原题和声明先审定，离线持锁或交 worker 在线登记，准备期间不运行清理，不提交正在构建的题。退出 worker 时取消当前准备、终止其宿主构建/下载进程组，不再启动后续题，再等待锁与 staging 收尾；已完成镜像保留，未完成题不记为依赖失败。
 - serve 只读原子记录并转交控制请求，不初始化执行资源。8878 是默认网页端口，8879 是默认 worker 端口。重启网页不停止跑题。
 - 完成定义必须同时满足执行 completed、原判题 passed 和收集 complete。错误、超时、取消不伪装成通过。启动前取消没有判题结论。
 - 每题使用独立容器、网络和可写 Home。作答进程只能通过本题模型网关访问接口；隐藏验收材料在确认 Agent 执行封锁或停止后物化。权限、收尾或证据不明时保留现场并停止新调度。
@@ -54,7 +54,13 @@
 - 通过题专用镜像可删除，使用明确 imageId 和本系统标签，不能强制删除冲突镜像或误删外部标签。Docker 不可达必须保留待处理状态。
 - 所有任务结束且没有 needs_recovery 后，worker 自动执行资源收尾。人工 gc 默认预览，`--apply` 才删除。
 - BuildKit 清理仅在 `gc --apply --build-cache` 时执行，保留默认 8 GB，只清理超过 7 天的缓存；不能为了空间不足放宽执行隔离。
+- 新 Docker 后端必须先通过正式容器的 AppArmor、内层 user namespace 与 seccomp 预检；能运行题目测试不等于能运行 HiCode Sandbox。跨架构翻译后端在预检通过前只能用于离线性能实验。
+- Apple Silicon 上的 DeepSWE 使用 VZ + Rosetta 混合层时，HiCode、Bun、Bubblewrap、socat、apply-seccomp 和 runner Python 必须为 ARM64 原生，官方题目与 verifier 保持 AMD64。数据集 runtime.Dockerfile 只可通过 `{{runtime_<name>}}` 使用公共 images.json 的固定 ARM64 输入；EnvironmentStore 校验 digest/架构并冻结 AMD64 构建平台。必须通过完整假模型 runner、收集和隐藏判题 smoke 后才能投入真实评测。
+- Rosetta 题容器的模型域名由 worker 在宿主解析，只接受实际取得的公网 IPv4，并通过本题 `--add-host` 固定；HTTPS URL、Host、SNI 和证书验证保持原域名。不得修改 VM/系统 DNS、代理或 TLS 验证，也不得写入猜测地址。本地假模型和直接 IP 不使用该映射。
+- 用户明确授权修复 Colima 自身 DNS 入口时，只操作指定 profile，使用 VM 的 networkctl 实际报告的上游，修复失效的 resolv.conf；需要持久化时使用该 profile 的幂等启动 provision。正常 DNS 入口保持不变，不更换公网解析器、不修改宿主 DNS/代理或 TLS，不把此维护操作加入题目执行链。验证包括普通域名解析、原域名 HTTPS 和 Docker 官方 digest 拉取；已有镜像的拉取不作为下载带宽证据，重启持久性未经重启实测不能宣称已验证。
+- Docker daemon 若持续卡在 `Initializing buildkit`，常规路径仍使用受管 BuildKit GC。只有在服务完全空闲、daemon 无法启动且任务镜像确认由 containerd 保留时，才可停止 Docker，把唯一的 `/var/lib/docker/buildkit` 可重建元数据移动到 VM 内明确的恢复目录；禁止删除 Docker Root，并须验证镜像、正式安全预检和 worker 后再恢复评测。
 - 扩容只用 Colima 官方命令，在无活动评测、构建及容器执行时调整指定 profile；不直接改虚拟盘文件，不切换默认 Docker context，不停止其他项目的虚拟机。
+- 已退役的专用 Colima profile 仅在用户明确授权、当前 settings 和环境绑定不再引用、无活动或待恢复任务时，使用 `colima delete --profile NAME --data --force` 清理；保留宿主题目、成绩、日志和离线备份，不直接删除虚拟盘文件。
 - Docker 内释放空间不保证 Mac 文件立即缩小。服务空闲时可对审定 Colima 数据盘执行 fstrim，再分别测 Linux df 和宿主 du；不要通过重建空盘掩盖实际占用。
 
 ## 日志归档与备份
@@ -63,9 +69,13 @@
 
 通过题收集完成、成绩入账、容器销毁回执确认后，先核验原证据哈希，再打包 evidence、task、inputs、public-test-inputs 和 worker。完整读取压缩包校验后写 SHA256 回执，最后才删除原目录。取消、异常和未通过现场保留供复核，不默认删除。归档失败保留原文件和错误回执，不改变题目成绩。
 
-Terminal-Bench 2.1 的可续跑现场只由 runner 在超时、取消或模型失败且完整停机后、隐藏判题上传前生成。`runs/<id>/evidence/continuation.tar.gz` 与 `continuation.json` 保存工作区、Home、原会话身份、累计执行时长、本地模型网关端口和审定服务目录；压缩包及解压内容均受 8 GiB／100000 文件上限约束，不跟随 symlink。不能拿判题后的 project/Home 当续跑输入，不能为旧记录人工补造快照。
+Linux 的大小写／Unicode 冲突路径在宿主 evidence 中使用可还原的存储名，映射保存在 `.hicode-evidence-paths.json` 并进入 collection.json 的哈希回执。不得按 Mac 上的存储名反推原答案、删除冲突条目或跟随 symlink；原路径仅在 Linux 判题副本中恢复。导出视图位于单题容器 `/eval/evidence-export/<runId>`，随容器销毁，不另建永久数据目录。
 
-continue 由同一持锁 worker 创建新的关联尝试，追加 30–10800 秒，冻结原模型、强度、网络、题目、payload 和环境身份；保留原成绩。恢复时沿用快照记录的模型网关端口，保持思考回放的连接身份。网页只读小型快照元数据，提交及执行前才核验完整哈希。新 Run 的 `continuation-input.tar.gz` 仅用于恢复，恢复后删除容器内副本，完整收集后删除宿主副本；原快照留在父 Run。恢复仅为原 Home 路径提供绑定到本题新 Home 的受限别名，不挂载原 Run、控制目录或隐藏测试。服务重启和训练 checkpoint 恢复由模型处理，不恢复进程内存或临时 tmpfs。活动、待恢复、已通过或没有有效快照的题拒绝续跑；其他数据集未开放此能力。
+Terminal-Bench 2.1 和 DeepSWE 的可续跑现场只由 runner 在超时、取消或模型失败且完整停机后、隐藏判题上传前生成。`runs/<id>/evidence/continuation.tar.gz` 与 `continuation.json` 保存工作区、Home、原会话身份、累计执行时长、本地模型网关端口和审定服务目录；压缩包及解压内容均受 8 GiB／100000 文件上限约束，不跟随 symlink。标准入口不能拿判题后的 project/Home 当续跑输入，不能为旧记录人工补造快照。
+
+DeepSWE 的当前格式完整收集超时尝试若无正式快照，可显式用 continue --restore-actor 恢复封存 Actor：必须核验原冻结执行/隔离/判题模块与当前审定代码一致（判题使用独立 workspace/Home）、完整 shutdown seal、会话保存、收集哈希和容器销毁回执；只取 Actor project/Home，不取 verifier 副本、隐藏测试或判题日志。不改原证据或成绩，不伪称此前已有快照；新尝试记 continueOf.inputSource=sealed-deep-actor，临时包放 cache/builds 并在发布/失败后清理。
+
+continue 由同一持锁 worker 创建新的关联尝试，追加 30–10800 秒，冻结原模型、强度、网络、题目、payload 和环境身份；保留原成绩。恢复时沿用快照记录的模型网关端口，保持思考回放的连接身份。网页只读小型快照元数据，提交及执行前才核验完整哈希。新 Run 的 `continuation-input.tar.gz` 仅用于恢复，恢复后删除容器内副本，完整收集后删除宿主副本；原快照留在父 Run。恢复仅为原 Home 路径提供绑定到本题新 Home 的受限别名，不挂载原 Run、控制目录或隐藏测试。服务重启和训练 checkpoint 恢复由模型处理，不恢复进程内存或临时 tmpfs。活动、待恢复或已通过题拒绝续跑；无有效快照且不满足上述 DeepSWE 封存恢复条件的尝试拒绝续跑。SWE-bench Verified 未开放此能力。
 
 旧体系备份只用于人工查阅。需要重建某题时，从公开题库/审定配方重新验证，或显式 register 一份已核对的冻结题包；不恢复旧服务配置、成绩 JSON、环境绑定或运行状态。备份未核验前不得删除唯一原件。
 
@@ -80,3 +90,7 @@ continue 由同一持锁 worker 创建新的关联尝试，追加 30–10800 秒
 此节仅由本机维护，不进入 Git：数据根、离线备份根、Docker context、Colima profile、Docker Root、数据盘文件、磁盘容量和服务端口。实际值以 settings 和引擎查询为准。
 
 审定服务题可声明 verifierProcessView 与 /tmp 下具名 verifierSockets；只向私有判题提供本题封锁时的服务 PID 目录和指定归属 socket，判题仍使用独立 PID namespace，self/net 来自自己的 Proc。Proc 构造辅助进程进入服务 PID 前先 chroot 到空 tmpfs，隐藏文件不能经辅助进程 root 暴露；socket 放本题 service-tmp，只绑定审定文件，不开放整份 tmp 或控制目录。
+
+批量续跑使用 continue-batch 控制请求，由同一 worker 审定并原子发布一个批次；batch.continuations 按新 Run 分别冻结原会话与快照。启动失败且没有输入确认或 Agent 事件的尝试，在收集/销毁校验后复用原输入；开始作答后必须用新保存的正式快照，不能退回原输入。DeepSWE 已封锁、完成的答案可使用同一在线 regrade/recheck 链路补判（含判题时取消的尝试），占一个共享并发名额，与其他题和后台环境准备并行，不争第二把总锁，不调用模型。
+
+公共运行底座保留；DeepSWE 的逐题官方镜像封装底图不属于公共底座，仅被通过题引用且无容器占用时可回收。按题目层、依赖层、底图的顺序删除，不强制删除有引用的镜像。
