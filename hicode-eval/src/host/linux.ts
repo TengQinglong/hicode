@@ -188,6 +188,31 @@ export class LinuxMachine {
     await this.collect(state.id, path);
     return { ...result, note: 'Recovered from verified durable evidence; no Agent or verifier rerun.' };
   }
+  /** Explicitly discard an uncollectible cancelled workspace, never a completed answer. */
+  async abandonCancelled(state: Run): Promise<void> {
+    const backend=await this.runBackend(state.id);if(backend!==this)return backend.abandonCancelled(state);
+    if(state.state!=='needs_recovery'||state.execution!=='cancelled'||state.grading!=='unavailable')
+      throw Error('Only a sealed cancelled attempt without a grade may be abandoned');
+    const path=new EvalLayout(this.config.data).run(state.id),receipt=join(path,'abandonment.json');
+    if(!await exists(receipt)){
+      await this.containers.assert(state.id);
+      const source=`import sys,json
+sys.path.insert(0,'/opt/hicode-eval')
+from recovery import recover,record
+from pathlib import Path
+root=Path('/eval/runs')/sys.argv[1]
+outcome=recover(root)
+if outcome['execution']!='cancelled' or outcome['grading']!='unavailable':raise ValueError('Not an ungraded cancellation')
+print(json.dumps({'result':outcome,'recovery':record(root/'recovery.json')}))`;
+      const proof=z.object({result:z.object({execution:z.literal('cancelled'),grading:z.literal('unavailable'),uid:z.number().int().min(20000)}).strict(),
+        recovery:z.object({version:z.literal(1),run:z.literal(state.id),at:z.number(),result:z.unknown(),evidence:z.record(z.string().regex(/^[a-f0-9]{64}$/))}).strict()}).strict()
+        .parse(JSON.parse(await run(this.docker('exec',this.containers.name(state.id),'/opt/hicode-control/bin/python3','-c',source,state.id))));
+      await save(receipt,{version:1,runId:state.id,at:new Date().toISOString(),collection:'retained',workspaceDiscarded:true,...proof});
+    }else{
+      await readJson(receipt,z.object({version:z.literal(1),runId:z.literal(state.id),collection:z.literal('retained'),workspaceDiscarded:z.literal(true)}).passthrough());
+    }
+    await this.disposeRun(state.id);
+  }
   async execute(state: Run, path: string, credential: string, onPhase: (phase: string) => Promise<void>, model: Batch["model"],continuation?:ContinuationOrigin): Promise<LinuxResult> {
     const backend=this.backend(state.dataset);if(backend!==this)return backend.execute(state,path,credential,onPhase,model,continuation);
     if (!this.release||!this.workerBundle) throw Error('Evaluation machine not initialized');

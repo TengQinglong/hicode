@@ -95,7 +95,7 @@ hicode
 
 **Qwen Token Plan** 是独立的模型来源，支持 Qwen 3.8 Flash 和 DeepSeek V4.1 Flash；连接与 API Key 均与普通百炼分别配置。详见 [模型设置](docs/reference/SETTINGS.md)。
 
-**方舟 Token Plan（Ark Agent Plan）** 已支持 DeepSeek V4.1 Flash，可在 `/providers` 配置专属 Key，在 `/model` 选择思考强度。连接与凭据独立保存，支持多轮工具调用和思考回放。
+**方舟 Token Plan（Ark Agent Plan）** 已支持 DeepSeek V4.1 Flash 和 GLM 5.3 Flash，可在 `/providers` 配置专属 Key，在 `/model` 选择模型与思考强度。连接与凭据独立保存，支持图片、多轮工具调用和思考回放；GLM 5.3 Flash 始终开启思考，支持 low/high/max。
 
 配置自动保存，可跨项目复用。模型调用费用由服务商计收。
 

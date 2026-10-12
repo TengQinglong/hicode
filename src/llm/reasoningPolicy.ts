@@ -16,7 +16,8 @@ export function reasoningCapability(source: LLMProviderName, model: string): Rea
         return {efforts: ["default", "off", "low", "high", "max"], switch: source === "deepseek" ? "thinking" : "enable_thinking", reviewEffort: "off"};
     if (source === "glm" && model === "glm-5.2")
         return {efforts: ["default", "off", "high", "max"], switch: "thinking", reviewEffort: "off"};
-    if (source === "glm" && (model === "glm-5.3" || model === "glm-5.3-flash"))
+    if ((source === "glm" && (model === "glm-5.3" || model === "glm-5.3-flash")) ||
+        (source === "ark-agent-plan" && model === "glm-5.3-flash"))
         return {efforts: ["default", "low", "high", "max"], switch: "thinking", reviewEffort: "low"};
     return undefined;
 }

@@ -107,6 +107,30 @@ def prepare_verifier_pnpm():
         shutil.rmtree(parent);raise
 
 
+def prepare_verifier_go(home):
+    """Use fixed-image tools, never binaries produced in the Actor's Home."""
+    source = Path('/root/go/bin')
+    if source.is_symlink() or not source.is_dir() or source.resolve() != source:
+        raise ValueError('Invalid fixed-image Go tools')
+    entries = list(source.iterdir())
+    if len(entries) > 256:raise ValueError('Fixed Go tools exceed file budget')
+    total = 0
+    for item in entries:
+        info = item.lstat()
+        if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111:
+            raise ValueError('Fixed Go tool must be a regular executable')
+        total += info.st_size
+        if total > 128 * 1024 * 1024:raise ValueError('Fixed Go tools exceed byte budget')
+    target = home / 'go/bin'
+    target.mkdir(parents=True)
+    for item in entries:
+        copied = target / item.name
+        shutil.copyfile(item, copied, follow_symlinks=False)
+        copied.chmod(0o555)
+    target.chmod(0o555)
+    return target
+
+
 class DeepSweRuntime:
     workdir = '/app'
     actor_environment = None
@@ -186,9 +210,10 @@ class DeepSweRuntime:
         baseline = root / 'baseline'
         if baseline.is_symlink() or not baseline.is_dir():raise ValueError('Missing protected DeepSWE baseline')
         shutil.copytree(baseline, fresh, symlinks=True);fresh_home.mkdir()
-        if 'GOMODCACHE' in config['deep']['runtimeEnvironment']:(fresh_home/'go/bin').mkdir(parents=True)
+        go_bin = prepare_verifier_go(fresh_home) if 'GOMODCACHE' in config['deep']['runtimeEnvironment'] else None
         subprocess.run(['chown', '-hR', f'{uid}:{gid}', str(fresh), str(fresh_home)], check=True)
-        args = namespace_argv(['--ro-bind', str(artifacts), '/logs/artifacts', 'bash', '/tests/test.sh'],
+        tools = ['--ro-bind', str(go_bin), str(go_bin)] if go_bin is not None else []
+        args = namespace_argv([*tools, '--ro-bind', str(artifacts), '/logs/artifacts', 'bash', '/tests/test.sh'],
                               fresh, fresh_home, logs, Path('/run/hicode-eval') / root.name,
                               tests=root / 'tests', isolated_network=True, verifier_release=config['release'])
         env.update(HOME=str(fresh_home))

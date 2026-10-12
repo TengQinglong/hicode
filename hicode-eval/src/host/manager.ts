@@ -448,6 +448,19 @@ export class Lab {
     this.submissions = operation.catch(() => {});
     return operation;
   }
+  async abandonCancelled(id:string):Promise<Run>{
+    const operation=this.submissions.then(async()=>{
+      const current=this.runs.get(id);
+      if(!current||current.state!=='needs_recovery'||current.execution!=='cancelled'||current.grading!=='unavailable')
+        throw Error('Only cancelled retained evidence without a grade may be abandoned');
+      if(this.closed||this.halted||this.jobs.has(id))throw Error('Wait until the cancelled runner has stopped');
+      if(!this.machineReady)await this.prepareMachine();
+      await this.machine!.abandonCancelled(current);
+      await this.update(id,{state:'cancelled',collection:'retained',note:'User explicitly discarded the cancelled workspace after collection failed; stop proof and local logs retained. No complete evidence, grade or continuation.',reward:undefined});
+      await this.pump();return this.runs.get(id)!;
+    });
+    this.submissions=operation.catch(()=>{});return operation;
+  }
   private async reconcileRetained(id: string): Promise<void> {
     const current = this.runs.get(id)!;
     const path = this.path(id), before = join(path, 'state.before-recovery.json');

@@ -396,21 +396,23 @@ test("advisory review remains available in one-shot Hosts and archived results d
     });
 });
 
-test("task-review Provider requests have a bounded output allowance; normal main requests retain their existing behavior", async () => {
+test("task-review requests leave generation length to the provider and accept normally completed replies", async () => {
     await withTempProject(async (cwd, storage) => {
         const requests: unknown[] = [];
+        const content = "A complete review. ".repeat(300);
         const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (_url: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
             if (typeof init?.body !== "string") throw new Error("Expected request JSON");
             requests.push(JSON.parse(init.body));
-            return new Response('data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}\n\ndata: [DONE]\n\n',
+            return new Response(`data: ${JSON.stringify({choices: [{delta: {content}, finish_reason: "stop"}], usage: {prompt_tokens: 10, completion_tokens: 1200, total_tokens: 1210}})}\n\ndata: [DONE]\n\n`,
                 {headers: {"Content-Type": "text/event-stream"}});
         }, {preconnect() {}}));
         try {
             for (const kind of ["task_review", "main"] as const) {
-                await callOpenAICompatible({messages: [{role: "user", origin: "user", content: "review"}], tools: [], storage, cwd,
+                const result = await callOpenAICompatible({messages: [{role: "user", origin: "user", content: "review"}], tools: [], storage, cwd,
                     model: "test-model", kind}, {apiKey: "fake-key", baseUrl: "https://offline.invalid/v1", displayName: "offline"});
+                expect(result.message.content).toBe(content);
             }
-            expect(requests[0]).toMatchObject({max_tokens: 512});
+            expect(requests[0]).not.toHaveProperty("max_tokens");
             expect(requests[1]).not.toHaveProperty("max_tokens");
         } finally {fetch.mockRestore();}
     });
@@ -436,7 +438,7 @@ test("Qwen, Token Plan, DeepSeek and GLM disable thinking only for task reviews"
                 for (const kind of ["task_review", "main"] as const) {
                     await call([{role: "user", origin: "user", content: "review"}], [], storage, cwd, model, kind);
                 }
-                expect(requests[offset]).toMatchObject({max_tokens: 512});
+                expect(requests[offset]).not.toHaveProperty("max_tokens");
                 expect(requests[offset + 1]).not.toHaveProperty("max_tokens");
                 if (id.startsWith("qwen")) {
                     expect(requests[offset]).toMatchObject({enable_thinking: false, preserve_thinking: false});

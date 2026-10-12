@@ -4,7 +4,7 @@ import {z} from 'zod';
 import type {Config} from './types.js';
 import {idSchema} from './types.js';
 import {run} from './store.js';
-import {resolvePublicAddresses} from '../../../src/tools/webFetch/network.js';
+import {modelIpv4} from './modelDns.js';
 
 const inspectSchema=z.array(z.object({Id:z.string(),Image:z.string(),State:z.object({Running:z.boolean()}),
   Config:z.object({Labels:z.record(z.string())})})).length(1);
@@ -20,9 +20,7 @@ export class RunContainers {
     if(!baseUrl)return [];
     const target=new URL(baseUrl);
     if(target.protocol!=='https:'||isIP(target.hostname)!==0||!target.hostname.includes('.'))return [];
-    const addresses=await resolvePublicAddresses(target.hostname);
-    const ipv4=[...new Set(addresses.filter(value=>value.family===4).map(value=>value.address))];
-    if(!ipv4.length)throw Error('Model endpoint has no public IPv4 address for the evaluation container');
+    const ipv4=await modelIpv4(target.hostname);
     return ipv4.flatMap(address=>['--add-host',target.hostname+':'+address]);
   }
   async create(id:string,image:string,modelBaseUrl?:string):Promise<string>{

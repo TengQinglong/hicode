@@ -90,6 +90,36 @@ class DeepSweTest(unittest.TestCase):
             (root/'artifacts/model.patch').write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'patch changed'):handler.recovery_evidence(root,job,'failed',lambda p,limit:p.read_bytes())
 
+class PreparedGoTest(unittest.TestCase):
+    def test_fixed_tools_are_copied_to_the_private_gopath_without_actor_home(self):
+        from eval_datasets.deep_swe import prepare_verifier_go
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();source=root/'fixed';source.mkdir();home=root/'verifier-home';home.mkdir()
+            actor=root/'actor-home/go/bin';actor.mkdir(parents=True)
+            (actor/'goyacc').write_text('untrusted Actor tool')
+            for name in ['goyacc','go-ctrf-json-reporter']:
+                tool=source/name;tool.write_text('fixed '+name);tool.chmod(0o755)
+            with patch('eval_datasets.deep_swe.Path',return_value=source):target=prepare_verifier_go(home)
+            self.assertEqual(target,home/'go/bin')
+            self.assertEqual((target/'goyacc').read_text(),'fixed goyacc')
+            self.assertEqual((target/'go-ctrf-json-reporter').read_text(),'fixed go-ctrf-json-reporter')
+            self.assertEqual((target/'goyacc').stat().st_mode & 0o777,0o555)
+            self.assertEqual(target.stat().st_mode & 0o777,0o555)
+
+    def test_fixed_tool_links_and_non_executables_are_rejected(self):
+        from eval_datasets.deep_swe import prepare_verifier_go
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();source=root/'fixed';source.mkdir();home=root/'home';home.mkdir()
+            outside=root/'outside';outside.write_text('not a tool');outside.chmod(0o755)
+            tool=source/'goyacc';tool.symlink_to(outside)
+            with patch('eval_datasets.deep_swe.Path',return_value=source),self.assertRaisesRegex(ValueError,'regular executable'):
+                prepare_verifier_go(home)
+            self.assertFalse((home/'go/bin').exists())
+            tool.unlink();tool.write_text('not executable');tool.chmod(0o644)
+            with patch('eval_datasets.deep_swe.Path',return_value=source),self.assertRaisesRegex(ValueError,'regular executable'):
+                prepare_verifier_go(home)
+
+
 class PreparedPnpmTest(unittest.TestCase):
     def test_fixed_tools_are_staged_without_image_home_and_links_are_rebased(self):
         from eval_datasets.deep_swe import prepare_verifier_pnpm

@@ -97,7 +97,7 @@ Model missing? Use **Add model** to enter its Model ID and an optional display n
 
 **Qwen Token Plan** is a separate model source for Qwen 3.8 Flash and DeepSeek V4.1 Flash, with its own connection and API key distinct from regular Bailian. See [model settings](docs/reference/SETTINGS.md).
 
-**Ark Token Plan (Agent Plan)** supports DeepSeek V4.1 Flash. Configure its dedicated key through `/providers` and select reasoning effort through `/model`. Its connection and credentials are stored independently, with support for multi-turn tool calls and reasoning replay.
+**Ark Token Plan (Agent Plan)** supports DeepSeek V4.1 Flash and GLM 5.3 Flash. Configure its dedicated key through `/providers` and select the model and reasoning effort through `/model`. Its connection and credentials are stored independently, with support for images, multi-turn tool calls, and reasoning replay. GLM 5.3 Flash always uses thinking and supports low/high/max effort.
 
 Configuration is saved automatically and reusable across projects. Model usage is billed by your provider.
 

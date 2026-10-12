@@ -295,3 +295,25 @@ test('DeepSWE recheck preserves failed execution while recording the independent
   expect((await TaskCatalog.open(f.config.catalog)).get(original.dataset,original.task).status).toBe('unpassed');
  }finally{await lab.close();regrade.mockRestore();execute.mockRestore();cleanup.mockRestore();await f.cleanup();}
 });
+
+
+test('explicitly abandoning cancelled retained evidence unblocks scheduling without claiming complete collection',async()=>{
+ const f=await fixture(),task=await seed(f,'abandoned'),id='a'.repeat(16),batchId='b'.repeat(16);
+ await save(join(f.layout.payload,'manifest.json'),{});
+ await save(f.layout.batch(batchId),batchSchema.parse({version:1,id:batchId,name:'cancelled',taskRefs:[{dataset:task.dataset,id:task.id}],runIds:[id],createdAt:1,concurrency:1,budget:{},model:f.config.model,payload:{}}));
+ await save(join(f.layout.run(id),'state.json'),runSchema.parse({...finished(task.id,id),batchId,state:'needs_recovery',execution:'cancelled',grading:'unavailable',collection:'retained'}));
+ const lab=new Lab(f.config,'unused'),prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined);
+ const abandon=spyOn(LinuxMachine.prototype,'abandonCancelled').mockRejectedValueOnce(Error('runner still alive')).mockResolvedValue(undefined);
+ const cleanup=spyOn(transport,'run').mockResolvedValue('');
+ let worker:ReturnType<typeof serveWorker>|undefined;
+ try{
+  await lab.init();worker=serveWorker(lab,0);const client=new Client(worker.port);
+  await expect(client.request('abandon-cancelled-run',{run:id})).rejects.toThrow('runner still alive');
+  expect(lab.health().schedulingBlocked).toBe(true);
+  await client.request('abandon-cancelled-run',{run:id});
+  expect(lab.runs.get(id)?.state).toBe('cancelled');expect(lab.runs.get(id)?.collection).toBe('retained');
+  expect(lab.runs.get(id)?.grading).toBe('unavailable');expect(lab.health().schedulingBlocked).toBe(false);
+  expect((await TaskCatalog.open(f.layout.catalog)).get(task.dataset,task.id).status).toBe('untested');
+  await expect(client.request('abandon-cancelled-run',{run:id})).rejects.toThrow('Only cancelled');
+ }finally{worker?.stop(true);await lab.close();prepare.mockRestore();abandon.mockRestore();cleanup.mockRestore();await f.cleanup();}
+});

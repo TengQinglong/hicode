@@ -17,8 +17,10 @@ export const arkAgentPlanProvider: LLMProvider = {
             baseUrl: source.baseUrl || PROVIDER_BASE_URLS["ark-agent-plan"],
             apiKey,
             toolImages: supportsToolImages(source, options.model),
-            requestFields: {stream_options: {include_usage: true}, ...reasoningRequestFields(source.id, options.model, effort)},
-            ...(capability && effort !== "off" ? {reasoningSource: source.id} : {}),
+            requestFields: {stream_options: {include_usage: true},
+                ...(capability?.switch === "thinking" ? {thinking: {type: "enabled"}} : {}),
+                ...reasoningRequestFields(source.id, options.model, effort)},
+            ...(capability && effort !== "off" && options.kind !== "task_review" ? {reasoningSource: source.id} : {}),
         });
     },
 };

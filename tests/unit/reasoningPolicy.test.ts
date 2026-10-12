@@ -26,6 +26,7 @@ test("canonical choices reject aliases, unsupported levels and duplicate prefere
     expect(reasoningCapability("qwen", "qwen3.8-flash")?.efforts).toEqual(["default", "off", "low", "medium", "xhigh"]);
     expect(reasoningCapability("qwen-token-plan", "deepseek-v4.1-flash")?.efforts).toEqual(["default", "off", "low", "high", "max"]);
     expect(reasoningCapability("ark-agent-plan", "deepseek-v4.1-flash")?.efforts).toEqual(["default", "off", "low", "high", "max"]);
+    expect(reasoningCapability("ark-agent-plan", "glm-5.3-flash")?.efforts).toEqual(["default", "low", "high", "max"]);
     expect(reasoningCapability("glm", "glm-5.2")?.efforts).toEqual(["default", "off", "high", "max"]);
     expect(reasoningCapability("glm", "glm-5.3")?.efforts).toEqual(["default", "low", "high", "max"]);
     expect(reasoningCapability("glm", "glm-5.3-flash")?.efforts).toEqual(["default", "low", "high", "max"]);
@@ -40,7 +41,7 @@ test("canonical choices reject aliases, unsupported levels and duplicate prefere
     expect(hicodeHostSettingsSchema.safeParse({models: {reasoning: [{source: "qwen", model: "qwen3.8-flash", effort: "ultra"}]}}).success).toBe(false);
 });
 
-for (const [sourceId, model] of [["qwen", "qwen3.8-flash"], ["qwen-token-plan", "qwen3.8-flash"], ["qwen-token-plan", "deepseek-v4.1-flash"], ["ark-agent-plan", "deepseek-v4.1-flash"], ["deepseek", "deepseek-flash"], ["glm", "glm-5.2"], ["glm", "glm-5.3"], ["glm", "glm-5.3-flash"]] as const) {
+for (const [sourceId, model] of [["qwen", "qwen3.8-flash"], ["qwen-token-plan", "qwen3.8-flash"], ["qwen-token-plan", "deepseek-v4.1-flash"], ["ark-agent-plan", "deepseek-v4.1-flash"], ["ark-agent-plan", "glm-5.3-flash"], ["deepseek", "deepseek-flash"], ["glm", "glm-5.2"], ["glm", "glm-5.3"], ["glm", "glm-5.3-flash"]] as const) {
     test(`${sourceId}/${model} sends canonical choices and applies the supported task-review policy`, async () => {
         await withTempProject(async (cwd, storage) => {
             const source = resolveHiCodeSettings([]).values.sources[sourceId];
@@ -66,7 +67,7 @@ for (const [sourceId, model] of [["qwen", "qwen3.8-flash"], ["qwen-token-plan", 
             if (capability.switch === "reasoning_effort") expect(review.reasoning_effort).toBe("none");
             else if (capability.reviewEffort === "off") expect(review).not.toHaveProperty("reasoning_effort");
             else expect(review.reasoning_effort).toBe("low");
-            expect(review.max_tokens).toBe(512);
+            expect(review).not.toHaveProperty("max_tokens");
             if (capability.switch === "thinking") expect(review.thinking).toEqual({type: capability.reviewEffort === "off" ? "disabled" : "enabled"});
             else if (capability.switch === "enable_thinking") expect(review.enable_thinking).toBe(false);
             const directory = getPromptLogDirectory(storage, cwd);

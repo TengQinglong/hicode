@@ -57,7 +57,10 @@ const DEFAULT_SOURCES: Record<LLMProviderName, ModelSourceSettings> = {
         id: "ark-agent-plan",
         label: "Ark Agent Plan",
         apiKeyEnv: "ARK_AGENT_PLAN_API_KEY",
-        models: [{id: "deepseek-v4.1-flash", label: "DeepSeek 4.1 Flash (Ark Agent Plan)", imageInput: true}],
+        models: [
+            {id: "deepseek-v4.1-flash", label: "DeepSeek 4.1 Flash (Ark Agent Plan)", imageInput: true},
+            {id: "glm-5.3-flash", label: "GLM 5.3 Flash (Ark Agent Plan)", imageInput: true},
+        ],
     },
     deepseek: {
         id: "deepseek",

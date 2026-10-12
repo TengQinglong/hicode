@@ -57,7 +57,7 @@
 - BuildKit 清理仅在 `gc --apply --build-cache` 时执行，保留默认 8 GB，只清理超过 7 天的缓存；不能为了空间不足放宽执行隔离。
 - 新 Docker 后端必须先通过正式容器的 AppArmor、内层 user namespace 与 seccomp 预检；能运行题目测试不等于能运行 HiCode Sandbox。跨架构翻译后端在预检通过前只能用于离线性能实验。
 - Apple Silicon 上的 DeepSWE 使用 VZ + Rosetta 混合层时，HiCode、Bun、Bubblewrap、socat、apply-seccomp 和 runner Python 必须为 ARM64 原生，官方题目与 verifier 保持 AMD64。数据集 runtime.Dockerfile 只可通过 `{{runtime_<name>}}` 使用公共 images.json 的固定 ARM64 输入；EnvironmentStore 校验 digest/架构并冻结 AMD64 构建平台。必须通过完整假模型 runner、收集和隐藏判题 smoke 后才能投入真实评测。
-- Rosetta 题容器的模型域名由 worker 在宿主解析，只接受实际取得的公网 IPv4，并通过本题 `--add-host` 固定；HTTPS URL、Host、SNI 和证书验证保持原域名。不得修改 VM/系统 DNS、代理或 TLS 验证，也不得写入猜测地址。本地假模型和直接 IP 不使用该映射。
+- Rosetta 题容器的模型域名由 worker 在宿主解析，只接受实际取得的公网 IPv4，并通过本题 `--add-host` 固定；HTTPS URL、Host、SNI 和证书验证保持原域名。宿主解析不可用或没有公网 IPv4 时，使用受限的 AliDNS HTTPS A 查询，校验问题域名、CNAME 链、响应大小和公网地址；失败仍拒绝启动。不修改 VM/系统 DNS、代理或 TLS 验证，也不写入猜测地址。本地假模型和直接 IP 不使用该映射。
 - 用户明确授权修复 Colima 自身 DNS 入口时，只操作指定 profile，使用 VM 的 networkctl 实际报告的上游，修复失效的 resolv.conf；需要持久化时使用该 profile 的幂等启动 provision。正常 DNS 入口保持不变，不更换公网解析器、不修改宿主 DNS/代理或 TLS，不把此维护操作加入题目执行链。验证包括普通域名解析、原域名 HTTPS 和 Docker 官方 digest 拉取；已有镜像的拉取不作为下载带宽证据，重启持久性未经重启实测不能宣称已验证。
 - Docker daemon 若持续卡在 `Initializing buildkit`，常规路径仍使用受管 BuildKit GC。只有在服务完全空闲、daemon 无法启动且任务镜像确认由 containerd 保留时，才可停止 Docker，把唯一的 `/var/lib/docker/buildkit` 可重建元数据移动到 VM 内明确的恢复目录；禁止删除 Docker Root，并须验证镜像、正式安全预检和 worker 后再恢复评测。
 - 扩容只用 Colima 官方命令，在无活动评测、构建及容器执行时调整指定 profile；不直接改虚拟盘文件，不切换默认 Docker context，不停止其他项目的虚拟机。
@@ -101,3 +101,9 @@ continue 由同一持锁 worker 创建新的关联尝试，追加 30–10800 秒
 公共运行底座保留；DeepSWE 的逐题官方镜像封装底图不属于公共底座，仅被通过题引用且无容器占用时可回收。按题目层、依赖层、底图的顺序删除，不强制删除有引用的镜像。
 
 DeepSWE 作答失败但完整停止的原答案也可补判：必须校验收集哈希、保存完整的失败事件、shutdown 停机证明和容器销毁回执；补判仅更新独立判题结果，不能把 failed 执行改成 completed。
+
+DeepSWE 的 Go 私有判题从固定镜像 `/root/go/bin` 校验并复制普通可执行文件到新 verifier Home 的 `go/bin`，在原 GOPATH 位置只读挂载；保留独立可写 Home 和模块缓存，不使用 Actor 安装的工具，不暴露镜像 Home 或在禁网判题时下载。
+
+只有用户明确要求放弃已取消且收集失败的现场，才可通过同一 worker 的 `abandon-cancelled-run` 结束该尝试；先复用原 recovery 校验真实停机和 cancelled/unavailable 结果，保存 runs/<id>/abandonment.json 停机证明，再销毁本题容器。保留本机日志，明确丢弃未完整收集的工作区；collection 仍为 retained，不提供续跑、不造完整回执或通过成绩。普通取消和 recover 不自动丢弃现场。
+
+封存完成的 DeepSWE 现场因依赖条目超限时，可在停机证据校验后仅将 project/node_modules 分成每包最多 50000 条目的只读存储归档；逐文件核对字节、链接和未变更状态，记录 runs/<id>/evidence/dependency-archives.json 及归档 SHA256，保留源码、Git、补丁、日志与原判不变。原依赖在容器中保留至同一 worker 完成收集与销毁；不抬高收集的 100000 条目／8 GiB 边界。依赖包只是保留证据，不作为自动续跑输入、不自动解压；补判从固定镜像重建依赖。

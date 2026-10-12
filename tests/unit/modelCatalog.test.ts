@@ -7,7 +7,10 @@ describe("primary model catalog", () => {
     test("Ark Agent Plan has independent credentials and a distinct DeepSeek catalog entry", () => {
         const sources = resolveHiCodeSettings([]).values.sources;
         const ark = listConfiguredPrimaryModels(sources, {ARK_AGENT_PLAN_API_KEY: "ark"});
-        expect(ark).toEqual([{source:"ark-agent-plan", model:"deepseek-v4.1-flash", label:"DeepSeek 4.1 Flash (Ark Agent Plan)"}]);
+        expect(ark).toEqual([
+            {source:"ark-agent-plan", model:"deepseek-v4.1-flash", label:"DeepSeek 4.1 Flash (Ark Agent Plan)"},
+            {source:"ark-agent-plan", model:"glm-5.3-flash", label:"GLM 5.3 Flash (Ark Agent Plan)"},
+        ]);
         expect(listConfiguredPrimaryModels(sources, {QWEN_TOKEN_PLAN_API_KEY:"qwen"}).some(model => model.source === "ark-agent-plan")).toBe(false);
         expect(sources["ark-agent-plan"].models[0]?.imageInput).toBe(true);
         const available = listConfiguredPrimaryModels(sources, {ARK_AGENT_PLAN_API_KEY:"ark", QWEN_TOKEN_PLAN_API_KEY:"qwen"});

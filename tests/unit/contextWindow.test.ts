@@ -17,6 +17,11 @@ describe("context window", () => {
     expect(state.critical).toBe(false);
   });
 
+  test("GLM 5.3 Flash uses the documented 1024k window", () => {
+    expect(getAutoCompactThreshold("glm-5.3-flash", undefined,
+      {windowTokens:2_000_000, autoCompactTokenLimit:1_500_000})).toBe(991_000);
+  });
+
   test("GLM-5.2/5.3 使用 1M 窗口并预留 summary", () => {
     expect(getAutoCompactThreshold("glm-5.2")).toBe(450_000);
     expect(getAutoCompactThreshold("glm-5.3")).toBe(450_000);

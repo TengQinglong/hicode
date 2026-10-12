@@ -98,3 +98,33 @@ test("Ark off and advisory reviews encode none, omit replay and leave original h
         expect(bodies).toHaveLength(count);
     });
 });
+
+test("Ark GLM Flash enforces thinking, replays tool reasoning, and keeps review reasoning isolated", async () => {
+    await withTempProject(async (cwd, storage) => {
+        process.env.ARK_AGENT_PLAN_API_KEY = "fixture";
+        const caller = createLLMCaller(resolveHiCodeSettings([]).values.sources["ark-agent-plan"]);
+        const bodies: Record<string, unknown>[] = [];
+        globalThis.fetch = (async (_input, init) => {
+            const body = JSON.parse(String(init?.body)); bodies.push(body);
+            expect(body.thinking).toEqual({type:"enabled"});
+            expect(body).not.toHaveProperty("enable_thinking");
+            expect(body).not.toHaveProperty("preserve_thinking");
+            return bodies.length === 1 ? new Response('data: {"choices":[{"delta":{"reasoning_content":"inspect first","tool_calls":[{"index":0,"id":"read-1","type":"function","function":{"name":"read_file","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n') : success();
+        }) as typeof fetch;
+        const tools = [{type:"function" as const,function:{name:"read_file",description:"Read",parameters:{type:"object"}}}];
+        const first = await caller([user],tools,storage,cwd,"glm-5.3-flash","main");
+        expect(bodies[0]).not.toHaveProperty("reasoning_effort");
+        const history:Message[]=[user,first.message,{role:"tool",tool_call_id:"read-1",content:"file contents"}];
+        await caller(history,tools,storage,cwd,"glm-5.3-flash","main",undefined,undefined,undefined,undefined,undefined,"max");
+        expect(bodies[1]?.reasoning_effort).toBe("max");
+        expect(bodies[1]?.messages).toContainEqual(expect.objectContaining({role:"assistant",reasoning_content:"inspect first"}));
+        const review=await caller(history,tools,storage,cwd,"glm-5.3-flash","task_review",undefined,undefined,undefined,undefined,undefined,"max");
+        expect(bodies[2]).toMatchObject({reasoning_effort:"low"});
+        expect(bodies[2]).not.toHaveProperty("max_tokens");
+        expect((bodies[2]?.messages as Record<string,unknown>[]).every(message=>!('reasoning_content' in message))).toBe(true);
+        expect(review.message).not.toHaveProperty("reasoning");
+        const count=bodies.length;
+        await expect(caller([user],tools,storage,cwd,"glm-5.3-flash","main",undefined,undefined,undefined,undefined,undefined,"off")).rejects.toThrow("not supported");
+        expect(bodies).toHaveLength(count);
+    });
+});

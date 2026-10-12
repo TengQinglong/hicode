@@ -20,7 +20,7 @@ const mutations={submit:submissionSchema,'prepare-environments':environmentPrepa
   'regrade-terminal':terminalRegradeRequestSchema,
   'resume-batch':z.object({batch:idSchema}).strict(),'recover-run':z.object({run:idSchema}).strict(),
   'retry-run':z.object({run:idSchema}).strict(),report:z.object({batch:idSchema,text:z.string().trim().min(1).max(200000)}).strict(),
-  cancel:z.object({run:idSchema}).strict()};
+  'abandon-cancelled-run':z.object({run:idSchema}).strict(),cancel:z.object({run:idSchema}).strict()};
 type Mutation=keyof typeof mutations;
 function mutation(path:string):Mutation|undefined{return Object.hasOwn(mutations,path)?path as Mutation:undefined;}
 
@@ -99,6 +99,7 @@ export function serveWorker(lab:Lab,port:number){
       }
       const args=mutations[name].parse(body);
       if(name==='recover-run')return json({run:await lab.recover(args.run)});
+      if(name==='abandon-cancelled-run')return json({run:await lab.abandonCancelled(args.run)});
       if(name==='retry-run')return json({batch:await lab.retry(args.run)});
       await lab.cancel(args.run);return json({ok:true});
     }
