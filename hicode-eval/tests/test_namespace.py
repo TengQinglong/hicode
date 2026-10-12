@@ -110,6 +110,43 @@ class NamespaceTest(unittest.TestCase):
 
 
 class ActorFilesystemTest(unittest.TestCase):
+    def test_report_tools_are_readonly_and_only_visible_to_private_verifier(self):
+        from protocol import verifier_readonly_mounts
+        with patch.object(Path, 'exists', return_value=True), patch.object(Path, 'is_dir', return_value=True), \
+             patch.object(Path, 'is_symlink', return_value=False), patch.object(Path, 'resolve', lambda path: path), patch.object(Path, 'rglob', return_value=[]):
+            mounts = verifier_readonly_mounts()
+        self.assertEqual(mounts, ['--ro-bind', '/opt/ctrf', '/opt/ctrf', '--ro-bind', '/opt/jest-ctrf', '/opt/jest-ctrf',
+            '--ro-bind', '/opt/hicode-verifier-pnpm/.tools', '/opt/hicode-verifier-pnpm/.tools',
+            '--setenv', 'PNPM_HOME', '/opt/hicode-verifier-pnpm'])
+        with patch('protocol.actor_readonly_mounts', return_value=[]), \
+             patch('protocol.verifier_readonly_mounts', return_value=mounts) as reporters:
+            actor = namespace_argv(['bun'], '/p', '/h', '/l', '/c', actor_release='/release', actor_events='/events')
+            reporters.assert_not_called()
+            verifier = namespace_argv(['node'], '/fresh', '/fresh-home', '/l', '/c', '/tests', verifier_release='/release')
+        self.assertNotIn('/opt/ctrf', actor)
+        self.assertNotIn('/opt/jest-ctrf', actor)
+        self.assertNotIn('/opt/hicode-verifier-pnpm/.tools', actor)
+        self.assertNotIn(['--ro-bind', '/root', '/root'], [verifier[i:i+3] for i in range(len(verifier)-2)])
+        self.assertIn('/opt/jest-ctrf', verifier)
+        self.assertNotIn(['--ro-bind', '/opt', '/opt'], [verifier[i:i+3] for i in range(len(verifier)-2)])
+        for kind in ['symlink', 'file', 'escape']:
+            with patch.object(Path, 'exists', return_value=True), patch.object(Path, 'is_dir', return_value=kind!='file'), \
+                 patch.object(Path, 'is_symlink', return_value=kind=='symlink'), \
+                 patch.object(Path, 'resolve', lambda path: Path('/unexpected') if kind=='escape' else path):
+                with self.assertRaisesRegex(ValueError, 'verifier reporter'):verifier_readonly_mounts()
+
+    def test_prepared_pnpm_cache_rejects_links_outside_the_tool_subtree(self):
+        from protocol import verifier_readonly_mounts
+        with tempfile.TemporaryDirectory() as tmp:
+            tools=Path(tmp).resolve()/'tools';tools.mkdir();(tools/'version').mkdir()
+            (tools/'current').symlink_to('version')
+            def paths(name):
+                return tools if name=='/opt/hicode-verifier-pnpm/.tools' else Path(tmp)/'absent'
+            with patch('protocol.Path', side_effect=paths):
+                self.assertIn('--setenv', verifier_readonly_mounts())
+                (tools/'escape').symlink_to(Path(tmp))
+                with self.assertRaisesRegex(ValueError,'escapes tool cache'):verifier_readonly_mounts()
+
     def test_actor_hides_terminal_control_and_only_mounts_its_model_gateway(self):
         for isolated in (False,True):
             for gateway in (False,True):

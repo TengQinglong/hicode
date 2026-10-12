@@ -273,3 +273,25 @@ test('ordinary Terminal recheck uses the worker result queue without a restart s
   expect((await TaskCatalog.open(f.config.catalog)).get(original.dataset,original.task).status).toBe('passed');
  }finally{finish();server?.stop(true);await lab.close();regrade.mockRestore();execute.mockRestore();cleanup.mockRestore();await f.cleanup();}
 });
+
+test('DeepSWE recheck preserves failed execution while recording the independent verifier result',async()=>{
+ const f=await fixture(),source=f.layout.source({dataset:'deep-swe',id:'failed-deep'});
+ await Bun.write(join(source,'instruction.md'),'offline fixture');
+ await f.catalog.register([{dataset:'deep-swe',id:'failed-deep',source}]);
+ const original=runSchema.parse({...finished('failed-deep'),dataset:'deep-swe',network:'isolated',state:'error',execution:'failed',grading:'failed'});
+ await save(join(f.layout.run(original.id),'state.json'),original);
+ await save(f.layout.batch(original.batchId),batchSchema.parse({version:1,id:original.batchId,name:'failed sealed answer',network:'isolated',concurrency:1,budget:{},createdAt:1,
+  taskRefs:[{dataset:original.dataset,id:original.task}],runIds:[original.id],model:f.config.model,payload:{}}));
+ await f.catalog.record(original);
+ const lab=new Lab(f.config,'unused'),execute=spyOn(LinuxMachine.prototype,'execute');
+ const regrade=spyOn(LinuxMachine.prototype,'regradeTerminal').mockImplementation(async(state,_task,_script,reviewId)=>({
+  version:1,kind:'ordinary',runId:state.id,reviewId,grading:'passed',reason:null,modelCalls:0,projectSha256:'a'.repeat(64),elapsedSeconds:1}));
+ const cleanup=spyOn(transport,'run').mockRejectedValue(new Error('Offline fixture engine unavailable'));
+ try{
+  await lab.init();const accepted=await lab.regrade({run:original.id});
+  await until(async()=> (await lab.recheck(original.id,accepted.reviewId)).state==='finished');
+  expect(execute).not.toHaveBeenCalled();expect(lab.runs.get(original.id)?.execution).toBe('failed');
+  expect(lab.runs.get(original.id)?.grading).toBe('passed');expect(lab.runs.get(original.id)?.state).toBe('error');
+  expect((await TaskCatalog.open(f.config.catalog)).get(original.dataset,original.task).status).toBe('unpassed');
+ }finally{await lab.close();regrade.mockRestore();execute.mockRestore();cleanup.mockRestore();await f.cleanup();}
+});

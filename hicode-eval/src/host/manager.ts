@@ -150,7 +150,7 @@ export class Lab {
       if(previous){if(previous.restartScript!==request.restartScript)throw Error('This run already has a different pending recheck');return this.recheck(state.id,previous.reviewId);}
       const key=taskKey({dataset:state.dataset,id:state.task});
       if((state.dataset!=='terminal-bench-2.1'&&state.dataset!=='deep-swe')
-        ||(state.execution!=='completed'&&!(state.dataset==='deep-swe'&&state.execution==='cancelled'&&state.grading==='unavailable'))
+        ||(state.execution!=='completed'&&!(state.dataset==='deep-swe'&&((state.execution==='cancelled'&&state.grading==='unavailable')||state.execution==='failed')))
         ||state.collection!=='complete'||!['passed','failed','error','cancelled'].includes(state.state))
         throw Error('Recheck requires a completed and fully collected Terminal run');
       if(this.preparationJob?.tasks.has(key)||[...this.rechecks.values()].some(item=>item.task===key)||[...this.runs.values()].some(run=>
@@ -181,7 +181,9 @@ export class Lab {
         const state=this.runs.get(id)!;
         const result=await this.machine.regradeTerminal(state,this.taskCatalog.get(state.dataset,state.task),pending.restartScript,pending.reviewId,pending.controller.signal);
         pending.controller.signal.throwIfAborted();
-        const changes=terminalRegradeChanges(result);if(changes)await this.update(id,{...changes,...(state.dataset==='deep-swe'?{execution:'completed'}:{})});
+        const changes=terminalRegradeChanges(result);if(changes)await this.update(id,{...changes,
+          ...(state.execution==='failed'?{state:'error' as const}:{}),
+          ...(state.dataset==='deep-swe'&&state.execution==='cancelled'?{execution:'completed'}:{})});
         await save(path,terminalRecheckSchema.parse({version:1,runId:id,reviewId:pending.reviewId,state:'finished',result}));
       }catch(error){
         if(error instanceof TerminalRegradeCleanupError)this.halted=true;

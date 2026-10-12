@@ -52,3 +52,18 @@ class ServiceRegradeTest(unittest.TestCase):
         for data in [record(sealed=False),record(saved=False),record(pending=True),record()+b'{']:
             with self.assertRaisesRegex(ValueError,'sealed, saved'):
                 validate_completion(data)
+
+    def test_failed_deep_answer_requires_saved_events_and_shutdown_without_claiming_completion(self):
+        rows=[{'type':'ready'}, {'type':'agent_event','event':{'type':'model_stream_start'}},
+              {'type':'agent_event','event':{'type':'turn_end','input':{'session_id':'fixture','status':'failed','reason':'error','persistence_status':'saved'}}}]
+        data=''.join(json.dumps({'version':1,'sequence':i,'sessionId':'fixture',**row})+'\n' for i,row in enumerate(rows,1)).encode()
+        shutdown={'version':1,'reason':'failed','cliExited':True,'turnSaved':True,'pendingToolCallIds':[],
+                  'eventStreamComplete':True,'error':None}
+        validate_completion(data, execution='failed', shutdown=shutdown)
+        with self.assertRaises(ValueError):validate_completion(data)
+        for field,value in [('reason','timeout'),('cliExited',False),('turnSaved',False),('pendingToolCallIds',['x']),
+                            ('eventStreamComplete',False),('error','unconfirmed')]:
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                validate_completion(data,execution='failed',shutdown={**shutdown,field:value})
+        with self.assertRaises(ValueError):validate_completion(data+b'{',execution='failed',shutdown=shutdown)
+        with self.assertRaises(ValueError):validate_completion(data.replace(b'saved',b'failed'),execution='failed',shutdown=shutdown)

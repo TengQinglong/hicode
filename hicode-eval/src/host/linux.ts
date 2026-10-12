@@ -128,10 +128,12 @@ export class LinuxMachine {
     await run(this.docker('exec', this.containers.name(id), 'sh', '-c', `test ! -d /eval/runs/${id} || touch /eval/runs/${id}/cancel`), { timeout: 10000 });
   }
   private async collect(id: string, path: string): Promise<void> {
+    if(!this.workerBundle)throw Error('Evidence collector is not initialized');
+    const exporter=this.workerBundle.evidenceExporter();
     const stage = join(path, 'collecting'); await rm(stage, { recursive: true, force: true }); await mkdir(stage);
     const exported='/eval/evidence-export/'+id;
     // Preserve Linux case-distinct names and links in a reversible storage view.
-    await run(this.docker('exec',this.containers.name(id),'python3','/opt/hicode-eval/evidence_export.py',
+    await run(this.docker('exec',this.containers.name(id),'python3','-c',exporter.source,
       'export','/eval/runs/'+id,exported),{timeout:300000});
     // Native build outputs can span several GiB; export has a separate bounded window.
     await run(this.docker('cp', this.containers.name(id) + ':'+exported+'/.', stage), { timeout: 300000 });
@@ -142,7 +144,7 @@ export class LinuxMachine {
     if (await exists(previous) && await exists(join(path, 'evidence'))) await rm(previous, {recursive: true});
     if (await exists(join(path, 'evidence'))) await rename(join(path, 'evidence'), previous);
     await rename(stage, join(path, 'evidence')); await rm(previous, { recursive: true, force: true });
-    await save(join(path, 'collection.json'), { complete: true, files });
+    await save(join(path, 'collection.json'), { complete: true, files, exporterSha256:exporter.sha256 });
     await rm(new EvalLayout(this.config.data).continuationArchive(id),{force:true});
   }
   private async handoffVerification(id: string, tests: string, credential: string): Promise<void> {

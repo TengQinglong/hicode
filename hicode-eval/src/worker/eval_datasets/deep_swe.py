@@ -81,6 +81,32 @@ def supervise(args, *, timeout, output, env, demote, cancelled):
             process.wait()
 
 
+def prepare_verifier_pnpm():
+    source = Path('/root/.local/share/pnpm/.tools')
+    if not source.exists() and not source.is_symlink():return
+    if source.is_symlink() or not source.is_dir() or source.resolve() != source:
+        raise ValueError('Invalid fixed-image pnpm tools')
+    links = {}
+    for item in source.rglob('*'):
+        if item.is_symlink():
+            resolved = item.resolve(strict=True)
+            if not resolved.is_relative_to(source):raise ValueError('Fixed pnpm link escapes tool cache')
+            links[item.relative_to(source)] = resolved.relative_to(source)
+    parent = Path('/opt/hicode-verifier-pnpm')
+    if parent.exists() or parent.is_symlink():raise ValueError('Verifier pnpm staging already exists')
+    parent.mkdir(mode=0o755)
+    try:
+        target = parent / '.tools'
+        shutil.copytree(source, target, symlinks=True)
+        for name, resolved in links.items():
+            link = target / name
+            link.unlink();link.symlink_to(os.path.relpath(target / resolved, link.parent))
+        for item in [target, *target.rglob('*')]:
+            if not item.is_symlink():item.chmod(item.stat().st_mode | (0o555 if item.is_dir() else 0o444))
+    except BaseException:
+        shutil.rmtree(parent);raise
+
+
 class DeepSweRuntime:
     workdir = '/app'
     actor_environment = None
@@ -125,6 +151,7 @@ class DeepSweRuntime:
         command(namespace(['git', '-C', '/app', 'config', 'user.email', 'hicode@localhost']))
 
     def grade(self, *, root, config, uid, gid, project, home, logs, command, namespace, demote, cancelled):
+        prepare_verifier_pnpm()
         verifier = logs / 'verifier'
         original = json.loads(checked_bytes(root / 'tests/config.json', 16 * 1024 * 1024))
         artifacts = root / 'artifacts';artifacts.mkdir(mode=0o755)

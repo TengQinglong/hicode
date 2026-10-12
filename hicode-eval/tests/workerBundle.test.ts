@@ -11,6 +11,7 @@ async function fixture(){
   for(const name of ['runner.py','protocol.py','cleanup.py','recovery.py','service_namespace.py','service_bwrap.py','preflight.ts'])
     await writeFile(join(worker,name),'# fixture\n');
   await writeFile(join(source,'src/datasets/reviewed_test_deps.py'),'# fixture\n');
+  await writeFile(join(worker,'evidence_export.py'),'# frozen collector\n');
   return {root,source,worker,cleanup:()=>rm(root,{recursive:true,force:true})};
 }
 
@@ -20,6 +21,10 @@ test('queued attempts deploy one frozen package even when source modules change 
     await writeFile(join(f.worker,'runtime_extension.py'),'value = "original"\n');
     await writeFile(join(f.worker,'runner.py'),'from runtime_extension import value\nprint(value)\n');
     const bundle=await WorkerBundle.capture(f.source);
+    const collector=bundle.evidenceExporter();
+    await writeFile(join(f.worker,'evidence_export.py'),'# changed collector\n');
+    expect(bundle.evidenceExporter()).toEqual(collector);
+    expect(collector.source).toBe('# frozen collector\n');
     await writeFile(join(f.worker,'runtime_extension.py'),'value = "changed"\n');
     await writeFile(join(f.worker,'future_module.py'),'# next worker only\n');
     for(const attempt of ['first','queued']){

@@ -40,10 +40,18 @@ def validate_snapshot(path, paths):
                 raise ValueError('Service snapshot member traverses a link')
 
 
-def validate_completion(data):
+def validate_completion(data, *, execution='completed', shutdown=None):
     events = Events()
     for offset in range(0, len(data), 65536):events.accept(data[offset:offset + 65536])
-    if not events.ready or not events.complete() or events.settled['reason'] != 'completed':
+    if execution == 'failed':
+        if (events.partial.strip() or not events.ready or not events.failed_turn() or events.pending_tools
+                or events.ending.get('persistence_status') != 'saved' or not isinstance(shutdown, dict)
+                or type(shutdown.get('version')) is not int or shutdown['version'] != 1
+                or shutdown.get('reason') != 'failed' or shutdown.get('cliExited') is not True
+                or shutdown.get('turnSaved') is not True or shutdown.get('pendingToolCallIds') != []
+                or shutdown.get('eventStreamComplete') is not True or shutdown.get('error') is not None):
+            raise ValueError('Failed recheck requires saved events and confirmed shutdown')
+    elif execution not in {'completed', 'cancelled'} or not events.ready or not events.complete() or events.settled['reason'] != 'completed':
         raise ValueError('Ordinary recheck requires sealed, saved completion events')
 
 
@@ -83,7 +91,18 @@ def main():
         data=completion.read_bytes()
         if hashlib.sha256(data).hexdigest()!=identity.get('eventsSha256'):
             raise ValueError('Completion event hash mismatch')
-        validate_completion(data)
+        execution = identity.get('originalExecution')
+        shutdown = None
+        if execution == 'failed':
+            if config['dataset'] != 'deep-swe':raise ValueError('Failed recheck is DeepSWE-only')
+            path = root / 'shutdown.json'
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
+                raise ValueError('Invalid failed shutdown evidence')
+            proof = path.read_bytes()
+            if hashlib.sha256(proof).hexdigest() != identity.get('shutdownSha256'):
+                raise ValueError('Shutdown evidence hash mismatch')
+            shutdown = json.loads(proof)
+        validate_completion(data, execution=execution, shutdown=shutdown)
     subprocess.run(['useradd', '--uid', str(uid), '--user-group', '--no-create-home', 'eval-recheck'], check=True)
     account = pwd.getpwuid(uid)
     project, home, logs = root / 'project', root / 'home', root / 'logs'

@@ -5,6 +5,11 @@ import {dirname,join,resolve} from 'node:path';
 /** One immutable execution package per worker lifetime, including future Python modules. */
 export class WorkerBundle {
   private constructor(private readonly files:ReadonlyMap<string,Buffer>,readonly sha256:string){}
+  evidenceExporter():{source:string;sha256:string}{
+    const source=this.files.get('evidence_export.py');
+    if(!source)throw Error('Frozen evidence exporter missing');
+    return {source:source.toString('utf8'),sha256:createHash('sha256').update(source).digest('hex')};
+  }
   static async capture(evalRoot:string):Promise<WorkerBundle>{
     const files=new Map<string,Buffer>();
     let bytes=0;

@@ -240,6 +240,27 @@ def assignment_prompt(instruction, agent_seconds, network, workdir, public_entri
     return '\n'.join(lines)+'\n\n'+instruction
 
 
+def verifier_readonly_mounts():
+    """Official out-of-tree report tools belong only to the private verifier."""
+    result = []
+    for name in ['/opt/ctrf', '/opt/jest-ctrf']:
+        path = Path(name)
+        if not path.exists() and not path.is_symlink():continue
+        if path.is_symlink() or not path.is_dir() or path.resolve() != path:
+            raise ValueError('Invalid prepared verifier reporter')
+        result += ['--ro-bind', name, name]
+    tools = Path('/opt/hicode-verifier-pnpm/.tools')
+    if tools.exists() or tools.is_symlink():
+        if tools.is_symlink() or not tools.is_dir() or tools.resolve() != tools:
+            raise ValueError('Invalid prepared pnpm tools')
+        for item in tools.rglob('*'):
+            if item.is_symlink() and not item.resolve().is_relative_to(tools):
+                raise ValueError('Prepared pnpm link escapes tool cache')
+        # Prepared from fixed image tools, never the image's Home or user settings.
+        result += ['--ro-bind', str(tools), str(tools), '--setenv', 'PNPM_HOME', str(tools.parent)]
+    return result
+
+
 def namespace_argv(args, project, home, logs, control, tests=None, *, writable_tests=False, root_overlay=False, workdir="/app", environment=None, readonly_logs=False, public_tests=None, private_root=None, isolated_network=False, actor_release=None, actor_events=None, workspace_aliases=(), writable_runtime_bin=False, verifier_release=None, model_gateway=False, home_alias=None):
     if home_alias is not None and not re.fullmatch(r'/eval/runs/[a-f0-9]{16}/home',home_alias):
         raise ValueError('Invalid continuation home alias')
@@ -263,6 +284,7 @@ def namespace_argv(args, project, home, logs, control, tests=None, *, writable_t
     if isolated_network:result+=['--unshare-net']
     if actor_release is not None or verifier_release is not None:
         result+=['--tmpfs','/',*actor_readonly_mounts(actor_release if actor_release is not None else verifier_release,environment),'--dir','/run','--dir','/var','--dir','/var/tmp']
+        if verifier_release is not None:result += verifier_readonly_mounts()
     elif root_overlay or workspace_aliases:
         # A verifier may create new top-level directories in a private tmpfs;
         # every existing system entry remains read-only. The host root is never writable.

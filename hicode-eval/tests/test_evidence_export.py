@@ -9,6 +9,28 @@ from evidence_export import MAP_FILE, export, restore, stored_names, name_key
 
 
 class EvidenceExportTest(unittest.TestCase):
+    def test_deep_export_keeps_actor_and_reports_without_duplicate_verifier_trees(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory).resolve();source=root/'source';source.mkdir()
+            (source/'job.json').write_text(json.dumps({'dataset':'deep-swe'}))
+            for name in ['project','baseline','verifier-project','verifier-home']:
+                package=source/name/'node_modules';package.mkdir(parents=True)
+                for index in range(3):(package/str(index)).write_text('original')
+            for name in ['home','logs']:
+                (source/name).mkdir();(source/name/'record').write_text('sealed')
+            with patch('evidence_export.MAX_FILES',12):export(source,root/'export')
+            for name in ['project','home','logs']:self.assertTrue((root/'export'/name).is_dir())
+            for name in ['baseline','verifier-project','verifier-home']:
+                self.assertFalse((root/'export'/name).exists())
+                self.assertTrue((source/name/'node_modules/0').is_file())
+            self.assertEqual((root/'export/project/node_modules/0').read_text(),'original')
+            (source/'project/baseline').mkdir();(source/'project/baseline/answer').write_text('keep')
+            export(source,root/'second')
+            self.assertEqual((root/'second/project/baseline/answer').read_text(),'keep')
+            (source/'job.json').write_text(json.dumps({'dataset':'terminal-bench-2.1'}))
+            export(source,root/'terminal')
+            self.assertTrue((root/'terminal/baseline/node_modules/0').is_file())
+
     def test_case_and_unicode_aliases_get_unique_storage_names(self):
         names=['include', 'INCLUDE', 'é', 'e\u0301', 'plain']
         stored=stored_names(names)

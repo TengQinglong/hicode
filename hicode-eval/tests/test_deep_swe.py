@@ -90,4 +90,25 @@ class DeepSweTest(unittest.TestCase):
             (root/'artifacts/model.patch').write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'patch changed'):handler.recovery_evidence(root,job,'failed',lambda p,limit:p.read_bytes())
 
+class PreparedPnpmTest(unittest.TestCase):
+    def test_fixed_tools_are_staged_without_image_home_and_links_are_rebased(self):
+        from eval_datasets.deep_swe import prepare_verifier_pnpm
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();source=root/'source';source.mkdir()
+            version=source/'pnpm/10_tmp';version.mkdir(parents=True);(version/'bin').mkdir()
+            binary=version/'bin/pnpm';binary.write_text('fixed tool');binary.chmod(0o755)
+            (source/'pnpm/10').symlink_to(version)
+            target=root/'staging'
+            def paths(name):
+                return source if name=='/root/.local/share/pnpm/.tools' else target
+            with patch('eval_datasets.deep_swe.Path',side_effect=paths):prepare_verifier_pnpm()
+            staged=target/'.tools/pnpm/10'
+            self.assertEqual((staged/'bin/pnpm').read_text(),'fixed tool')
+            self.assertTrue(staged.resolve().is_relative_to(target))
+            self.assertFalse(Path(staged.readlink()).is_absolute())
+            self.assertTrue((staged/'bin/pnpm').stat().st_mode & 0o111)
+            (source/'escape').symlink_to(root)
+            with patch('eval_datasets.deep_swe.Path',side_effect=paths),self.assertRaisesRegex(ValueError,'escapes tool cache'):
+                prepare_verifier_pnpm()
+
 if __name__=='__main__':unittest.main()

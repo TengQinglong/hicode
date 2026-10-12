@@ -43,6 +43,19 @@ def export(source, destination):
         raise ValueError('Invalid evidence export destination')
     if (source / MAP_FILE).exists() or (source / MAP_FILE).is_symlink():
         raise ValueError('Evidence already contains an export path map')
+    derived = set()
+    job = source / 'job.json'
+    if job.exists() or job.is_symlink():
+        fd = os.open(job, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
+                raise ValueError('Invalid evidence job')
+            config = json.load(stream)
+        if not isinstance(config, dict):raise ValueError('Invalid evidence job')
+        if config.get('dataset') == 'deep-swe':
+            # Recreated from the pinned image and patches; keep the full Actor instead.
+            derived = {'baseline', 'verifier-project', 'verifier-home'}
     destination.mkdir(mode=0o700)
     mappings, files, size = [], 0, 0
 
@@ -51,6 +64,10 @@ def export(source, destination):
         names = sorted(os.listdir(current)); encoded = stored_names(names)
         for name in names:
             item, output = current / name, target / encoded[name]
+            if current == source and name in derived:
+                if item.is_symlink() or not item.is_dir():
+                    raise ValueError('Invalid derived verifier directory')
+                continue
             logical, physical = original / name, stored / encoded[name]
             if name != encoded[name]: mappings.append({'stored': str(physical), 'original': str(logical)})
             info = item.lstat(); files += 1

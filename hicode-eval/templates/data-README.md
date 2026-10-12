@@ -39,6 +39,7 @@
 - 已登记题的环境可通过 prepare-environments --live 交给 worker 后台准备，其他题的执行继续；活动或待恢复题不得重建。原题和声明先审定，离线持锁或交 worker 在线登记，准备期间不运行清理，不提交正在构建的题。退出 worker 时取消当前准备、终止其宿主构建/下载进程组，不再启动后续题，再等待锁与 staging 收尾；已完成镜像保留，未完成题不记为依赖失败。
 - serve 只读原子记录并转交控制请求，不初始化执行资源。8878 是默认网页端口，8879 是默认 worker 端口。重启网页不停止跑题。
 - 完成定义必须同时满足执行 completed、原判题 passed 和收集 complete。错误、超时、取消不伪装成通过。启动前取消没有判题结论。
+- 私有 verifier 只读挂载官方镜像中的 `/opt/ctrf` 与 `/opt/jest-ctrf` 报告工具（存在时），校验目录及 symlink 边界；不开放整份 `/opt`，不把报告工具追加到 Actor 视图。镜像固定 pnpm `.tools` 版本缓存复制到本题容器 `/opt/hicode-verifier-pnpm`，校验并重写内部链接后只读挂载；仅设置 PNPM_HOME，不挂载原 Home、用户设置或整份 /root，禁网判题不下载工具链。
 - 每题使用独立容器、网络和可写 Home。作答进程只能通过本题模型网关访问接口；隐藏验收材料在确认 Agent 执行封锁或停止后物化。权限、收尾或证据不明时保留现场并停止新调度。
 - 正常完成的服务题必须先确认 `--single-task` 已封锁执行（持久化成功、工具回执完整、无运行或待消费子 Agent），并关闭模型网关；保留 HiCode Runtime 及其托管 Shell 服务，让私有 verifier 在独立文件／PID 视图中访问本题服务。判题完成、取消或失败后再关闭 Runtime、服务 namespace 和容器。未确认封锁不得暴露隐藏测试；超时／作答失败仍走原有停止确认，不保证服务存活。不能通过关闭全局 Task 清理或自行 daemonize 来替代此交接。
 - 默认允许联网，数据集适配器按原题许可逐题收窄；Terminal-Bench 2.1 只有冻结 task.toml 的 environment.allow_internet=true 才开放，false／缺失则隔离，DeepSWE 始终隔离。settings 和批次 network=isolated 可进一步禁网，open 不能覆盖原题限制。同批允许混合模式，实际模式写入各 Run，retry 沿用原模式。服务题联网时共享本题独立容器的网络，禁网时保留私有无外网 namespace；两者均保留文件、进程、隐藏判题隔离和本题模型网关，真实 Key 不进入作答环境。修改默认配置只在空闲 worker 停止后持 service lease 原子保存，再恢复服务；不改变已有 Run。
@@ -69,6 +70,8 @@
 
 通过题收集完成、成绩入账、容器销毁回执确认后，先核验原证据哈希，再打包 evidence、task、inputs、public-test-inputs 和 worker。完整读取压缩包校验后写 SHA256 回执，最后才删除原目录。取消、异常和未通过现场保留供复核，不默认删除。归档失败保留原文件和错误回执，不改变题目成绩。
 
+DeepSWE 证据导出保留完整 Actor project/Home、执行事件、原题、补丁与判题日志；跳过根目录的 baseline、verifier-project、verifier-home 三份可由固定镜像与补丁重建的副本，不跳过 Actor 内同名目录。保留 100000 条目／8 GiB 边界。收集使用当前 worker 启动时冻结的导出模块，collection.json 记录 exporterSha256；恢复已停止题目不覆盖原执行模块、不调用模型。
+
 Linux 的大小写／Unicode 冲突路径在宿主 evidence 中使用可还原的存储名，映射保存在 `.hicode-evidence-paths.json` 并进入 collection.json 的哈希回执。不得按 Mac 上的存储名反推原答案、删除冲突条目或跟随 symlink；原路径仅在 Linux 判题副本中恢复。导出视图位于单题容器 `/eval/evidence-export/<runId>`，随容器销毁，不另建永久数据目录。
 
 Terminal-Bench 2.1 和 DeepSWE 的可续跑现场只由 runner 在超时、取消或模型失败且完整停机后、隐藏判题上传前生成。`runs/<id>/evidence/continuation.tar.gz` 与 `continuation.json` 保存工作区、Home、原会话身份、累计执行时长、本地模型网关端口和审定服务目录；压缩包及解压内容均受 8 GiB／100000 文件上限约束，不跟随 symlink。标准入口不能拿判题后的 project/Home 当续跑输入，不能为旧记录人工补造快照。
@@ -83,6 +86,8 @@ continue 由同一持锁 worker 创建新的关联尝试，追加 30–10800 秒
 
 ## 操作入口
 
+环境构建直连软件源超时时，先验证现有构建代理可用，再通过 `prepare-environments --live --build-proxy URL` 交给同一 worker；代理只作用于本次镜像构建，不修改系统代理、模型连接或 Actor 网络策略。
+
 从 HiCode checkout 执行 `bash hicode-eval/eval.sh --help`。所有命令使用 `--root DIR`。顺序：init → register → prepare-environments → prepare → worker/serve → submit → 原判题 → 资源收尾。源码变更先进行离线定向测试，无需为每次查看状态跑全量验证。假模型和环境快检不能记作真实通过。
 
 ## 本机定位
@@ -94,3 +99,5 @@ continue 由同一持锁 worker 创建新的关联尝试，追加 30–10800 秒
 批量续跑使用 continue-batch 控制请求，由同一 worker 审定并原子发布一个批次；batch.continuations 按新 Run 分别冻结原会话与快照。启动失败且没有输入确认或 Agent 事件的尝试，在收集/销毁校验后复用原输入；开始作答后必须用新保存的正式快照，不能退回原输入。DeepSWE 已封锁、完成的答案可使用同一在线 regrade/recheck 链路补判（含判题时取消的尝试），占一个共享并发名额，与其他题和后台环境准备并行，不争第二把总锁，不调用模型。
 
 公共运行底座保留；DeepSWE 的逐题官方镜像封装底图不属于公共底座，仅被通过题引用且无容器占用时可回收。按题目层、依赖层、底图的顺序删除，不强制删除有引用的镜像。
+
+DeepSWE 作答失败但完整停止的原答案也可补判：必须校验收集哈希、保存完整的失败事件、shutdown 停机证明和容器销毁回执；补判仅更新独立判题结果，不能把 failed 执行改成 completed。

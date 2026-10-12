@@ -24,11 +24,11 @@ export class TerminalRegradeCleanupError extends Error {}
 export async function regradeTerminal(config:Config,state:Run,task:CatalogTask,restartScript:string|undefined,bundle:WorkerBundle,reviewId:string,signal:AbortSignal){
   signal.throwIfAborted();idSchema.parse(reviewId);
   const deep=state.dataset==='deep-swe';
-  if((state.dataset!=='terminal-bench-2.1'&&!deep)||(state.execution!=='completed'&&!(deep&&state.execution==='cancelled'&&state.grading==='unavailable'))
+  if((state.dataset!=='terminal-bench-2.1'&&!deep)||(state.execution!=='completed'&&!(deep&&((state.execution==='cancelled'&&state.grading==='unavailable')||state.execution==='failed')))
     ||state.collection!=='complete'||!['passed','failed','error','cancelled'].includes(state.state))
     throw Error('Regrade requires a completed and fully collected Terminal run');
   const layout=new EvalLayout(config.data),original=layout.run(state.id),evidence=join(original,'evidence');
-  const receipt=await readJson(join(original,'collection.json'),z.object({complete:z.literal(true),files:z.record(file)}).strict(),32*1024*1024);
+  const receipt=await readJson(join(original,'collection.json'),z.object({complete:z.literal(true),files:z.record(file),exporterSha256:hash.optional()}).strict(),32*1024*1024);
   const expected=Object.fromEntries(Object.entries(receipt.files).filter(([name])=>name.startsWith('project/')).map(([name,value])=>[name.slice(8),value]));
   const project=join(evidence,'project'),snapshot=join(evidence,'service-system.tar');
   for(const path of [original,evidence,project])if(await realpath(path)!==path)throw Error('Symlinked collected evidence');
@@ -46,7 +46,7 @@ export async function regradeTerminal(config:Config,state:Run,task:CatalogTask,r
     finally{await snapshotHandle.close();}
     if(receipt.files['service-system.tar']?.sha256!==digest(snapshotBytes))throw Error('Collected service snapshot differs from its receipt');
   }else if(restartScript!==undefined)throw Error('Ordinary Terminal regrade does not accept a restart script');
-  let eventsBytes:Buffer|undefined;
+  let eventsBytes:Buffer|undefined,shutdownBytes:Buffer|undefined;
   if(plan.job.service){
     await readJson(join(evidence,'shutdown.json'),z.object({reason:z.literal('completed'),cliExited:z.literal(true),turnSaved:z.literal(true),
       pendingToolCallIds:z.array(z.string()).length(0),eventStreamComplete:z.literal(true),error:z.null()}).passthrough());
@@ -55,6 +55,14 @@ export async function regradeTerminal(config:Config,state:Run,task:CatalogTask,r
     try{const stat=await eventsHandle.stat();if(!stat.isFile()||stat.size>256*1024*1024)throw Error('Invalid completion event evidence');eventsBytes=await eventsHandle.readFile();}
     finally{await eventsHandle.close();}
     if(receipt.files['actor-events/events.jsonl']?.sha256!==digest(eventsBytes))throw Error('Completion events differ from their receipt');
+    if(state.execution==='failed'){
+      const handle=await open(join(evidence,'shutdown.json'),constants.O_RDONLY|constants.O_NOFOLLOW);
+      try{const info=await handle.stat();if(!info.isFile()||info.size>65536)throw Error('Invalid failed shutdown evidence');shutdownBytes=await handle.readFile();}
+      finally{await handle.close();}
+      if(receipt.files['shutdown.json']?.sha256!==digest(shutdownBytes))throw Error('Shutdown evidence differs from its receipt');
+      z.object({version:z.literal(1),reason:z.literal('failed'),cliExited:z.literal(true),turnSaved:z.literal(true),
+        pendingToolCallIds:z.array(z.string()).length(0),eventStreamComplete:z.literal(true),error:z.null()}).passthrough().parse(JSON.parse(shutdownBytes.toString()));
+    }
   }
   await readJson(join(original,'container-disposed.json'),z.object({version:z.literal(1),runId:z.literal(state.id),at:z.string().datetime()}).strict());
   terminalRegradeRequestSchema.parse({run:state.id,restartScript});
@@ -64,11 +72,12 @@ export async function regradeTerminal(config:Config,state:Run,task:CatalogTask,r
   const output=layout.recheck(state.id,reviewId);
   await mkdir(output,{recursive:true,mode:0o700});
   const input={version:1,runId:state.id,reviewId,createdAt:new Date().toISOString(),originalExecution:state.execution,originalGrading:state.grading,
-    ...(pathMap?{pathMapSha256:digest(pathMap)}:{}),
+    ...(pathMap?{pathMapSha256:digest(pathMap)}:{}),...(shutdownBytes?{shutdownSha256:digest(shutdownBytes)}:{}),
     projectSha256:digest(JSON.stringify(expected)),...(snapshotBytes&&script?{snapshotSha256:digest(snapshotBytes),restartSha256:digest(script)}:{kind:'ordinary',eventsSha256:digest(eventsBytes!)})};
   await save(join(output,'input.json'),input);if(script)await writeFile(join(output,'service-restart.sh'),script,{mode:0o600});
   if(pathMap)await writeFile(join(output,'evidence-paths.json'),pathMap,{mode:0o600});
   if(eventsBytes)await writeFile(join(output,'completion-events.jsonl'),eventsBytes,{mode:0o600});
+  if(shutdownBytes)await writeFile(join(output,'shutdown.json'),shutdownBytes,{mode:0o600});
   if(task.dataset!==state.dataset||task.id!==state.task)throw Error('Recheck task identity mismatch');
   const binding=await new EnvironmentStore(config.environments,config.context,config.datasetBackends).resolve(task);
   const containers=new RunContainers(config),container=await containers.create(reviewId,(binding.preparation??binding.dependencies).imageId);
@@ -96,7 +105,7 @@ export async function regradeTerminal(config:Config,state:Run,task:CatalogTask,r
     await execute(docker('cp',project+'/.',container+':'+remote+'/project/'));
     if(!isDeepStrictEqual(await runEvidenceTree(project),expected))throw Error('Answer changed while staging');
     await save(join(output,'job.json'),{...oldJob,...plan.job,release,network:state.network,verifierSeconds:plan.verifierSeconds});
-    for(const name of ['job.json','input.json',...(pathMap?['evidence-paths.json']:[]),...(script?['service-restart.sh']:['completion-events.jsonl'])])await execute(docker('cp',join(output,name),container+':'+remote+'/'+name));
+    for(const name of ['job.json','input.json',...(pathMap?['evidence-paths.json']:[]),...(shutdownBytes?['shutdown.json']:[]),...(script?['service-restart.sh']:['completion-events.jsonl'])])await execute(docker('cp',join(output,name),container+':'+remote+'/'+name));
     if(snapshotBytes)await execute(docker('cp',snapshot,container+':'+remote+'/service-system.tar'));
     await execute(docker('cp',join(taskRoot,'tests'),container+':'+remote+'/tests'));
     await execute(docker('exec',container,'python3','/opt/hicode-eval/terminal_regrade.py',remote),{timeout:(plan.verifierSeconds+240)*1000});

@@ -141,6 +141,7 @@ printf '%s\n' '{"type":"result","execution":"completed","grading":"${uploadFailu
       expect(await executing).toMatchObject({execution:'completed',grading:uploadFailure?'unavailable':'passed'});
       const receipt=JSON.parse(await readFile(join(path,'collection.json'),'utf8'));
       expect(receipt.files.sqlite3.symlink).toBe('/app/sqlite/sqlite3');
+      expect(receipt.exporterSha256).toMatch(/^[a-f0-9]{64}$/);
     }
     expect(copies).toBe(1);
     expect(await Bun.file(f.layout.continuationArchive(state.id)).exists()).toBe(finalFailure);
