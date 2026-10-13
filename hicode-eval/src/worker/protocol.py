@@ -226,6 +226,15 @@ def actor_readonly_mounts(release, environment):
     return result
 
 
+def hicode_command(release, event_path, permission_mode, model, resume_session=None):
+    # Bun otherwise discovers the benchmark's tsconfig from the Actor cwd.
+    args = ['bun', '--tsconfig-override', str(Path(release) / 'tsconfig.json'),
+            str(Path(release) / 'src/index.tsx'), '--single-task', '--event-log', str(event_path),
+            '--permission-mode', permission_mode, '--source', model['source'], '--model', model['model']]
+    if resume_session is not None:args += ['--resume', resume_session]
+    return args
+
+
 def assignment_prompt(instruction, agent_seconds, network, workdir, public_entries):
     if type(agent_seconds) is not int or not 30<=agent_seconds<=10800:raise ValueError('Invalid assignment time limit')
     if network not in {'open','isolated'} or workdir not in {'/app','/testbed'}:raise ValueError('Invalid assignment environment')

@@ -3,11 +3,15 @@ import {isIP} from 'node:net';
 import {z} from 'zod';
 import type {Config} from './types.js';
 import {idSchema} from './types.js';
-import {run} from './store.js';
+import {run,CommandTimeoutError} from './store.js';
 import {modelIpv4} from './modelDns.js';
 
 const inspectSchema=z.array(z.object({Id:z.string(),Image:z.string(),State:z.object({Running:z.boolean()}),
   Config:z.object({Labels:z.record(z.string())})})).length(1);
+
+export class ContainerCreationPendingError extends Error {
+  constructor(cause:CommandTimeoutError){super('Docker container creation is unconfirmed: '+cause.message,{cause});}
+}
 
 /** One disposable container and network per attempt; no shared writable mounts. */
 export class RunContainers {
@@ -29,14 +33,20 @@ export class RunContainers {
     const modelHost=await this.modelHost(modelBaseUrl);
     await run(this.docker('network','create','--label','dev.hicode.owner='+this.owner,'--label','dev.hicode.run='+id,network));
     try {
-      await run(this.docker('create','--name',name,'--init','--user','root','--network',network,
+      try {await run(this.docker('create','--name',name,'--init','--user','root','--network',network,
         '--memory',String(this.config.memoryMb)+'m','--cpus',String(this.config.cpus),'--pids-limit','1024',
         '--security-opt','seccomp=unconfined','--security-opt','apparmor=hicode-development','--security-opt','systempaths=unconfined',
         ...modelHost,
         '--label','dev.hicode.role=attempt','--label','dev.hicode.owner='+this.owner,'--label','dev.hicode.run='+id,
-        image,'sleep','infinity'));
-      await run(this.docker('start',name));await this.assert(id);return name;
+        image,'sleep','infinity'),{timeout:120000});}
+      catch(error){
+        // Killing the client does not cancel the daemon's snapshot/container creation.
+        if(error instanceof CommandTimeoutError)throw new ContainerCreationPendingError(error);
+        throw error;
+      }
+      await run(this.docker('start',name),{timeout:60000});await this.assert(id);return name;
     } catch(error){
+      if(error instanceof ContainerCreationPendingError)throw error;
       // A failed create must not delete a pre-existing container with a colliding name.
       const matches=await this.find(id).catch(():string[]=>[]);
       if(matches.includes(name))await run(this.docker('rm','-f',name)).catch(()=>{});

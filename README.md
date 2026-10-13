@@ -20,11 +20,17 @@ HiCode 是一个基于 TypeScript 自研的轻量级终端 Code Agent，核心�
 
 ### ⭐ Terminal-Bench 2.1
 
+于 2026 年 10 月 11 日完成评测。
+
 1. HiCode：原题干通过 **83/89（93.3%）**；含两道题干补充后通过 **85/89（95.5%）**。使用 Qwen3.8-Flash + DeepSeek V4.1 Flash。
 2. [DeepSeek V4.1 Flash 公开参考](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash#performance-across-agent-scaffolds-deepswe-v11-and-terminal-bench-21-max-reasoning-effort)：搭配 Codex、Claude Code、DeepSeek Harness Minimal 的通过率分别为 **84.1%、88.0%、90.6%**。每题独立评测 3 次，统计平均通过率。
 3. 其他模型的公开参考：[GPT-5.6 Sol + Codex](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash#comparison-with-frontier-models-max-reasoning-effort) **88.8%**、[Kimi K3 + Kimi Code](https://www.kimi.com/en/blog/kimi-k3) **88.3%**、[GLM-5.3 + Claude Code](https://huggingface.co/zai-org/GLM-5.3) **88.2%**、[Qwen3.8-Max + Claude Code](https://huggingface.co/Qwen/Qwen3.8-2.4T-A95B-FP8) **86.6%**（每题评测 10 次取平均）。
 
 题干说明：两道题的原题干未明确说明输出格式或行为要求，因此补充了说明，验收测试保持不变。
+
+### ⭐ DeepSWE 1.1
+
+🔥 **持续评测中：截至 2026 年 10 月 13 日，HiCode 已通过 52/113 道题，使用模型为 Qwen3.8-Flash、DeepSeek V4.1 Flash、GLM 5.3 Flash。**
 
 评测说明：HiCode 为控制成本（省钱），每题验收通过一次就记为通过，不再重复测试；重复评测时，通过率会略有下降。
 

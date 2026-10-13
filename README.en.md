@@ -20,11 +20,17 @@ Runs locally on **macOS and Linux**. Connect your own model API key to get start
 
 ### ⭐ Terminal-Bench 2.1
 
+Evaluation completed on October 11, 2026.
+
 1. HiCode: **83/89 (93.3%)** passed with original instructions; **85/89 (95.5%)** including two instruction clarifications. Models: Qwen3.8-Flash + DeepSeek V4.1 Flash.
 2. [DeepSeek V4.1 Flash public reference](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash#performance-across-agent-scaffolds-deepswe-v11-and-terminal-bench-21-max-reasoning-effort): pass rates of **84.1%, 88.0%, and 90.6%** with Codex, Claude Code, and DeepSeek Harness Minimal, respectively. Each task is evaluated independently three times, and the average pass rate is reported.
 3. Other published references: [GPT-5.6 Sol + Codex](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash#comparison-with-frontier-models-max-reasoning-effort) **88.8%**, [Kimi K3 + Kimi Code](https://www.kimi.com/en/blog/kimi-k3) **88.3%**, [GLM-5.3 + Claude Code](https://huggingface.co/zai-org/GLM-5.3) **88.2%**, and [Qwen3.8-Max + Claude Code](https://huggingface.co/Qwen/Qwen3.8-2.4T-A95B-FP8) **86.6%** (averaged over ten trials per task).
 
 Instruction notes: two tasks had unclear output-format or behavior requirements, so their instructions were clarified. Acceptance tests remained unchanged.
+
+### ⭐ DeepSWE 1.1
+
+🔥 **Evaluation in progress: as of October 13, 2026, HiCode has passed 52 of 113 tasks using Qwen3.8-Flash, DeepSeek V4.1 Flash, and GLM 5.3 Flash.**
 
 Evaluation notes: to control costs, HiCode counts a task as passed once it clears acceptance tests, then stops retesting it; the pass rate is expected to decrease slightly over repeated evaluations.
 

@@ -74,6 +74,10 @@ async function scanTree(root: string, recordLinks = false, maxFiles = 20000, max
   }
   await walk(root); return result;
 }
+export class CommandTimeoutError extends Error {
+  constructor(command: string, timeout: number) { super(`${command} timed out after ${timeout}ms`); }
+}
+
 export async function run(command: string[], options: { cwd?: string; env?: Record<string, string>; timeout?: number; includeStderr?: boolean; signal?:AbortSignal } = {}): Promise<string> {
   options.signal?.throwIfAborted();
   const proc = Bun.spawn(command, { cwd: options.cwd, env: options.env, stdout: 'pipe', stderr: 'pipe',detached:process.platform!=='win32' });
@@ -91,7 +95,7 @@ export async function run(command: string[], options: { cwd?: string; env?: Reco
   try {
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     options.signal?.throwIfAborted();
-    if (timedOut) throw Error(`${command[0]} timed out after ${timeout}ms`);
+    if (timedOut) throw new CommandTimeoutError(command[0]!, timeout);
     if (code) throw Error(`${command[0]} failed (exit ${code}): ${stderr.slice(options.includeStderr ? -32768 : -1000)}`);
     const output=options.includeStderr?stdout+'\n'+stderr:stdout;
     if (output.length > 4 * 1024 * 1024) throw Error('Command output exceeds budget');

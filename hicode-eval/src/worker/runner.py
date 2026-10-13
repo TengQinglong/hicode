@@ -1,7 +1,7 @@
 """Execute one assignment inside its disposable container and prepared environment."""
 import base64,fcntl,json,os,pwd,signal,subprocess,sys,time
 from pathlib import Path
-from protocol import assignment_prompt,Events,atomic_json,namespace_argv,wait_verifier_handoff
+from protocol import assignment_prompt,Events,atomic_json,namespace_argv,wait_verifier_handoff,hicode_command
 from terminal import capture,settle,submit_prompt
 from cleanup import stop_task_processes,finalize_task,open_task_cli,terminate_task_cli,process_start
 from model_proxy import Gateway
@@ -174,8 +174,8 @@ try:
     emit('phase',phase='Starting HiCode')
     launch=control/'launch.sh'
     import shlex
-    actor_command=['bun',release+'/src/index.tsx','--single-task','--event-log',str(event_path),'--permission-mode',config['permissionMode'],'--source',model['source'],'--model',model['model']]
-    if continuation is not None:actor_command+=['--resume',continuation['checkpoint']['sessionId']]
+    actor_command=hicode_command(release,event_path,config['permissionMode'],model,
+                                 continuation['checkpoint']['sessionId'] if continuation is not None else None)
     if gateway:actor_command=['python3','/opt/hicode-eval/network_entry.py',str(control/'model.sock'),logical_conf+'/settings.json',*actor_command]
     launch.write_text('#!/bin/bash\nset -eu\nexec '+shlex.join(namespace(actor_command,actor=True))+'\n')
     launch.chmod(0o755)

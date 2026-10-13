@@ -12,7 +12,7 @@ import {verifyCheckpointArchive,environmentDigest} from './continuation.js';
 import {regradeResultSchema,runSchema,containerSchema} from './types.js';
 import type {Dataset} from './datasets.js';
 import { EVAL_ROOT } from '../paths.js';
-import {RunContainers} from './containers.js';
+import {RunContainers,ContainerCreationPendingError} from './containers.js';
 import {EnvironmentStore} from './environments.js';
 import {TaskCatalog} from './catalog.js';
 import type {CatalogTask} from './catalog.js';
@@ -169,7 +169,9 @@ export class LinuxMachine {
     const backend=await this.runBackend(state.id);if(backend!==this)return backend.recover(state,path);
     if (!this.release || state.state !== 'needs_recovery') throw Error('Task is not eligible for recovery');
     if(await exists(join(path,'setup-failed.json'))){
-      await readJson(join(path,'setup-failed.json'),z.object({version:z.literal(1),runId:z.literal(state.id),runnerSpawned:z.literal(false),error:z.string()}).strict());
+      const failed=await readJson(join(path,'setup-failed.json'),z.object({version:z.literal(1),runId:z.literal(state.id),runnerSpawned:z.literal(false),error:z.string(),containerCreationPending:z.literal(true).optional()}).strict());
+      if(failed.containerCreationPending&&!await this.containers.exists(state.id))
+        throw Error('Docker container creation has not been observed yet; retain the setup record.');
       await this.containers.remove(state.id);
       return {type:'result',execution:'failed',grading:'unavailable',uid:20000,note:'Environment setup failed before the runner was spawned; disposable resources removed.'};
     }
@@ -255,9 +257,13 @@ print(json.dumps({'result':outcome,'recovery':record(root/'recovery.json')}))`;
     env[model.apiKeyEnv] = credential;
     proc = Bun.spawn(this.docker('exec', '--env', model.apiKeyEnv, container, execution.runnerPython, '/opt/hicode-eval/runner.py', state.id), { env, stdout: 'pipe', stderr: 'pipe' });
     } catch(error){
-      try {await save(join(path,'setup-failed.json'),{version:1,runId:state.id,runnerSpawned:false,error:String(error).replaceAll(credential,'[redacted]').slice(-2000)});}
-      finally {await this.containers.remove(state.id);}
-      if(await exists(join(path,'container.json')))await rename(join(path,'container.json'),join(path,'container-setup.json'));
+      const creationPending=error instanceof ContainerCreationPendingError;
+      await save(join(path,'setup-failed.json'),{version:1,runId:state.id,runnerSpawned:false,
+        ...(creationPending?{containerCreationPending:true}:{}),error:String(error).replaceAll(credential,'[redacted]').slice(-2000)});
+      if(!creationPending){
+        await this.containers.remove(state.id);
+        if(await exists(join(path,'container.json')))await rename(join(path,'container.json'),join(path,'container-setup.json'));
+      }
       throw error;
     }
     let result: LinuxResult | undefined, note = '', verificationSent = false;
