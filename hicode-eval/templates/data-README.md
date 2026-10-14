@@ -114,3 +114,5 @@ DeepSWE 的 Go 私有判题从固定镜像 `/root/go/bin` 校验并复制普通�
 DeepSWE原题使用缩写Git基线时，declaredBaseCommit保存原始引用，baseCommit冻结官方完整40位提交，必须核验前缀与固定镜像HEAD；不改原题metadata、collect、文件哈希或验收。镜像型题的特殊依赖按审定preparation脚本构建独立task层，核验输入哈希，不通过修改活动题共享运行配方来补依赖。
 
 重型镜像准备可使用 `prepare-environments --live --after-evaluations`：请求立即入队，进度记录 waitingForEvaluations；有执行或排队评测时不启动构建，空闲后由同一worker继续。关闭会取消等待，不新建外部后台进程。
+
+评测容器的文件句柄（nofile）软／硬上限由 RunContainers 显式设置为 65536，不继承 Docker 的 1024 软上限；不改 VM／Docker 全局配置。该额度与收集的 100000 条目／8 GiB 边界无关。源码变更经空闲 worker 重启后仅对新容器生效，不修改现有 Run。

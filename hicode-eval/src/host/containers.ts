@@ -35,6 +35,7 @@ export class RunContainers {
     try {
       try {await run(this.docker('create','--name',name,'--init','--user','root','--network',network,
         '--memory',String(this.config.memoryMb)+'m','--cpus',String(this.config.cpus),'--pids-limit','1024',
+        '--ulimit','nofile=65536:65536',
         '--security-opt','seccomp=unconfined','--security-opt','apparmor=hicode-development','--security-opt','systempaths=unconfined',
         ...modelHost,
         '--label','dev.hicode.role=attempt','--label','dev.hicode.owner='+this.owner,'--label','dev.hicode.run='+id,

@@ -18,6 +18,7 @@ test('each attempt has its own network, identity and bounded resources without s
    expect(await runtime.create(id,image)).toBe(runtime.name(id));
    const create=calls.find(c=>c.includes('create')&&c.includes('--memory'))!;
    expect(create).toContain('4096m');expect(create).toContain('--cpus');expect(create).toContain(runtime.name(id)+'-net');
+   expect(create[create.indexOf('--ulimit')+1]).toBe('nofile=65536:65536');
    expect(create).not.toContain('--mount');expect(create).not.toContain('-v');expect(create).not.toContain('--privileged');
    await runtime.remove(id);
    expect(calls.some(c=>c.includes('rm')&&c.includes(runtime.name(id)))).toBe(true);
