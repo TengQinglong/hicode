@@ -83,3 +83,5 @@ bash hicode-eval/eval.sh gc --root /path/eval-data --apply --build-cache
 DeepSWE 补判也使用现有 regrade/recheck 入口，交持锁 worker 占一个并发名额，可与其他题和环境准备并行；取消发生在判题阶段时，须先验证作答已封锁、完成事件和答案哈希，才能按原答案补判并恢复真实执行/判题结论。大历史会话续跑的 TUI 就绪与首次请求确认分别最多等 300/120 秒，与追加作答时间分开。
 
 公共运行底座保留；DeepSWE 的逐题官方镜像封装底图不属于公共底座，仅被通过题引用且无容器占用时可回收。按题目层、依赖层、底图的顺序删除，不强制删除有引用的镜像。
+
+重型镜像准备可使用 `prepare-environments --live --after-evaluations`：请求立即入队，进度记录 waitingForEvaluations；有执行或排队评测时不启动构建，空闲后由同一worker继续。关闭会取消等待，不新建外部后台进程。

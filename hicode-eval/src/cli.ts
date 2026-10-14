@@ -27,15 +27,16 @@ import {EVAL_ROOT,REPOSITORY_ROOT} from './paths.js';
 async function main(){
   const {positionals,values:v}=parseArgs({args:process.argv.slice(2),allowPositionals:true,options:{
     definition:{type:'string'},preparation:{type:'string'},script:{type:'string'},root:{type:'string'},help:{type:'boolean'},file:{type:'string'},dataset:{type:'string'},tasks:{type:'string'},ids:{type:'string'},run:{type:'string'},batch:{type:'string'},apply:{type:'boolean'},
-    port:{type:'string',default:'8878'},'worker-port':{type:'string',default:'8879'},'model-config':{type:'string'},reasoning:{type:'string'},'snapshot-worktree':{type:'boolean'},'build-proxy':{type:'string'},'build-cache':{type:'boolean'},live:{type:'boolean'},'verifier-proxy':{type:'string'},'service-restart-script':{type:'string'},review:{type:'string'},'agent-seconds':{type:'string'},prompt:{type:'string'},'restore-actor':{type:'boolean'}
+    port:{type:'string',default:'8878'},'worker-port':{type:'string',default:'8879'},'model-config':{type:'string'},reasoning:{type:'string'},'snapshot-worktree':{type:'boolean'},'build-proxy':{type:'string'},'build-cache':{type:'boolean'},'after-evaluations':{type:'boolean'},live:{type:'boolean'},'verifier-proxy':{type:'string'},'service-restart-script':{type:'string'},review:{type:'string'},'agent-seconds':{type:'string'},prompt:{type:'string'},'restore-actor':{type:'boolean'}
   }});
   const command=positionals[0];
-  if(v.help||!command){console.log('HiCode Eval · current root only\n  init --root DIR [--model-config FILE]\n  prepare --root DIR [--snapshot-worktree]\n  register --root DIR --dataset DATASET --tasks DIR [--ids ID1,ID2] [--definition FILE] [--live]\n  prepare-environments --root DIR [--ids DATASET:ID1,DATASET:ID2] [--build-proxy URL]\n  worker --root DIR [--worker-port 8879]\n  serve --root DIR [--port 8878] [--worker-port 8879]\n  submit --file FILE [--reasoning EFFORT] | status [--batch ID] | catalog | cancel --batch ID | recover --run ID | retry --run ID\n  image-inventory --root DIR [--dataset DATASET]\n  gc --root DIR [--apply] [--build-cache]\n  regrade --root DIR --run ID [--verifier-proxy URL | --service-restart-script FILE]\n  recheck --root DIR --run ID --review ID\n  continue --root DIR --run ID --agent-seconds SECONDS [--prompt TEXT] [--restore-actor]\nAll operations read the root README first. No old format, old data-dir or independent catalog paths.');return;}
+  if(v.help||!command){console.log('HiCode Eval · current root only\n  init --root DIR [--model-config FILE]\n  prepare --root DIR [--snapshot-worktree]\n  register --root DIR --dataset DATASET --tasks DIR [--ids ID1,ID2] [--definition FILE] [--live]\n  prepare-environments --root DIR [--ids DATASET:ID1,DATASET:ID2] [--build-proxy URL] [--live --after-evaluations]\n  worker --root DIR [--worker-port 8879]\n  serve --root DIR [--port 8878] [--worker-port 8879]\n  submit --file FILE [--reasoning EFFORT] | status [--batch ID] | catalog | cancel --batch ID | recover --run ID | retry --run ID\n  image-inventory --root DIR [--dataset DATASET]\n  gc --root DIR [--apply] [--build-cache]\n  regrade --root DIR --run ID [--verifier-proxy URL | --service-restart-script FILE]\n  recheck --root DIR --run ID --review ID\n  continue --root DIR --run ID --agent-seconds SECONDS [--prompt TEXT] [--restore-actor]\nAll operations read the root README first. No old format, old data-dir or independent catalog paths.');return;}
   if(positionals.length!==1||!v.root)throw Error('Supply one command and --root');
   if((v['agent-seconds']!==undefined||v.prompt!==undefined)&&command!=='continue')throw Error('--agent-seconds/--prompt are only supported by continue');
   if(v['restore-actor']&&command!=='continue')throw Error('--restore-actor is only supported by continue');
   if(v['service-restart-script']!==undefined&&command!=='regrade')throw Error('--service-restart-script is only supported by regrade');
   if(v.reasoning!==undefined&&command!=='submit')throw Error('--reasoning is only supported by submit; retry preserves the original batch reasoning');
+  if(v['after-evaluations']&&!(command==='prepare-environments'&&v.live))throw Error('--after-evaluations requires live prepare-environments');
   if(v.live&& !['register','prepare-environments'].includes(command))throw Error('--live is supported only by register and prepare-environments');
   if([v.definition,v.preparation,v.script].some(value=>value!==undefined)&&command!=='register')throw Error('--definition/--preparation/--script are supported only by register');
   const reasoning=v.reasoning===undefined?undefined:reasoningSchema.parse({effort:v.reasoning});
@@ -72,7 +73,7 @@ async function main(){
     const client=new Client(workerPort),health=z.object({data:z.string()}).passthrough().parse(await client.request('health'));
     if(health.data!==layout.root)throw Error('Worker belongs to another data root');
     const tasks=v.ids.split(',').map(key=>{const parts=key.split(':');if(parts.length!==2)throw Error('Use DATASET:ID');return {dataset:datasetSchema.parse(parts[0]),id:parts[1]!};});
-    console.log(JSON.stringify(await client.request('prepare-environments',{tasks,...(v['build-proxy']?{buildProxy:v['build-proxy']}:{})})));return;
+    console.log(JSON.stringify(await client.request('prepare-environments',{tasks,...(v['after-evaluations']?{afterEvaluations:true}:{}),...(v['build-proxy']?{buildProxy:v['build-proxy']}:{})})));return;
   }
   if(command==='serve'){
     const server=serve(new EvaluationView(layout.root),new Client(workerPort),port);

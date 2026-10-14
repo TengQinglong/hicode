@@ -85,7 +85,7 @@ continue 由同一持锁 worker 创建新的关联尝试，追加 30–10800 秒
 
 执行初始化只校验冻结 HiCode payload；release 和执行模块在每题的数据集镜像内安装并预检，不依赖其他数据集引擎的常驻准备容器。
 
-HiCode作答与续跑启动必须显式使用冻结release的tsconfig（bun --tsconfig-override），不能受题库工作目录的JSX配置影响；不修改原题tsconfig、工作目录或做题工具的运行配置。
+HiCode作答与续跑启动必须显式使用冻结release的tsconfig（bun --tsconfig-override），不能受题库工作目录的JSX配置影响；不修改原题tsconfig、工作目录或做题工具的运行配置。 进程识别必须匹配同一完整Bun启动参数与本题UID，再取得唯一pidfd；不得假定源码入口处于固定参数位置。
 
 ## 操作入口
 
@@ -110,3 +110,7 @@ DeepSWE 的 Go 私有判题从固定镜像 `/root/go/bin` 校验并复制普通�
 只有用户明确要求放弃已取消且收集失败的现场，才可通过同一 worker 的 `abandon-cancelled-run` 结束该尝试；先复用原 recovery 校验真实停机和 cancelled/unavailable 结果，保存 runs/<id>/abandonment.json 停机证明，再销毁本题容器。保留本机日志，明确丢弃未完整收集的工作区；collection 仍为 retained，不提供续跑、不造完整回执或通过成绩。普通取消和 recover 不自动丢弃现场。
 
 封存完成的 DeepSWE 现场因依赖条目超限时，可在停机证据校验后仅将 project/node_modules 分成每包最多 50000 条目的只读存储归档；逐文件核对字节、链接和未变更状态，记录 runs/<id>/evidence/dependency-archives.json 及归档 SHA256，保留源码、Git、补丁、日志与原判不变。原依赖在容器中保留至同一 worker 完成收集与销毁；不抬高收集的 100000 条目／8 GiB 边界。依赖包只是保留证据，不作为自动续跑输入、不自动解压；补判从固定镜像重建依赖。
+
+DeepSWE原题使用缩写Git基线时，declaredBaseCommit保存原始引用，baseCommit冻结官方完整40位提交，必须核验前缀与固定镜像HEAD；不改原题metadata、collect、文件哈希或验收。镜像型题的特殊依赖按审定preparation脚本构建独立task层，核验输入哈希，不通过修改活动题共享运行配方来补依赖。
+
+重型镜像准备可使用 `prepare-environments --live --after-evaluations`：请求立即入队，进度记录 waitingForEvaluations；有执行或排队评测时不启动构建，空闲后由同一worker继续。关闭会取消等待，不新建外部后台进程。

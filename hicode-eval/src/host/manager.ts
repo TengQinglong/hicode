@@ -205,10 +205,15 @@ export class Lab {
       const store=new EnvironmentStore(this.config.environments,this.config.context,this.config.datasetBackends,request.buildProxy,controller.signal);
       const completion=(async()=>{
         const ready:string[]=[],failed:{task:string;error:string}[]=[],cancelled:string[]=[];
-        const progress=async(current:string|null)=>save(join(this.layout.state,'preparation.json'),{at:new Date().toISOString(),running:current!==null,current,ready,failed,cancelled});
+        const progress=async(current:string|null,waiting=false)=>save(join(this.layout.state,'preparation.json'),{at:new Date().toISOString(),running:current!==null||waiting,current,ready,failed,cancelled,...(waiting?{waitingForEvaluations:true}:{})});
         try{
           for(const [index,task] of tasks.entries()){
             if(controller.signal.aborted){cancelled.push(...tasks.slice(index).map(taskKey));break;}
+            if(request.afterEvaluations){
+              await progress(null,true);
+              while(!controller.signal.aborted&&(this.jobs.size>0||[...this.runs.values()].some(run=>!done(run.state))))await Bun.sleep(500);
+              if(controller.signal.aborted){cancelled.push(...tasks.slice(index).map(taskKey));break;}
+            }
             await progress(taskKey(task));
             try{await store.prepareTask(task);await this.taskCatalog!.setEnvironment(task,'ready');ready.push(taskKey(task));}
             catch(error){

@@ -176,6 +176,7 @@ try:
     import shlex
     actor_command=hicode_command(release,event_path,config['permissionMode'],model,
                                  continuation['checkpoint']['sessionId'] if continuation is not None else None)
+    cli_command=actor_command
     if gateway:actor_command=['python3','/opt/hicode-eval/network_entry.py',str(control/'model.sock'),logical_conf+'/settings.json',*actor_command]
     launch.write_text('#!/bin/bash\nset -eu\nexec '+shlex.join(namespace(actor_command,actor=True))+'\n')
     launch.chmod(0o755)
@@ -202,7 +203,7 @@ try:
             start=time.monotonic()
             emit('phase',phase='Running HiCode')
         if events.ready and submitted is None:
-            cli_fd=open_task_cli(uid,release+'/src/index.tsx',event_path)
+            cli_fd=open_task_cli(uid,cli_command)
             instruction=(root/'instruction.md').read_text()
             if continuation is not None:
                 previous=continuation['checkpoint']['elapsedSeconds']

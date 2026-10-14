@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from protocol import hicode_command
 from cleanup import finalize_task, stop_task_processes, open_task_cli, terminate_task_cli
 
 
@@ -26,15 +27,22 @@ class CleanupTest(unittest.TestCase):
             self.assertFalse(terminate_task_cli(7, lambda: False))
         send.assert_called_once_with(7, signal.SIGTERM)
 
-    def test_cli_identity_uses_uid_exact_script_and_event_path(self):
+    def test_cli_identity_matches_the_generated_command_including_bun_options(self):
+        command = hicode_command('/release', '/logs/events.jsonl', 'full-access', {'source':'qwen','model':'offline-smoke'})
         cli = self.process()
-        cli.joinpath.return_value.read_bytes.return_value = b'bun\0/release/src/index.tsx\0--event-log\0/logs/events.jsonl\0'
+        cli.joinpath.return_value.read_bytes.return_value = b'/usr/local/bin/bun\0' + b'\0'.join(os.fsencode(arg) for arg in command[1:]) + b'\0'
         with patch('cleanup.Path.iterdir', return_value=[cli]), patch('cleanup.os.pidfd_open', return_value=7, create=True), patch('cleanup.os.close') as close:
-            self.assertEqual(open_task_cli(20001, '/release/src/index.tsx', '/logs/events.jsonl'), 7)
+            self.assertEqual(open_task_cli(20001, command), 7)
             close.assert_not_called()
-        with patch('cleanup.Path.iterdir', return_value=[cli]), patch('cleanup.os.pidfd_open', return_value=7, create=True), patch('cleanup.os.close') as close:
-            with self.assertRaisesRegex(RuntimeError, 'uniquely identify'): open_task_cli(20001, '/release/src/index.tsx', '/other/events.jsonl')
-            close.assert_called_once_with(7)
+        for index, replacement in [(2, '/other/tsconfig.json'), (3, '/other/src/index.tsx'), (6, '/other/events.jsonl')]:
+            wrong = command.copy(); wrong[index] = replacement
+            with self.subTest(index=index), patch('cleanup.Path.iterdir', return_value=[cli]), patch('cleanup.os.pidfd_open', return_value=7, create=True), patch('cleanup.os.close') as close:
+                with self.assertRaisesRegex(RuntimeError, 'uniquely identify'): open_task_cli(20001, wrong)
+                close.assert_called_once_with(7)
+        cli.stat.return_value = SimpleNamespace(st_uid=20002)
+        with patch('cleanup.Path.iterdir', return_value=[cli]), patch('cleanup.os.pidfd_open', create=True) as pin:
+            with self.assertRaisesRegex(RuntimeError, 'uniquely identify'): open_task_cli(20001, command)
+            pin.assert_not_called()
 
     @unittest.skipUnless(sys.platform == 'linux' and hasattr(os, 'pidfd_open') and shutil.which('bun') and os.getuid() == 0,
                          'Requires Linux evaluation machine for UID/pidfd smoke test')
@@ -42,14 +50,15 @@ class CleanupTest(unittest.TestCase):
         for ignores in [False, True]:
             with self.subTest(ignores=ignores), tempfile.TemporaryDirectory(prefix='eval-stop-') as tmp:
                 root = Path(tmp); os.chown(root, 65534, 65534); os.chmod(root, 0o700)
-                script = root/'cli.ts'; events = root/'events.jsonl'
-                script.write_text("process.on('SIGTERM', async () => {" + ("" if ignores else "await Bun.write(process.argv[3], 'flushed'); process.exit(143);") + "}); console.log('READY'); setInterval(() => {}, 1000);")
+                (root/'src').mkdir(); (root/'tsconfig.json').write_text('{}'); script = root/'src/index.tsx'; events = root/'events.jsonl'
+                script.write_text("process.on('SIGTERM', async () => {" + ("" if ignores else "await Bun.write(process.argv[process.argv.indexOf('--event-log') + 1], 'flushed'); process.exit(143);") + "}); console.log('READY'); setInterval(() => {}, 1000);")
                 def demote(): os.setgroups([]); os.setgid(65534); os.setuid(65534)
-                child = subprocess.Popen(['bun', str(script), '--event-log', str(events)], preexec_fn=demote, stdout=subprocess.PIPE, text=True)
+                command = hicode_command(root, events, 'full-access', {'source':'qwen','model':'offline-smoke'})
+                child = subprocess.Popen(command, preexec_fn=demote, stdout=subprocess.PIPE, text=True)
                 fd = None
                 try:
                     self.assertEqual(child.stdout.readline().strip(), 'READY')
-                    fd = open_task_cli(65534, script, events)
+                    fd = open_task_cli(65534, command)
                     self.assertEqual(terminate_task_cli(fd, lambda: False, grace_seconds=.3 if ignores else 3), not ignores)
                     if not ignores:
                         self.assertEqual(child.wait(timeout=3), 143)

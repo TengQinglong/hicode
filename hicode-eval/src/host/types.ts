@@ -35,7 +35,7 @@ const continuationOriginSchema=retryOriginSchema.extend({checkpoint:checkpointSc
   environmentSha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 export type ContinuationOrigin=z.infer<typeof continuationOriginSchema>;
 export const submissionSchema = z.object({ reasoning: reasoningSchema.optional(), name: batchName, network: networkSchema.optional(), tasks: z.array(z.object({ id: z.string().min(1), dataset:datasetSchema, agentSeconds: z.number().int().min(30).max(10800).optional() }).strict()).min(1).max(200), concurrency }).strict();
-export const environmentPreparationSchema=z.object({tasks:z.array(taskRefSchema).min(1).max(200),buildProxy:z.string().url().refine(value=>{const u=new URL(value);return ['http:','https:'].includes(u.protocol)&&!u.username&&!u.password&&!u.search&&!u.hash;}).optional()}).strict();
+export const environmentPreparationSchema=z.object({afterEvaluations:z.boolean().optional(),tasks:z.array(taskRefSchema).min(1).max(200),buildProxy:z.string().url().refine(value=>{const u=new URL(value);return ['http:','https:'].includes(u.protocol)&&!u.username&&!u.password&&!u.search&&!u.hash;}).optional()}).strict();
 export type EnvironmentPreparation=z.infer<typeof environmentPreparationSchema>;
 export type Submission = z.infer<typeof submissionSchema>;
 // The batch records its default; resolved execution limits belong to each Run.

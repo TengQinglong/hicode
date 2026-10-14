@@ -265,7 +265,14 @@ export class EnvironmentStore {
         dockerfile+='\nRUN mkdir -p /opt/hicode-rust && cp -a /root/.cargo /opt/hicode-rust/cargo && cp -a /root/.rustup /opt/hicode-rust/rustup && chmod -R a+rX /opt/hicode-rust\n'+
           'ENV CARGO_HOME=/opt/hicode-rust/cargo RUSTUP_HOME=/opt/hicode-rust/rustup CARGO_NET_OFFLINE=true PATH=/opt/hicode-rust/cargo/bin:${PATH}\n';
       const dependencies=await this.build('dependencies',base.imageId,identity.recipe,stage,dockerfile,metadata.architecture);
-      const binding:EnvironmentBinding={version:1,task:taskKey(task),sourceHash:identity.hash,base,dependencies,preparation:null};
+      let preparation:Layer|null=null;
+      if(task.preparation){
+        await cp(task.preparation.directory,join(stage,'preparation'),{recursive:true,errorOnExist:true});
+        if(digest(JSON.stringify(await tree(join(stage,'preparation'))))!==task.preparation.sha256)throw Error('Task preparation changed while staging');
+        const body='COPY preparation /opt/hicode-task/source\nRUN '+JSON.stringify(['/bin/bash','/opt/hicode-task/source/'+task.preparation.script])+'\n';
+        preparation=await this.build('task',dependencies.imageId,digest(JSON.stringify(await tree(stage))+body),stage,await this.childDockerfile(dependencies,body),metadata.architecture);
+      }
+      const binding:EnvironmentBinding={version:1,task:taskKey(task),sourceHash:identity.hash,base,dependencies,preparation};
       await save(this.bindingPath(task),binding);return binding;
     }finally{await rm(stage,{recursive:true,force:true});}
   }

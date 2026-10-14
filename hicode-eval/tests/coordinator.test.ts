@@ -317,3 +317,28 @@ test('explicitly abandoning cancelled retained evidence unblocks scheduling with
   await expect(client.request('abandon-cancelled-run',{run:id})).rejects.toThrow('Only cancelled');
  }finally{worker?.stop(true);await lab.close();prepare.mockRestore();abandon.mockRestore();cleanup.mockRestore();await f.cleanup();}
 });
+
+test.each([false,true])('deferred preparation waits for evaluation or is cancelled while waiting: %s',async cancel=>{
+ const f=await fixture(),active=await seed(f,'deferred-active'),candidate=await seed(f,'deferred-build','d'),lab=new Lab(f.config,'offline-secret');
+ await save(join(f.layout.payload,'manifest.json'),{});
+ const metadata=publicTaskProfile({active:{hashes:{},inputs:[],initializer:null,directories:[],packages:[],verifierPrelude:'none'}},'active');
+ let finish!:()=>void,started!:()=>void;const gate=new Promise<void>(r=>{finish=r;}),running=new Promise<void>(r=>{started=r;});
+ const validate=spyOn(publicTasks,'validatePublicTask').mockResolvedValue(metadata),resolve=spyOn(EnvironmentStore.prototype,'resolve').mockResolvedValue(active.binding);
+ const prepare=spyOn(LinuxMachine.prototype,'prepare').mockResolvedValue(undefined),build=spyOn(EnvironmentStore.prototype,'prepareTask').mockResolvedValue(candidate.binding);
+ const execute=spyOn(LinuxMachine.prototype,'execute').mockImplementation(async(_s,_p,_k,phase)=>{await phase('Running HiCode');started();await gate;return {type:'result',execution:'completed',grading:'failed',uid:20000};});
+ const dispose=spyOn(LinuxMachine.prototype,'disposeRun').mockResolvedValue(undefined),boundary=spyOn(transport,'run').mockResolvedValue('');
+ try{
+  await lab.init();await lab.submit({name:'evaluation',concurrency:1,tasks:[{dataset:active.dataset,id:active.id}]});await running;
+  expect(await lab.prepareEnvironments({tasks:[{dataset:candidate.dataset,id:candidate.id}],afterEvaluations:true})).toEqual({accepted:['terminal-bench-2.1:deferred-build']});
+  await Bun.sleep(30);expect(build).not.toHaveBeenCalled();
+  expect(JSON.parse(await Bun.file(join(f.layout.state,'preparation.json')).text()).waitingForEvaluations).toBe(true);
+  if(cancel){
+   const closing=lab.close();finish();await closing;expect(build).not.toHaveBeenCalled();
+   expect(JSON.parse(await Bun.file(join(f.layout.state,'preparation.json')).text()).cancelled).toEqual(['terminal-bench-2.1:deferred-build']);
+  }else{
+   finish();await settled(lab);
+   const end=Date.now()+2000;while(!build.mock.calls.length){if(Date.now()>end)throw Error('Deferred build did not begin');await Bun.sleep(10);}
+   await lab.close();expect(build).toHaveBeenCalledTimes(1);
+  }
+ }finally{finish();await lab.close();validate.mockRestore();resolve.mockRestore();prepare.mockRestore();build.mockRestore();execute.mockRestore();dispose.mockRestore();boundary.mockRestore();await f.cleanup();}
+});

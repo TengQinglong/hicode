@@ -12,10 +12,13 @@ def process_start(pid):
     except (FileNotFoundError, ProcessLookupError):return None
 
 
-def open_task_cli(uid, script, event_log):
+def open_task_cli(uid, command):
     """Pin the CLI process before submitting the task; never signal a reused PID."""
     if type(uid) is not int or uid < 20000:
         raise ValueError('Expected an evaluation task UID')
+    if not isinstance(command, list) or not command or command[0] != "bun" or not all(isinstance(arg, str) and arg for arg in command):
+        raise ValueError("Expected the frozen Bun CLI command")
+    expected = [os.fsencode(arg) for arg in command[1:]]
     matches = []
     try:
         for path in Path('/proc').iterdir():
@@ -26,10 +29,9 @@ def open_task_cli(uid, script, event_log):
                 if path.stat().st_uid != uid:
                     continue
                 fd = os.pidfd_open(int(path.name))
-                args = path.joinpath('cmdline').read_bytes().split(b'\0')
-                marker = b'--event-log'
-                if (path.stat().st_uid == uid and len(args) > 2 and Path(os.fsdecode(args[0])).name == 'bun' and args[1] == os.fsencode(script)
-                        and marker in args and args[args.index(marker) + 1] == os.fsencode(event_log)):
+                args = path.joinpath('cmdline').read_bytes().rstrip(b'\0').split(b'\0')
+                if (path.stat().st_uid == uid and len(args) > 1 and Path(os.fsdecode(args[0])).name == 'bun'
+                        and args[1:] == expected):
                     matches.append(fd)
                     fd = None
             except (FileNotFoundError, ProcessLookupError):

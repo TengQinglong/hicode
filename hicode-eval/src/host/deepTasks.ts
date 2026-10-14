@@ -7,6 +7,7 @@ import type {Run} from './types.js';
 
 const sha=z.string().regex(/^[a-f0-9]{64}$/);
 const profileSchema=z.object({repository:z.string().regex(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),baseCommit:z.string().regex(/^[a-f0-9]{40}$/),
+  declaredBaseCommit:z.string().regex(/^[a-f0-9]{7,39}$/).optional(),
   declaredImage:z.string().regex(/^public\.ecr\.aws\/d3j8x8q7\/swe-bench-202605:[a-z0-9.-]+$/),
   image:z.string().regex(/^public\.ecr\.aws\/d3j8x8q7\/swe-bench-202605@sha256:[a-f0-9]{64}$/),
   architecture:z.literal('amd64'),agentSeconds:z.literal(10800),verifierSeconds:z.literal(1800),hashes:z.record(sha),
@@ -14,7 +15,10 @@ const profileSchema=z.object({repository:z.string().regex(/^https:\/\/github\.co
     GOMODCACHE:z.literal('/opt/hicode-go/pkg/mod').optional(),GOPROXY:z.literal('off').optional(),
     CARGO_HOME:z.literal('/opt/hicode-rust/cargo').optional(),RUSTUP_HOME:z.literal('/opt/hicode-rust/rustup').optional(),
     CARGO_NET_OFFLINE:z.literal('true').optional()}).strict(),
-  runtimeTools:z.array(z.enum(['go-ctrf-json-reporter','rust-toolchain'])).max(2).optional()}).strict();
+  runtimeTools:z.array(z.enum(['go-ctrf-json-reporter','rust-toolchain'])).max(2).optional()}).strict().superRefine((profile,ctx)=>{
+  if(profile.declaredBaseCommit&&!profile.baseCommit.startsWith(profile.declaredBaseCommit))
+    ctx.addIssue({code:z.ZodIssueCode.custom,path:['declaredBaseCommit'],message:'Original baseline must be a prefix of the reviewed complete commit'});
+});
 export async function validateDeepTask(id:string,source:string,definition:string){
   const raw=(await readJson(definition,z.record(z.unknown())))[id];if(!raw)throw Error('No reviewed DeepSWE task: '+id);
   const profile=profileSchema.parse(raw);
@@ -22,13 +26,13 @@ export async function validateDeepTask(id:string,source:string,definition:string
   if(JSON.stringify(Object.keys(files).sort())!==JSON.stringify(Object.keys(profile.hashes).sort())||
       Object.entries(files).some(([name,file])=>profile.hashes[name]!==file.sha256))throw Error('DeepSWE frozen task changed');
   const spec=z.object({schema_version:z.literal('1.3'),metadata:z.object({task_id:z.literal(id),
-    repository_url:z.literal(profile.repository),base_commit_hash:z.literal(profile.baseCommit)}),
+    repository_url:z.literal(profile.repository),base_commit_hash:z.literal(profile.declaredBaseCommit??profile.baseCommit)}),
     agent:z.object({network_mode:z.literal('no-network'),timeout_sec:z.literal(profile.agentSeconds)}),
     environment:z.object({docker_image:z.literal(profile.declaredImage),memory_mb:z.literal(8192),gpus:z.literal(0)}),
     verifier:z.object({network_mode:z.literal('no-network'),environment_mode:z.literal('separate'),
       timeout_sec:z.literal(profile.verifierSeconds),collect:z.array(z.object({command:z.string(),timeout_sec:z.literal(300)})).length(1)})});
   const task=spec.parse(Bun.TOML.parse(await readFile(join(source,'task.toml'),'utf8')));
-  const collect='cd /app && mkdir -p /logs/artifacts && git config --global --add safe.directory /app && git diff --binary '+profile.baseCommit+' HEAD > /logs/artifacts/model.patch';
+  const collect='cd /app && mkdir -p /logs/artifacts && git config --global --add safe.directory /app && git diff --binary '+(profile.declaredBaseCommit??profile.baseCommit)+' HEAD > /logs/artifacts/model.patch';
   if(task.verifier.collect[0]!.command!==collect)throw Error('Unreviewed DeepSWE collection contract');
   return {...profile,kind:'deep-swe' as const};
 }
