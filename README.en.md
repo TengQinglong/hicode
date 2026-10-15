@@ -30,7 +30,7 @@ Instruction notes: two tasks had unclear output-format or behavior requirements,
 
 ### ⭐ DeepSWE 1.1
 
-🔥 **Evaluation in progress: as of October 15, 2026, HiCode has passed 68 of 113 tasks using GLM 5.3 Flash and DeepSeek V4.1 Flash.**
+🔥 Evaluation in progress: as of October 15, 2026, HiCode has passed **77/113 (68.1%)** using GLM 5.3 Flash and DeepSeek V4.1 Flash.
 
 Evaluation notes: to control costs, HiCode counts a task as passed once it clears acceptance tests, then stops retesting it; the pass rate is expected to decrease slightly over repeated evaluations.
 

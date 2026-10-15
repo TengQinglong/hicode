@@ -30,7 +30,7 @@ HiCode 是一个基于 TypeScript 自研的轻量级终端 Code Agent，核心�
 
 ### ⭐ DeepSWE 1.1
 
-🔥 **持续评测中：截至 2026 年 10 月 15 日，HiCode 已通过 68/113 道题，使用模型为 GLM 5.3 Flash + DeepSeek V4.1 Flash。**
+🔥 持续评测中：截至 2026 年 10 月 15 日，HiCode 已通过 **77/113（68.1%）**，使用模型为 GLM 5.3 Flash + DeepSeek V4.1 Flash。
 
 评测说明：HiCode 为控制成本（省钱），每题验收通过一次就记为通过，不再重复测试；重复评测时，通过率会略有下降。
 
