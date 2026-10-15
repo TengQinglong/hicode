@@ -70,10 +70,6 @@ export interface SubagentResult {
     transcriptIssue?: string;
 }
 
-export type SubagentRunner = (
-    request: SubagentRequest
-) => Promise<SubagentResult>;
-
 interface SubagentThreadRunInput {
     taskId?: string;
     prompt: string;
@@ -89,25 +85,21 @@ export interface SubagentThread {
     run(input: SubagentThreadRunInput): Promise<SubagentResult>;
 }
 
-export interface CreateSubagentRunnerOptions {
+interface SubagentThreadContext {
     parentContext: ToolContext;
     onEvent: (event: AgentEvent) => void | Promise<void>;
 }
 
-interface CreateSubagentThreadOptions extends CreateSubagentRunnerOptions {
-    /** Background Tasks use their stable task identity as the Agent identity. */
+interface CreateSubagentThreadOptions extends SubagentThreadContext {
+    /** Managed Tasks use their stable task identity as the Agent identity. */
     agentId: string;
-    /** Task Runtime aggregates child progress; synchronous UI does not expand internal tool events. */
+    /** Task Runtime aggregates child progress for the owning Session. */
     onChildEvent?: (event: AgentEvent) => void | Promise<void>;
     /** Agent transcripts and tool artifacts remain in parent-project storage, even with a separate cwd. */
     storageCwd?: string;
     /** Background children receive only a parent-addressed messaging endpoint. */
     agentMessaging?: AgentMessaging;
 }
-
-export type CreateSubagentRunner = (
-    options: CreateSubagentRunnerOptions
-) => SubagentRunner;
 
 export type CreateSubagentThread = (
     options: CreateSubagentThreadOptions,

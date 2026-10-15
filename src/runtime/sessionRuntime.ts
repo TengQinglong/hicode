@@ -245,14 +245,9 @@ export function createRootSessionRuntime({
                 if (turnActive) throw new Error("Cannot reload Hooks before the turn ends");
                 await resources.reloadHooks(hookSignal);
             }};
-            const runSubagent = resources.agentRuntime.createSubagentRunner({
-                parentContext: ctx,
-                onEvent,
-            });
             ctx.subagentLauncher = createSubagentLauncher({
                 parentContext: ctx,
                 getHistory: () => history,
-                runSubagent,
             });
             return ctx;
         },

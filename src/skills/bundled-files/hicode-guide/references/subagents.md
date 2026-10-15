@@ -84,16 +84,16 @@ For another round, ask Root to continue the **same** Agents. `agent_followup` qu
 
 | Action | Result |
 | --- | --- |
-| Wait for delegated work | Event-driven wait; relevant completion/message/new user input wakes Root without minute-by-minute polling. |
+| Wait for delegated work | Use task wait with the exact Task ID. Completion, new input or the wait window returns control; expiry leaves the Agent running. |
 | Root Esc | Cancels Root's current turn; background children can continue. |
 | Interrupt a child | Ends the current run; the thread can receive followup. |
 | Stop a child | Closes the thread; it cannot be followed up. |
 | Exit HiCode | Closes owned tasks; later `/resume` restores records, not live child threads. |
 
-`/tasks` exposes task status/output and stopping. Interrupt/followup are model tools, not extra slash commands. Foreground delegation is a one-call thread; same-thread followup applies to retained background Agents. Current headless/SDK Hosts do not allow background Agents, so do not promise identical parallel continuation there.
+`/tasks` exposes task status/output and stopping. Interrupt/followup are model tools, not extra slash commands. Every Agent is a retained TaskRuntime thread and starts asynchronously; there is no foreground mode or run_in_background argument. Completion delivers a notification with its Task ID, summary and saved report path. Current headless/SDK Hosts reject Agent launches because they do not allow managed Agent tasks.
 
 ## Diagnose configuration or execution
 
 Start with `/agents` loading issues and `/tasks` actual status. Role descriptions are not proof that a tool ran, a Todo was updated or a test passed. For followup investigations compare stable task/agent IDs, runCount, request history and task lifecycle records. See [Storage](storage.md) for their locations.
 
-For a background Shell result that blocks work, use `task(action="wait", task_id="...")` to retrieve its terminal status and output. Omitting the ID waits for pending Agent delegates, not persistent services. Children may wait only for Shell tasks they started. Cancelling the wait does not stop the process; use task stop explicitly.
+For a Shell or Agent result that blocks work, use `task(action="wait", task_id="...")`. The ID is required and only that task is watched. `wait_ms` defaults to 30000 and is capped at 300000; expiry returns progress without stopping the task. Final integration also uses bounded waits and does not treat pending results as completed. Children may wait only for Shell tasks they started. Cancelling the wait does not stop the process; use task stop explicitly.

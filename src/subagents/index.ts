@@ -7,7 +7,6 @@ export {
 } from "./load.js";
 export type {
     AgentDefinition,
-    CreateSubagentRunner,
     LoadedCustomAgents,
 } from "./types.js";
 export {formatSubagentModel} from "./model.js";

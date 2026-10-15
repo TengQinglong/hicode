@@ -18,7 +18,6 @@ import {
   type AgentTestOptions,
 } from "./agent.js";
 import {
-  createSubagentRunnerForTest,
   createSubagentThreadForTest,
 } from "./subagent.js";
 import type { AgentRuntime } from "../../src/runtime/agentRuntime.js";
@@ -69,12 +68,6 @@ export function runHeadlessForTest(
           ...test.agent,
           inputChannel,
         })),
-    createSubagentRunner: (subagentOptions) =>
-      createSubagentRunnerForTest({
-        ...subagentOptions,
-        agentOptions: test.agent,
-        toolResultStoreOptions: test.toolResultStoreOptions,
-      }),
     reviewTask: async () => {throw new Error("This fixture does not configure task reviews");},
     createSubagentThread: (subagentOptions, request) =>
       createSubagentThreadForTest({

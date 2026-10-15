@@ -1,3 +1,4 @@
+import {waitForTaskCompletion} from "../../src/tasks/wait.js";
 import {createWriterRegistry} from "../helpers/writerAgent.js";
 import {createToolRuntime} from "../../src/tools/runtime.js";
 import {createAgentTool} from "../../src/tools/agent/agent.js";
@@ -21,7 +22,7 @@ import { withTempProject } from "../helpers/tempProject.js";
 import { attachSubagentLauncher } from "../helpers/subagentLauncher.js";
 import { executeToolResult } from "../helpers/executeTool.js";
 
-describe("synchronous subagent", () => {
+describe("managed Agent and isolated child threads", () => {
   test("FixtureWriter 在授权工作区内无需重复确认并使用结构化文件工具", async () => {
     await withTempProject(async (cwd) => {
       let confirmations = 0;
@@ -76,6 +77,7 @@ describe("synchronous subagent", () => {
       );
 
       expect(result.outcome).toBe("ok");
+      await waitForTaskCompletion(ctx.tasks!, ctx.taskJoin!.ids, ctx.signal, "agent");
       expect(confirmations).toBe(0);
       expect(await readFile(`${cwd}/general-purpose.txt`, "utf8"))
         .toBe("implemented\n");
@@ -119,7 +121,7 @@ describe("synchronous subagent", () => {
     });
   });
 
-  test("Explore 继承项目指令，隔离对话，并通过 tool result 返回报告", async () => {
+  test("Explore 继承项目指令，隔离对话，并通过任务通知返回报告", async () => {
     await withTempProject(async (cwd) => {
       await writeFile(`${cwd}/target.ts`, "export const target = 42;\n");
       const child = createFakeLLM([
@@ -158,13 +160,9 @@ describe("synchronous subagent", () => {
           },
           "parent-agent-call"
         ),
+        assistantText("Waiting for the delegated report."),
         (options) => {
-          const result = options.messages.find(
-            (message) =>
-              message.role === "tool" &&
-              message.tool_call_id === "parent-agent-call"
-          );
-          expect(result?.content).toContain("target.ts 导出 target 常量");
+          expect(JSON.stringify(options.messages)).toContain("target.ts 导出 target 常量");
           expect(
             options.messages.some(
               (message) =>
@@ -211,18 +209,12 @@ describe("synchronous subagent", () => {
 
       expect(result.reply).toBe("父 Agent 已收到调查结果");
       expect(history.some((message) => message.role === "system" && contentText(message.content).includes("只读代码探索"))).toBe(false);
-      expect(events.map((event) => event.type)).toEqual([
-        "subagent_start",
-        "subagent_progress",
-        "subagent_progress",
-        "subagent_progress",
-        "subagent_progress",
-        "subagent_end",
-      ]);
-      const end = events.find((event) => event.type === "subagent_end");
-      expect(end?.type === "subagent_end" && end.transcriptPath).toBeTruthy();
-      if (end?.type === "subagent_end" && end.transcriptPath) {
-        const transcript = await readFile(end.transcriptPath, "utf8");
+      expect(events).toEqual([]);
+      const task = (await ctx.tasks!.list())[0]!;
+      expect(task.kind).toBe("agent");
+      expect(task.kind === "agent" && task.transcriptPath).toBeTruthy();
+      if (task.kind === "agent" && task.transcriptPath) {
+        const transcript = await readFile(task.transcriptPath, "utf8");
         expect(transcript).toContain('"type":"start"');
         expect(transcript).toContain('"type":"snapshot"');
         expect(transcript).toContain("child-read");

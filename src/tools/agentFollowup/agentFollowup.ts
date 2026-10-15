@@ -12,7 +12,7 @@ const inputSchema = z.object({
 
 export const agentFollowupTool: Tool<typeof inputSchema> = {
     name: "agent_followup",
-    description: "Assign additional work to an existing Agent by task_id. A running Agent receives it after its current tool batch; an idle Agent starts another run with its existing History, FileState and cwd. Ordinary agent_message does not wake an idle Agent. Interrupted Agents can continue; stopped Agents and records from an old process cannot. Use task wait when results block integration. Only the parent can assign work; this does not expand the child's permissions.",
+    description: "Assign additional work to an existing Agent by task_id. A running Agent receives it after its current tool batch; an idle Agent starts another run with its existing History, FileState and cwd. Ordinary agent_message does not wake an idle Agent. Interrupted Agents can continue; stopped Agents and records from an old process cannot. Use task wait with this exact task_id when results block integration. Only the parent can assign work; this does not expand the child's permissions.",
     parameters: inputSchema,
     isReadOnly: () => false,
     isConcurrencySafe: () => false,
@@ -43,7 +43,7 @@ export const agentFollowupTool: Tool<typeof inputSchema> = {
                 `Run: ${task.progress.runCount}`,
                 queued ? "Delivery occurs at a safe boundary; this receipt is not a completion report."
                     : "A new run uses the existing Agent context; this receipt is not a completion report.",
-                "Continue independent work, then use task wait to collect results and integrate.",
+                "Continue independent work, then use task wait with this exact task_id to collect results and integrate.",
             ].join("\n"), outcome: "ok",
                 uiData: {type: "agent_receipt", receipt: createAgentReceipt(task.agentName ?? task.agentType, task.description, queued ? "queued" : "continued")}};
         } catch (error) {

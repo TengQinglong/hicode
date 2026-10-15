@@ -2,7 +2,6 @@ import {formatTaskHeader} from "../../tasks/format.js";
 import {createAgentReceipt} from "./receipt.js";
 import {z} from "zod";
 import type {SubagentRegistry} from "../../subagents/registry.js";
-import type {SubagentResult} from "../../subagents/types.js";
 import {hasAgentWriteTools,} from "../../subagents/registration.js";
 import type {Tool} from "../types.js";
 import {resolveSubagentDirectory} from "../../subagents/workspace.js";
@@ -36,28 +35,11 @@ const agentInputSchema = z.object({
         .regex(/^[a-z0-9][a-z0-9-]*$/)
         .optional()
         .describe("Optional task name, e.g. frontend."),
-    run_in_background: z
-        .boolean()
-        .default(false)
-        .describe("Return a Task ID immediately when true; HiCode notifies completion."),
     cwd: z.string().trim().min(1).optional().describe("Existing working directory, default current directory; must be within parent-authorized directories. Does not create or authorize a directory."),
     read_only: z.boolean().default(false).describe("Read-only investigation when true; prohibits writes and commands with side effects. Explore is always read-only."),
 }).strict();
 
 const MAX_AGENT_TOOL_LINE_CHARS = 340;
-
-function formatResult(result: SubagentResult): string {
-    const completed =
-        result.reason === "completed" || result.reason === "no_tool_calls";
-    const label = result.agentType;
-    if (completed) {
-        return [result.reply || `(${label} completed but returned no content.)`, result.transcriptIssue].filter(Boolean).join("\n\n");
-    }
-    return [
-        `${label} did not fully complete (reason: ${result.reason}).`,
-        result.reply,
-    ].join("\n\n");
-}
 
 function formatTools(tools: readonly string[] | undefined): string {
     if (!tools) return "inherit delegatable tools";
@@ -90,7 +72,7 @@ function formatAgentToolDescription(
     return [
         "Delegate only a concrete independent subtask that can run alongside useful Root work, or a bounded investigation that materially reduces context noise. Complexity or many files alone do not justify delegation. Keep immediate blocking work local and do not duplicate delegated work.",
         "Choose a role and context independently: Worker for implementation, Explore for read-only investigation, or a registered specialist. fresh needs a complete briefing; inherit copies parent background with a worker system prompt. Assign disjoint file ownership, shared interfaces and module-level verification. Root runs full integration checks after dependencies are ready; workers report unfinished sibling dependencies instead of repeatedly checking or editing them. Preserve others' changes. read_only narrows access. cwd must already exist and be authorized; directory creation and integration use ordinary tools.",
-        "Use run_in_background=true for parallel work and two-way agent_message communication. agent_followup assigns new work to a running or finished thread with its History/cwd; interrupt ends only its current run; stop closes it. Cancelled tasks and tasks from an old process cannot continue. Children report missing directory, network or elevated access to Root; they cannot expand permissions. After independent work, use task wait without task_id for any pending result or incoming message, then integrate and verify before the final answer. Do not end the turn merely to wait; avoid polling.",
+        "Every Agent starts asynchronously and returns a Task ID. Continue independent work; completion automatically delivers a notification with that ID, a summary and the saved report path. Use task wait with the exact task_id when its result blocks progress; wait_ms bounds only the wait and never stops the Agent. agent_message coordinates with an active child; agent_followup assigns more work on the same thread. interrupt ends the current run; stop closes the thread. Children cannot expand permissions. Read and integrate delegated results before the final answer; do not duplicate their work or poll repeatedly.",
         "Available agents:",
         ...agents,
     ].join("\n");
@@ -131,16 +113,13 @@ export function createAgentTool(
                 return {content: `Unknown Agent type: ${input.subagent_type}`, outcome: "failed"};
             }
             try {
-                const launched = await ctx.subagentLauncher.launch({
+                const task = await ctx.subagentLauncher.launch({
                     ...common, agentType: input.subagent_type, name: input.name,
-                    context: input.context, runInBackground: input.run_in_background,
+                    context: input.context,
                 });
-                if (launched.kind === "foreground") return {content: formatResult(launched.result),
-                    outcome: launched.result.reason === "completed" || launched.result.reason === "no_tool_calls" ? "ok" : "failed"};
-                const task = launched.task;
                 return {content: [formatTaskHeader(task), "Agent Task started.", `Agent: ${task.agentName ?? task.agentType}`,
                     `Description: ${task.description}`, `Cwd: ${task.cwd}`,
-                    "Use task wait without task_id when delegated results block further work; completion or incoming messages wake it without polling, then integrate and verify before your final answer. Use agent_message for coordination or agent_followup for additional work. Do not poll."].join("\n"), outcome: "ok",
+                    "Continue independent work. Completion automatically notifies you with this Task ID and the report path. When this result blocks progress, use task wait with this exact task_id; expiry returns progress without stopping the Agent. Read and integrate the result before your final answer. Use agent_message to coordinate or agent_followup for further work."].join("\n"), outcome: "ok",
                     uiData: {type: "agent_receipt", receipt: createAgentReceipt(task.agentName ?? task.agentType, task.description, "started")}};
             } catch (error) {return {content: error instanceof Error ? error.message : String(error), outcome: "failed"};}
         },

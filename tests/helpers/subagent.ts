@@ -1,7 +1,8 @@
+import {randomUUID} from "node:crypto";
+import {EMPTY_AGENT_INPUT_CHANNEL} from "../../src/agent/inputChannel.js";
 import { createSubagentFactories } from "../../src/subagents/runSubagent.js";
 import type {AgentRunner} from "../../src/agent/index.js";
 import type {
-  CreateSubagentRunnerOptions,
   CreateSubagentThread,
   SubagentRequest,
 } from "../../src/subagents/types.js";
@@ -16,7 +17,7 @@ import {
   type TestToolResultStoreOptions,
 } from "./toolResultStore.js";
 
-interface SubagentTestOptions extends CreateSubagentRunnerOptions {
+interface SubagentTestOptions extends Pick<Parameters<CreateSubagentThread>[0], "parentContext" | "onEvent"> {
   agentOptions?: Pick<AgentTestOptions, "callLLM" | "compactHistory">;
   toolResultStoreOptions?: TestToolResultStoreOptions;
   registry?: SubagentRegistry;
@@ -40,13 +41,19 @@ export function createSubagentRunnerForTest({
     ...agentOptions,
     inputChannel,
   });
-  return createSubagentFactories({
+  const factory = createSubagentFactories({
     primaryRunAgent: runAgent,
     fastRunAgent: runAgent,
     createToolResultStore: (cwd, sessionId) =>
       createTestToolResultStore(cwd, sessionId, toolResultStoreOptions),
     registry,
-  }).createSubagentRunner(options);
+  });
+  const runner = async (request: SubagentRequest) => {
+    const thread = factory.createSubagentThread({...options, agentId: randomUUID()}, request);
+    try {return await thread.run({prompt: request.prompt, signal: options.parentContext.signal, inputChannel: EMPTY_AGENT_INPUT_CHANNEL});}
+    finally {await thread.close();}
+  };
+  return Object.assign(runner, {registry, createThread: factory.createSubagentThread});
 }
 
 type SubagentThreadTestOptions = Parameters<CreateSubagentThread>[0] & {

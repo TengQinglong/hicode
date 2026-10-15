@@ -88,7 +88,7 @@ test("wait window schema rejects invalid limits and unrelated actions without ch
             for (const action of ["wait", "list", "status"]) {
                 const result = await executeToolResult("task", JSON.stringify({action, wait_ms: 10}), {...base, tasks}, action);
                 expect(result.outcome).toBe("failed");
-                expect(result.modelContent).toContain("explicit Shell task_id");
+                expect(result.modelContent).toContain("explicit task_id");
             }
             expect(await tasks.list()).toHaveLength(0);
         } finally {await runtime.close();}
@@ -113,7 +113,7 @@ test("the final-answer Shell join also returns control instead of silently waiti
             assistantToolCall("bash", {command: "sleep 30", yield_time_ms: 100}, "start"),
             assistantText("premature final"),
             async options => {
-                expect(JSON.stringify(options.messages)).toContain("Shell join wait window elapsed");
+                expect(JSON.stringify(options.messages)).toContain("task result wait window elapsed");
                 const target = (await tasks.list())[0]!;
                 expect(target.status).toBe("running");
                 return assistantToolCall("task", {action: "stop", task_id: target.id}, "stop");
@@ -136,7 +136,7 @@ test("Shell wait returns real output/exit and excludes unrelated services and Ag
         try {
             await tasks.startShell({command: "sleep 30", cwd, toolCallId: "service"});
             const empty = await executeToolResult("task", '{"action":"wait"}', ctx, "empty");
-            expect(empty.modelContent).toContain("No delegated");
+            expect(empty.modelContent).toContain("requires an explicit task_id");
             const target = await tasks.startShell({command: "printf once; sleep 0.1; printf done; exit 7", cwd, toolCallId: "job"});
             const result = await executeToolResult("task", JSON.stringify({action: "wait", task_id: target.id}), ctx, "wait");
             expect(result.outcome).toBe("failed");

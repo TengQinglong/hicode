@@ -151,7 +151,6 @@ describe("fork subagent", () => {
                 subagent_type: "Worker", context: "inherit",
                 name: "frontend",
                 read_only: true,
-                run_in_background: true,
             }), ctx, parentToolCallId);
             expect(launched.outcome).toBe("ok");
             expect(launched.modelContent).toContain("frontend");
@@ -261,7 +260,6 @@ describe("fork subagent", () => {
                         prompt: "创建 fork-feature.txt",
                         subagent_type: "Worker", context: "inherit",
                         name: "frontend",
-                        run_in_background: true,
                         cwd: childCwd,
                     }),
                     ctx,
@@ -293,7 +291,7 @@ describe("fork subagent", () => {
         });
     });
 
-    test("role, inherited background, name and foreground execution are independent", async () => {
+    test("managed launches preserve role, inherited context and name", async () => {
         await withTempProject(async cwd => {
             const ctx = createTestContext(cwd);
             const history: Message[] = [

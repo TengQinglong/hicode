@@ -16,7 +16,6 @@ import {createSandboxRuntimeFactory} from "../../src/sandbox/runtime.js";
 import type {SandboxAskCallback} from "@anthropic-ai/sandbox-runtime";
 import {createShellRunner} from "../../src/tools/bash/shellRunner.js";
 import {testChildEnvironment} from "../helpers/childEnvironment.js";
-import type {SubagentRunner} from "../../src/subagents/types.js";
 import {runAgentForTest} from "../helpers/agent.js";
 import {
     assistantText,
@@ -74,12 +73,6 @@ function createFakeAgentRuntime(
             callLLM: fake.callLLM,
             inputChannel,
         }),
-        createSubagentRunner: () => {
-            const runner: SubagentRunner = async () => {
-                throw new Error("SDK 测试未配置子 Agent");
-            };
-            return runner;
-        },
         reviewTask: async () => {throw new Error("This fixture does not configure task reviews");},
         createSubagentThread: (options) => ({
             agentId: options.agentId,

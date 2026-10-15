@@ -10,9 +10,9 @@ import type {ToolCallThread} from "../../src/ui/conversation/projection.js";
 
 afterEach(cleanup);
 
-function agent(id: string, background = true): ToolCallThread {
+function agent(id: string): ToolCallThread {
     return {id, role: "tool_call", turnId: "turn", toolCallId: id, name: "agent",
-        args: JSON.stringify({name: id, subagent_type: "Worker", description: `${id} implementation`, run_in_background: background}),
+        args: JSON.stringify({name: id, subagent_type: "Worker", description: `${id} implementation`}),
         status: "done", outcome: "ok", result: `Agent Task started.\nTask: private-${id}\nStatus: running\nUse task wait for required results.`};
 }
 
@@ -49,11 +49,10 @@ test("single background launch and resume do not display a completed child repor
 });
 
 test("mixed and failed launches never claim every agent finished successfully", () => {
-    const foreground = {...agent("local", false), result: "Done (1 tool call)"};
-    const mixed = render(<MessageList threads={[foreground, agent("remote")]}/>).lastFrame()!;
+    const mixed = render(<MessageList threads={[agent("local"), agent("remote")]}/>).lastFrame()!;
     expect(mixed).toContain("Agent local");
     expect(mixed).toContain("Agent remote");
-    expect(mixed).toContain("Done (1 tool call)");
+    expect(mixed.match(/Started · \/tasks/g)).toHaveLength(2);
     const denied = {...agent("denied"), outcome: "denied" as const, result: "Workspace access denied"};
     const frame = render(<MessageList threads={[agent("board"), denied]}/>).lastFrame()!;
     expect(frame).toContain("Agent denied");
@@ -65,7 +64,7 @@ test("mixed and failed launches never claim every agent finished successfully", 
 });
 
 test.each(["task", "agent_message"])("%s waits collapse only running/success rows, retaining errors and transcript", name => {
-    const waiting: ToolCallThread = {id: "wait", role: "tool_call", toolCallId: "wait", name, args: '{"action":"wait"}', status: "running"};
+    const waiting: ToolCallThread = {id: "wait", role: "tool_call", toolCallId: "wait", name, args: JSON.stringify({action: "wait", ...(name === "task" ? {task_id: "t_123456789abc"} : {})}), status: "running"};
     expect(render(<MessageList threads={[waiting]}/>).lastFrame()?.trim()).toBe("");
     const completed = {...waiting, status: "done" as const, outcome: "ok" as const, result: "Private coordination result"};
     expect(render(<MessageList threads={[completed]}/>).lastFrame()?.trim()).toBe("");
@@ -102,7 +101,7 @@ test("incremental appends and full replay keep identical individual Agent rows",
 
 test("creation and followup share compact rows; receipts do not depend on result wording", () => {
     const created = agent("board");
-    created.args = JSON.stringify({name: "board", description: "board：状态逻辑与单元测试", run_in_background: true});
+    created.args = JSON.stringify({name: "board", description: "board：状态逻辑与单元测试"});
     const followup: ToolCallThread = {id: "followup", role: "tool_call", toolCallId: "followup", name: "agent_followup",
         args: '{"task_id":"private-id","message":"long task instructions"}', status: "done", outcome: "ok", result: "Raw receipt wording may change",
         uiData: {type: "agent_receipt", receipt: {name: "board", description: "board：状态逻辑与单元测试", delivery: "continued"}}};
@@ -138,7 +137,7 @@ test("completion notifications remain interleaved with Root commentary", () => {
 
 test("Agent titles remain a single compact row in narrow terminals", () => {
     const call = agent("board");
-    call.args = JSON.stringify({name: "board", subagent_type: "Worker", description: "board：状态逻辑、持久化、筛选与测试".repeat(10), run_in_background: true});
+    call.args = JSON.stringify({name: "board", subagent_type: "Worker", description: "board：状态逻辑、持久化、筛选与测试".repeat(10)});
     for (const width of [30, 60, 100]) {
         const frame = render(<Box width={width}><MessageList threads={[call]} terminalWidth={width}/></Box>).lastFrame()!.trimEnd();
         const lines = frame.split("\n").filter(line => line.trim());

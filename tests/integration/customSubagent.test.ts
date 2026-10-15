@@ -71,12 +71,9 @@ describe("custom subagent runtime", () => {
                         prompt: "读取 target.ts 并报告导出值",
                     }, "parent-custom-agent");
                 },
+                assistantText("Waiting for the delegated report."),
                 (options) => {
-                    const report = options.messages.find((message) =>
-                        message.role === "tool" &&
-                        message.tool_call_id === "parent-custom-agent"
-                    );
-                    expect(report?.content).toContain("answer，值为 42");
+                    expect(JSON.stringify(options.messages)).toContain("answer，值为 42");
                     return assistantText("自定义 Agent 调查完成");
                 },
             ]);

@@ -29,55 +29,21 @@ describe("subagent UI", () => {
     expect(rows.at(-1)!.text).toEndWith("搭起");
   });
 
-  test("生命周期更新同一个 Agent tool thread，不展开内部工具噪音", () => {
-    let threads: UIThread[] = [];
-    threads = reduceThreads(threads, {
-      type: "tool_call_start",
-      turnId: "turn-1",
-      toolCallId: "agent-call",
-      name: "agent",
-      args: JSON.stringify({
-        description: "调查 Session",
-        prompt: "调查 Session",
-        subagent_type: "Explore",
-      }),
+  test("异步创建回执保持 Started，完整 Task ID 仅在 transcript 展示", () => {
+    let threads = reduceThreads([], {
+      type: "tool_call_start", turnId: "turn-1", toolCallId: "agent-call", name: "agent",
+      args: JSON.stringify({description: "调查 Session", prompt: "调查 Session", subagent_type: "Explore"}),
     });
     threads = reduceThreads(threads, {
-      type: "subagent_start",
-      agentId: "child-1",
-      agentType: "Explore",
-      description: "调查 Session",
-      parentToolCallId: "agent-call",
+      type: "tool_call_end", turnId: "turn-1", toolCallId: "agent-call", outcome: "ok",
+      result: "task_id: t_123456789abc\nkind: agent\nstatus: running",
     });
-    threads = reduceThreads(threads, {
-      type: "subagent_end",
-      agentId: "child-1",
-      agentType: "Explore",
-      reason: "completed",
-      iterations: 3,
-      toolUseCount: 5,
-      durationMs: 25,
-      report: "完整 Explore 调查报告",
-    });
-    threads = reduceThreads(threads, {
-      type: "tool_call_end",
-      turnId: "turn-1",
-      toolCallId: "agent-call",
-      result: "完整 Explore 调查报告",
-      outcome: "ok",
-    });
-
     expect(threads).toHaveLength(1);
-    const instance = render(<MessageList threads={threads} />);
-    expect(instance.lastFrame()).toContain("Agent Explore · 调查 Session");
-    expect(instance.lastFrame()).toContain("Done (5 tool calls · 3 iterations");
-    expect(instance.lastFrame()).not.toContain("完整 Explore 调查报告");
-
-    const expanded = render(
-      <MessageList threads={threads} transcript />
-    );
-    expect(expanded.lastFrame()).toContain("Explore response");
-    expect(expanded.lastFrame()).toContain("完整 Explore 调查报告");
+    const frame = render(<MessageList threads={threads} />).lastFrame();
+    expect(frame).toContain("Agent Explore · 调查 Session");
+    expect(frame).toContain("Started · /tasks");
+    expect(frame).not.toContain("t_123456789abc");
+    expect(render(<MessageList threads={threads} transcript />).lastFrame()).toContain("t_123456789abc");
   });
 
   test.each([undefined, "reviewer"])("运行中 Agent 只有底部状态动画，具名角色显示正确：%s", async agentName => {
@@ -156,7 +122,7 @@ describe("subagent UI", () => {
     });
   });
 
-  test("App 中 Ctrl+O 切换 Explore response", async () => {
+  test("App 中 Ctrl+O 展开异步 Agent 的启动回执", async () => {
     await withTempProject(async (cwd) => {
       const runAgentImpl: AgentRunner = async (
         _input,
@@ -175,27 +141,10 @@ describe("subagent UI", () => {
           }),
         });
         onEvent({
-          type: "subagent_start",
-          agentId: "child-1",
-          agentType: "Explore",
-          description: "调查 Session",
-          parentToolCallId: "agent-call",
-        });
-        onEvent({
-          type: "subagent_end",
-          agentId: "child-1",
-          agentType: "Explore",
-          reason: "completed",
-          iterations: 2,
-          toolUseCount: 4,
-          durationMs: 1200,
-          report: "可展开的 Explore 报告",
-        });
-        onEvent({
           type: "tool_call_end",
           turnId: "turn-1",
           toolCallId: "agent-call",
-          result: "可展开的 Explore 报告",
+          result: "task_id: t_123456789abc",
           outcome: "ok",
         });
         return { reply: "completed", reason: "completed", iterations: 1 };
@@ -212,12 +161,12 @@ describe("subagent UI", () => {
       instance.stdin.write("\r");
       await new Promise((resolve) => setTimeout(resolve, 40));
 
-      expect(instance.lastFrame()).toContain("Done (4 tool calls · 2 iterations");
-      expect(instance.lastFrame()).not.toContain("可展开的 Explore 报告");
+      expect(instance.lastFrame()).toContain("Started · /tasks");
+      expect(instance.lastFrame()).not.toContain("task_id: t_123456789abc");
 
       instance.stdin.write("\x0f");
       await new Promise((resolve) => setTimeout(resolve, 30));
-      expect(instance.lastFrame()).toContain("可展开的 Explore 报告");
+      expect(instance.lastFrame()).toContain("task_id: t_123456789abc");
     });
   });
 

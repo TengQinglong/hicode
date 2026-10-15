@@ -7,7 +7,6 @@ import {TerminalMarkdown} from "./TerminalMarkdown.js";
 import {useTerminalWidth} from "../terminalSize.js";
 import {
     describeToolCall,
-    isBackgroundAgentCall,
     summarizePhaseToolCall,
     summarizeToolResult,
 } from "../../tools/presentation.js";
@@ -24,7 +23,7 @@ const MAX_USER_DISPLAY_CHARS = 100_000;
 const MAX_ASSISTANT_DISPLAY_CHARS = 200_000;
 const MAX_SUBAGENT_REPORT_DISPLAY_CHARS = 20_000;
 function agentIdentity(thread: ToolCallThread): {
-    name: string; background: boolean; description?: string; delivery?: "started" | "continued" | "queued";
+    name: string; description?: string; delivery?: "started" | "continued" | "queued";
 } | undefined {
     if (thread.name !== "agent" && thread.name !== "agent_followup") return undefined;
     const receipt = thread.outcome === "ok" && thread.uiData?.type === "agent_receipt" ? thread.uiData.receipt : undefined;
@@ -39,7 +38,6 @@ function agentIdentity(thread: ToolCallThread): {
         if (name && description?.startsWith(name + separator)) description = description.slice(name.length + separator.length).trimStart();
     }
     return {name, description,
-        background: thread.name === "agent_followup" || isBackgroundAgentCall(thread.name, thread.args),
         delivery: receipt?.delivery,
     };
 }
@@ -101,7 +99,7 @@ function ToolResultLines({
         </Box>;
     }
     const agent = agentIdentity(thread);
-    if (!transcript && agent?.background && thread.outcome === "ok") {
+    if (!transcript && agent && thread.outcome === "ok") {
         const status = agent.delivery === "queued" ? "Queued" : agent.delivery === "continued" ? "Continued"
             : thread.name === "agent" ? "Started" : "Assignment accepted";
         return <Box marginLeft={2}><Text color={COLORS.dim}>{status} · /tasks</Text></Box>;
@@ -185,7 +183,7 @@ function AgentProgress({
     thread: ToolCallThread;
     transcript: boolean;
 }) {
-    if (agentIdentity(thread)?.background) return null;
+    if (agentIdentity(thread)) return null;
     const progress = thread.subagentProgress ?? [];
     if (progress.length === 0 || (thread.status === "done" && !transcript)) {
         return null;

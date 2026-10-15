@@ -1,3 +1,5 @@
+import type {SubagentRequest} from "../../src/subagents/types.js";
+import type {ToolContext} from "../../src/tools/types.js";
 import {EMPTY_AGENT_INPUT_CHANNEL} from "../../src/agent/inputChannel.js";
 import {afterEach, describe, expect, test} from "bun:test";
 import {createAgentRuntime} from "../../src/runtime/agentRuntime.js";
@@ -90,18 +92,18 @@ describe("AgentRuntime model targets", () => {
                 fastModel: "glm-fast-test",
                 fastProvider: "glm",
             });
-            const runSubagent = runtime.createSubagentRunner({
-                parentContext,
-                onEvent() {},
-            });
-
-            const fast = await runSubagent({
+            const runChild = async (parentContext: ToolContext, request: SubagentRequest) => {
+                const thread = runtime.createSubagentThread({parentContext, agentId: request.parentToolCallId, onEvent() {}}, request);
+                try {return await thread.run({prompt: request.prompt, signal: parentContext.signal, inputChannel: EMPTY_AGENT_INPUT_CHANNEL});}
+                finally {await thread.close();}
+            };
+            const fast = await runChild(parentContext, {
                 agentType: "Explore",
                 description: "快速调查",
                 prompt: "直接总结",
                 parentToolCallId: "fast-call",
             });
-            const primary = await runSubagent({
+            const primary = await runChild(parentContext, {
                 agentType: "FixtureWriter",
                 description: "主力实现",
                 prompt: "直接总结",
@@ -113,11 +115,7 @@ describe("AgentRuntime model targets", () => {
                 fastModel: "glm-fast-test",
                 fastProvider: "glm",
             });
-            const runDeepseekSubagent = runtime.createSubagentRunner({
-                parentContext: deepseekContext,
-                onEvent() {},
-            });
-            const switchedPrimary = await runDeepseekSubagent({
+            const switchedPrimary = await runChild(deepseekContext, {
                 agentType: "FixtureWriter",
                 description: "切换后的主力实现",
                 prompt: "直接总结",

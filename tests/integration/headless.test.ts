@@ -177,7 +177,7 @@ describe("headless integration", () => {
     });
   });
 
-  test("同步 Explore 生命周期进入 Headless 结构化摘要", async () => {
+  test("Headless 拒绝 Agent 启动，不回退同步执行", async () => {
     await withTempProject(async (cwd) => {
       const fake = createFakeLLM([
         assistantToolCall(
@@ -189,13 +189,12 @@ describe("headless integration", () => {
           },
           "headless-agent"
         ),
-        assistantText("入口位于 src/index.tsx"),
         (call) => {
           const result = call.messages.find(
             (message) =>
               message.role === "tool" && message.tool_call_id === "headless-agent"
           );
-          expect(result?.content).toContain("入口位于 src/index.tsx");
+          expect(result?.content).toContain("does not support");
           return assistantText("调查完成");
         },
       ]);
@@ -207,19 +206,11 @@ describe("headless integration", () => {
       });
 
       expect(summary.finalResponse).toBe("调查完成");
-      expect(agentItems(summary)).toHaveLength(1);
-      expect(agentItems(summary)[0]).toMatchObject({
-        agentType: "Explore",
-        description: "调查入口",
-        status: "completed",
-        reason: "completed",
-        iterations: 1,
-        toolUseCount: 0,
-      });
-      expect(agentItems(summary)[0]?.transcriptPath).toBeTruthy();
+      expect(agentItems(summary)).toHaveLength(0);
+      expect(fake.calls).toHaveLength(2);
       expect(toolItems(summary)[0]).toMatchObject({
         name: "agent",
-        outcome: "ok",
+        outcome: "failed",
       });
     });
   });

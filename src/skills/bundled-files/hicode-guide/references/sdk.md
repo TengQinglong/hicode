@@ -59,7 +59,7 @@ For Turn permissions, ordinary allow/deny applies to the original validated inpu
 
 Listen to `context.signal` so cancelled requests close promptly and late approvals have no effect. No callback, an invalid response or callback failure is fail-closed. Preauthorize intended paths/policies in Host configuration where appropriate; use the independent reviewer if explicitly selected. Full Access requires explicit Host opt-in and still cannot bypass hard boundaries or server trust.
 
-Current SDK/headless execution does not allow background Agent tasks. Use supported foreground delegation and do not promise CLI-style background task followup in SDK code.
+Current SDK/headless execution does not allow managed Agent tasks and rejects Agent launches. Agent execution is asynchronous only; these Hosts do not provide a foreground fallback.
 
 ## Results and cancellation
 

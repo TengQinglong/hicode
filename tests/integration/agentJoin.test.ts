@@ -62,7 +62,7 @@ test("two authorized delegates join before final answer without UI delivery or a
         const ctx = createTestContext(cwd, {tasks, canUseTool: async () => {approvals++; return {behavior: "allow"};}});
         const history: Message[] = [];
         attachSubagentLauncher(ctx, async () => {throw new Error("Must run in background");}, () => history);
-        const spawn = (index: number) => assistantToolCall("agent", {description: `part-${index}`, prompt: "implement", run_in_background: true}, `spawn-${index}`);
+        const spawn = (index: number) => assistantToolCall("agent", {description: `part-${index}`, prompt: "implement"}, `spawn-${index}`);
         const first = spawn(0), second = spawn(1);
         const calls = [...first.toolCalls, ...second.toolCalls];
         const fake = createFakeLLM([
@@ -105,7 +105,7 @@ test.each(["user", "cancel"] as const)("waiting parent responds to %s without wa
         const queue = new RuntimeMessageQueue();
         attachSubagentLauncher(ctx, async () => {throw new Error("foreground");});
         const fake = createFakeLLM([
-            assistantToolCall("agent", {description: "work", prompt: "work", run_in_background: true}, "spawn"),
+            assistantToolCall("agent", {description: "work", prompt: "work"}, "spawn"),
             assistantText("I will integrate later."),
             options => {expect(JSON.stringify(options.messages)).toContain("additional constraint"); gate.resolve(); controller.abort("user-cancel"); return assistantText("cancelled");},
         ]);
@@ -180,7 +180,7 @@ test("headless joins acknowledge notifications only after paired History is pers
     });
 });
 
-test("explicit wait includes sibling delegates and leaves unfinished work pending", async () => {
+test("explicit wait targets only its Agent, survives expiry and leaves sibling results pending", async () => {
     await withTempProject(async cwd => {
         const gates = [latch(), latch()];
         let index = 0;
@@ -200,18 +200,21 @@ test("explicit wait includes sibling delegates and leaves unfinished work pendin
             const ui = await tasks.startAgent({request: {agentType: "Worker", description: "ui result", prompt: "work", parentToolCallId: "ui"}, parentContext: ctx});
             ctx.taskJoin!.register(board);
             ctx.taskJoin!.register(ui);
-            const waiting = executeToolResult("task", JSON.stringify({action: "wait", task_id: ui.id}), ctx, "wait");
+            const waiting = executeToolResult("task", JSON.stringify({action: "wait", task_id: ui.id, wait_ms: 10}), ctx, "wait");
             gates[0]!.resolve();
             const result = await waiting;
             expect(result.outcome).toBe("ok");
-            expect(result.modelContent).toContain("board result");
-            expect(result.modelContent).not.toContain("ui result");
+            expect(result.modelContent).toContain("status: running");
+            expect(result.modelContent).toContain("Wait window elapsed");
+            expect(result.modelContent).not.toContain("board result");
+            expect(ctx.taskJoin!.ids).toEqual([board.id, ui.id]);
+            expect((await executeToolResult("task", JSON.stringify({action: "wait", task_id: board.id}), ctx, "board")).modelContent).toContain("board result");
             expect(ctx.taskJoin!.ids).toEqual([ui.id]);
-            const remaining = executeToolResult("task", JSON.stringify({action: "wait"}), ctx, "wait-any");
+            const remaining = executeToolResult("task", JSON.stringify({action: "wait", task_id: ui.id}), ctx, "wait-ui");
             gates[1]!.resolve();
             expect((await remaining).modelContent).toContain("ui result");
             expect(ctx.taskJoin!.ids).toEqual([]);
-            expect((await executeToolResult("task", '{"action":"wait"}', ctx, "empty")).modelContent).toContain("No delegated");
+            expect((await executeToolResult("task", '{"action":"wait"}', ctx, "empty")).modelContent).toContain("requires an explicit task_id");
         } finally {gates.forEach(gate => gate.resolve()); await runtime.close();}
     });
 });
@@ -234,7 +237,7 @@ test.each(["user", "agent", "cancel"] as const)("task wait wakes on %s and prese
             const started = await tasks.startAgent({request: {agentType: "Worker", description: "work", prompt: "work", parentToolCallId: "spawn"}, parentContext: ctx});
             ctx.taskJoin!.register(started);
             let returned = false;
-            const waiting = executeToolResult("task", '{"action":"wait"}', ctx, "wait").then(result => {returned = true; return result;});
+            const waiting = executeToolResult("task", JSON.stringify({action: "wait", task_id: started.id}), ctx, "wait").then(result => {returned = true; return result;});
             queue.enqueueUser("next turn only", "later");
             await tasks.get(started.id);
             expect(returned).toBe(false);
@@ -272,8 +275,13 @@ test("one explicit wait spans child progress without another model call and pair
         attachSubagentLauncher(ctx, async () => {throw new Error("must run in background");});
         const history: Message[] = [];
         const fake = createFakeLLM([
-            assistantToolCall("agent", {description: "module", prompt: "implement", run_in_background: true}, "spawn"),
-            assistantToolCall("task", {action: "wait"}, "wait-any"),
+            assistantToolCall("agent", {description: "module", prompt: "implement"}, "spawn"),
+            options => {
+                const result = options.messages.find(message => message.role === "tool" && message.tool_call_id === "spawn");
+                const taskId = String(result?.content).match(/task_id: (t_[a-f0-9]{12})/)?.[1];
+                expect(taskId).toBeDefined();
+                return assistantToolCall("task", {action: "wait", task_id: taskId}, "wait-any");
+            },
             options => {
                 expect(JSON.stringify(options.messages)).toContain("module verification evidence");
                 expect(options.messages.filter(message => message.role === "tool" && message.tool_call_id === "wait-any")).toHaveLength(1);

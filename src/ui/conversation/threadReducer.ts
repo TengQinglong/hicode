@@ -4,7 +4,6 @@ import {toolFileChanges} from "../../toolResults/uiData.js";
 import {randomUUID} from "node:crypto";
 import {mergeFileChange} from "../../fileChanges/index.js";
 import type {PersistedUIEvent} from "../../session/index.js";
-import {isBackgroundAgentCall} from "../../tools/presentation.js";
 import type {AgentEvent} from "../../agent/types.js";
 import type {Message} from "../../llm/types.js";
 import type {TaskNotification} from "../../tasks/index.js";
@@ -97,12 +96,7 @@ export function threadsFromHistory(
             );
             if (target?.role === "tool_call") {
                 target.status = "done";
-                if (target.name === "agent" && !isBackgroundAgentCall(target.name, target.args)) {
-                    target.result = "Done (resumed session)";
-                    target.subagentReport = contentText(message.content);
-                } else {
-                    target.result = contentText(message.content);
-                }
+                target.result = contentText(message.content);
             }
         }
     }

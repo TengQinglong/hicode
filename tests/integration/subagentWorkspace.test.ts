@@ -66,7 +66,7 @@ test("无 Git 的指定目录可以读取当前文件、修改、Bash 验证，�
         try {
             const firstDone = nextFinished(tasks);
             const start = await executeToolResult("agent", JSON.stringify({subagent_type: "Worker", context: "inherit", name: "worker",
-                description: "implement", prompt: "modify and verify", cwd: target, run_in_background: true}), parent, "spawn");
+                description: "implement", prompt: "modify and verify", cwd: target}), parent, "spawn");
             expect(start.outcome).toBe("ok");
             await firstDone;
             const [first] = await tasks.list();

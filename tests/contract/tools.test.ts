@@ -72,7 +72,7 @@ describe("tool registry contract", () => {
     );
   });
 
-  test("agent 工具校验类型并通过注入 runner 返回结构化报告", async () => {
+  test("agent 工具返回受管任务 ID 并可等待结构化报告", async () => {
     await withTempProject(async (cwd) => {
       const ctx = createTestContext(cwd);
       attachSubagentLauncher(ctx, async (request) => ({
@@ -97,8 +97,10 @@ describe("tool registry contract", () => {
         "agent-call"
       );
       expect(result.outcome).toBe("ok");
-      expect(result.modelContent).toBe("找到 src/agent.ts");
-      expect(result.modelContent).not.toContain("child-transcript.jsonl");
+      expect(result.modelContent).toContain("task_id:");
+      const taskId = String(result.modelContent).match(/task_id: (t_[a-f0-9]{12})/)![1];
+      const report = await executeToolResult("task", JSON.stringify({action: "wait", task_id: taskId}), ctx, "agent-report");
+      expect(report.modelContent).toContain("找到 src/agent.ts");
 
       const missingRunner = await executeToolResult(
         "agent",
@@ -125,7 +127,7 @@ describe("tool registry contract", () => {
     expect(agent?.function.description).toContain("Keep immediate blocking work local");
     expect(agent?.function.description).not.toContain("3 个以上文件");
     expect(JSON.stringify(agent?.function.parameters)).not.toContain("fast");
-    expect(JSON.stringify(agent?.function.parameters)).toContain("run_in_background");
+    expect(JSON.stringify(agent?.function.parameters)).not.toContain("run_in_background");
   });
 
   test("agent 调用不携带模型覆盖", async () => {

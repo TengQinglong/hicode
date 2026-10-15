@@ -9,7 +9,6 @@ import type {LLMProviderName} from "../llm/providerRegistry.js";
 import type {ResolvedHiCodeSettings} from "../settings/types.js";
 import {createSubagentFactories} from "../subagents/runSubagent.js";
 import type {
-    CreateSubagentRunner,
     CreateSubagentThread,
 } from "../subagents/types.js";
 import type {SubagentRegistry} from "../subagents/registry.js";
@@ -22,7 +21,6 @@ export interface AgentRuntime {
     reviewApproval: ApprovalReviewer;
     runAgent: AgentRunner;
     compactHistory: CompactHistoryRunner;
-    createSubagentRunner: CreateSubagentRunner;
     createSubagentThread: CreateSubagentThread;
     reviewTask: TaskReviewRunner;
 }
@@ -94,7 +92,6 @@ export function createAgentRuntime({storage, getSources, subagents, memory}: {
         runAgent: createMemoryAwareAgentRunner(primary.runAgent, memory),
         reviewApproval: createApprovalReviewer(primary.runAgent),
         compactHistory: primary.compactHistory,
-        createSubagentRunner: options => childFactories().createSubagentRunner(options),
         createSubagentThread: (options, request) => childFactories().createSubagentThread(options, request),
         reviewTask: input => createTaskReviewRunner({callLLM: createLLMCaller(
             structuredClone(getSources()[input.provider])

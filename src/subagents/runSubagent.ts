@@ -13,7 +13,6 @@ import {ContextUsageTracker} from "../context/usage.js";
 import {persistPreparedImage} from "../images/persist.js";
 import {imageReferences} from "../images/content.js";
 import {createHookSessionRuntime, type HookInput} from "../hooks/types.js";
-import {randomUUID} from "node:crypto";
 import type {Todo} from "../todos.js";
 import type {AgentRunner} from "../agent/runner.js";
 import {createCompactState} from "../context/state.js";
@@ -28,20 +27,17 @@ import {createAgentSystemPrompt} from "./prompt.js";
 import type {SubagentRegistry} from "./registry.js";
 import {SubagentTranscriptWriter} from "./transcript.js";
 import type {
-    CreateSubagentRunner,
-    CreateSubagentRunnerOptions,
     CreateSubagentThread,
     SubagentRequest,
     SubagentResult,
     SubagentThread,
 } from "./types.js";
-import {EMPTY_AGENT_INPUT_CHANNEL} from "../agent/inputChannel.js";
 import {createForkDirective, createForkResultFiles} from "./fork.js";
 import {usesFastSubagentModel} from "./model.js";
 import {createFileStateTracker} from "../tools/shared/fileState.js";
 import {resolveSubagentDirectory, subagentInstructions, subagentPermissionRules} from "./workspace.js";
 
-interface SubagentRunnerDependencies {
+interface SubagentThreadDependencies {
     primaryRunAgent: AgentRunner;
     fastRunAgent: AgentRunner;
     registry: SubagentRegistry;
@@ -50,16 +46,15 @@ interface SubagentRunnerDependencies {
 }
 
 async function emit(
-    callback: CreateSubagentRunnerOptions["onEvent"],
+    callback: Parameters<CreateSubagentThread>[0]["onEvent"],
     event: AgentEvent
 ): Promise<void> {
     await callback(event);
 }
 
 export function createSubagentFactories(
-    dependencies: SubagentRunnerDependencies
+    dependencies: SubagentThreadDependencies
 ): {
-    createSubagentRunner: CreateSubagentRunner;
     createSubagentThread: CreateSubagentThread;
 } {
     const createThread = (options: Parameters<CreateSubagentThread>[0], request: SubagentRequest): SubagentThread => {
@@ -495,21 +490,5 @@ export function createSubagentFactories(
     };
 
     const createSubagentThread: CreateSubagentThread = (options, request) => createThread(options, request);
-    const createSubagentRunner: CreateSubagentRunner = (
-        options: CreateSubagentRunnerOptions
-    ) => async (request: SubagentRequest): Promise<SubagentResult> => {
-        const agentId = randomUUID();
-        const thread = createSubagentThread({
-            parentContext: options.parentContext,
-            onEvent: options.onEvent,
-            agentId,
-        }, request);
-        return thread.run({
-            prompt: request.prompt,
-            signal: options.parentContext.signal,
-            inputChannel: EMPTY_AGENT_INPUT_CHANNEL,
-        });
-    };
-
-    return {createSubagentRunner, createSubagentThread};
+    return {createSubagentThread};
 }
