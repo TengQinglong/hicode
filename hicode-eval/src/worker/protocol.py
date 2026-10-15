@@ -8,6 +8,10 @@ import time
 from pathlib import Path
 
 
+class CommandFailure(RuntimeError):
+    """A worker-owned command failed, independently of the Actor's state."""
+
+
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

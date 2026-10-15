@@ -1,9 +1,53 @@
 import unittest
+import json
+import subprocess
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
-from terminal import capture, settle, submit_prompt
+from terminal import capture, settle, submit_prompt, ScreenSampler
+from protocol import CommandFailure
 
 
 class TerminalTest(unittest.TestCase):
+    def test_live_capture_failures_back_off_and_recover_without_losing_the_last_frame(self):
+        clock = [0.0]
+        packets = []
+        failures = [CommandFailure('tmux capture-pane: exit=1; stdout=\'\'; stderr=\'\''),
+                    subprocess.TimeoutExpired(['tmux', 'capture-pane'], 2), OSError('socket unavailable')]
+        calls = []
+        def tmux(*args, **kwargs):
+            calls.append(clock[0])
+            self.assertEqual(kwargs['timeout'], 2)
+            if len(calls) in [2,3,4]:raise failures[len(calls)-2]
+            return 'last known frame' if len(calls)==1 else 'recovered frame'
+        with tempfile.TemporaryDirectory() as tmp, patch('terminal.time.monotonic', side_effect=lambda:clock[0]):
+            path = Path(tmp)/'terminal-diagnostics.json'
+            sampler = ScreenSampler(tmux, lambda kind, **p:packets.append((kind,p)), path)
+            sampler.poll(required=False)
+            for at in [1,2,3,4,6,7,10,14]:
+                clock[0]=at;sampler.poll(required=False)
+            self.assertEqual(calls,[0,1,3,7])
+            diagnostic=json.loads(path.read_text())
+            self.assertEqual(diagnostic['state'],'degraded');self.assertEqual(diagnostic['totalFailures'],3)
+            self.assertEqual([p['screen'] for kind,p in packets if kind=='screen'],['last known frame'])
+            clock[0]=15;sampler.poll(required=False)
+            diagnostic=json.loads(path.read_text())
+            self.assertEqual(diagnostic['state'],'recovered');self.assertEqual(diagnostic['consecutiveFailures'],0)
+            self.assertEqual(diagnostic['totalFailures'],3)
+            self.assertEqual([p['screen'] for kind,p in packets if kind=='screen'],['last known frame','recovered frame'])
+            self.assertEqual(sum(kind=='error' for kind,_ in packets),1)
+
+    def test_startup_terminal_failure_and_output_budget_remain_fatal(self):
+        for error in [CommandFailure('tmux capture-pane failed'), ValueError('Terminal exceeds budget')]:
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as tmp:
+                def tmux(*args,**kwargs):raise error
+                sampler=ScreenSampler(tmux,lambda *a,**k:None,Path(tmp)/'terminal-diagnostics.json')
+                with self.assertRaises(type(error)):sampler.poll(required=True)
+                self.assertFalse((Path(tmp)/'terminal-diagnostics.json').exists())
+        with tempfile.TemporaryDirectory() as tmp:
+            sampler=ScreenSampler(lambda *a,**k:'x'*(8*1024*1024+1),lambda *a,**k:None,Path(tmp)/'diagnostic.json')
+            with self.assertRaisesRegex(ValueError,'budget'):sampler.poll(required=False)
+
     def test_prompt_enter_is_separated_from_paste_and_sent_only_once(self):
         clock = [0.0]
         calls = []

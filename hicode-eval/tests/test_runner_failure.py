@@ -1,5 +1,6 @@
 """Exercise the real runner control flow with offline process/namespace fixtures."""
 import contextlib
+import ast
 import builtins
 import io
 import json
@@ -12,13 +13,62 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from protocol import CommandFailure
 
 RUNNER = Path(__file__).resolve().parents[1] / 'src/worker/runner.py'
 RUN_ID = '1234567890abcdef'
 
 
+class CommandDiagnosticTest(unittest.TestCase):
+    def command(self):
+        # The runner has executable top-level setup; load its real function only.
+        tree=ast.parse(RUNNER.read_text())
+        functions=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in {'command','tmux'}]
+        namespace={'Path':Path,'os':os,'subprocess':subprocess,'time':__import__('time'),'signal':__import__('signal'),
+                   'home_alias':None,'home':Path('/fixture/home'),'root':Path('/fixture'),
+                   'project':Path('/fixture/project'),'service':None,'demote':lambda:None,
+                   'dataset':SimpleNamespace(command_environment=lambda *args:{}),
+                   'config':{'model':{'apiKeyEnv':'EVAL_FIXTURE_KEY'}}, 'CommandFailure':CommandFailure, 'socket':'/private/control.sock'}
+        exec(compile(ast.Module(body=functions,type_ignores=[]),str(RUNNER),'exec'),namespace)
+        return namespace
+
+    def test_signal_failure_preserves_empty_output_and_safe_operation(self):
+        with patch('subprocess.run',return_value=subprocess.CompletedProcess([], -11, stdout='',stderr='')):
+            with self.assertRaisesRegex(CommandFailure,r"operation=tmux capture-pane, exit=-11, signal=SIGSEGV.*stderr=''; stdout=''"):
+                self.command()['tmux']('capture-pane')
+
+    def test_timeout_does_not_expose_original_argv(self):
+        with patch('subprocess.run',side_effect=subprocess.TimeoutExpired(['tool','private-argument'],2)):
+            with self.assertRaises(CommandFailure) as error:self.command()['command'](['tool','private-argument'],timeout=2)
+        self.assertIn('operation=tool, timeout_seconds=2',str(error.exception))
+        self.assertNotIn('private-argument',str(error.exception))
+
+    def test_both_outputs_are_preserved_and_key_is_redacted_before_truncation(self):
+        key='fixture-secret-'+('a'*100)
+        result=subprocess.CompletedProcess([],1,stdout='stdout '+key,stderr=key+'b'*790)
+        with patch.dict(os.environ,{'EVAL_FIXTURE_KEY':key}),patch('subprocess.run',return_value=result):
+            with self.assertRaises(CommandFailure) as error:self.command()['command'](['tool'])
+        message=str(error.exception)
+        self.assertIn('stdout=\'stdout [redacted]\'',message)
+        self.assertIn('stderr=',message)
+        self.assertNotIn(key,message)
+        self.assertNotIn('a'*20,message)
+
+
+    def test_tmux_diagnostics_never_append_prompt_arguments_or_exception_paths(self):
+        for failure in [subprocess.TimeoutExpired(['tmux','private-prompt'],2),
+                        OSError(2,'missing','private-prompt')]:
+            with self.subTest(failure=type(failure).__name__), patch('subprocess.run',side_effect=failure):
+                with self.assertRaises(CommandFailure) as error:
+                    self.command()['tmux']('send-keys','-l','private-prompt',timeout=2)
+                self.assertIn('operation=tmux send-keys',str(error.exception))
+                self.assertNotIn('private-prompt',str(error.exception))
+                self.assertNotIn('/private/control.sock',str(error.exception))
+                self.assertIn('elapsed_ms=',str(error.exception))
+
+
 class RunnerFailureTest(unittest.TestCase):
-    def run_attempt(self, *, saved=True, pending=False, exits=True, handoff=True, completed=False, claimed_dependencies=False, isolated=False, timed_out=False, service=False, verifier_raises=False, reasoning=None, checkpoint=False, resume=False):
+    def run_attempt(self, *, saved=True, pending=False, exits=True, handoff=True, completed=False, claimed_dependencies=False, isolated=False, timed_out=False, service=False, verifier_raises=False, reasoning=None, checkpoint=False, resume=False, polling_failure=False, unexpected_exit=False, late_exit_completion=False):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             root = base / 'eval/runs' / RUN_ID
@@ -53,9 +103,11 @@ class RunnerFailureTest(unittest.TestCase):
                 events.append({'type': 'settled', 'reason': 'completed', 'runningAgents': 0,
                                'pendingAgentMessages': 0, 'sealed': True})
             (root/'actor-events').mkdir()
-            (root/'actor-events/events.jsonl').write_text(''.join(json.dumps({
+            serialized = [json.dumps({
                 'version': 1, 'sequence': i, 'sessionId': 'fixture', **event}) + '\n'
-                for i, event in enumerate(events, 1)))
+                for i, event in enumerate(events, 1)]
+            deferred=polling_failure or unexpected_exit or late_exit_completion
+            (root/'actor-events/events.jsonl').write_text(''.join(serialized[:2] if deferred else serialized))
             prepared=base/'prepared-verifier';prepared.mkdir();(prepared/'toml.py').write_text('# offline package fixture')
             calls = []
             def terminate(fd,drain):
@@ -67,6 +119,12 @@ class RunnerFailureTest(unittest.TestCase):
                     drain()
                 return exits
 
+            def cli_exited(fd):
+                if late_exit_completion:
+                    with (root/'actor-events/events.jsonl').open('a') as output:output.write(''.join(serialized[2:]))
+                    return True
+                return unexpected_exit
+
             class FixturePath(PosixPath):
                 def __new__(cls, *args):
                     value = PosixPath(*args)
@@ -76,7 +134,15 @@ class RunnerFailureTest(unittest.TestCase):
                         value = prepared
                     return super().__new__(cls, value)
 
+            captures=0
             def execute(argv, **kwargs):
+                nonlocal captures
+                if 'capture-pane' in argv:
+                    captures+=1
+                    if polling_failure and captures==2:
+                        calls.append('capture-failed')
+                        with (root/'actor-events/events.jsonl').open('a') as output:output.write(''.join(serialized[2:]))
+                        return subprocess.CompletedProcess(argv,-15,stdout='',stderr='')
                 if '--target' in argv:
                     self.assertNotIn('--unshare-net', argv)
                     self.assertIn('shutdown' if service else 'stop', calls)
@@ -135,6 +201,7 @@ class RunnerFailureTest(unittest.TestCase):
                 stack.enter_context(patch('signal.signal'))
                 stack.enter_context(patch('subprocess.run', side_effect=execute))
                 stack.enter_context(patch('cleanup.open_task_cli', return_value=7))
+                stack.enter_context(patch('cleanup.task_cli_exited', side_effect=cli_exited))
                 stack.enter_context(patch('cleanup.terminate_task_cli', side_effect=terminate))
                 stack.enter_context(patch('cleanup.stop_task_processes', side_effect=lambda *args: calls.append('stop')))
                 stack.enter_context(patch('cleanup.finalize_task', side_effect=lambda *args: calls.append('finalize')))
@@ -169,7 +236,11 @@ class RunnerFailureTest(unittest.TestCase):
                 stack.enter_context(patch('eval_datasets.terminal_bench.verify', side_effect=grade))
                 gateway = stack.enter_context(patch('model_proxy.Gateway'))
                 gateway.return_value.close.side_effect = lambda: calls.append('gateway-close')
-                if timed_out:
+                if polling_failure:
+                    clock=[0.0]
+                    stack.enter_context(patch('time.monotonic',side_effect=lambda:clock[0]))
+                    stack.enter_context(patch('time.sleep',side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)))
+                elif timed_out:
                     clock=[0.0]
                     def elapsed():
                         clock[0]+=0.01 if 'shutdown' in calls else 10000
@@ -203,7 +274,35 @@ class RunnerFailureTest(unittest.TestCase):
             packets = [json.loads(line) for line in output.getvalue().splitlines()]
             self.assertIn('finalize', calls)
             self.assertEqual(calls.count('shutdown'), 1 if service or not completed else 0)
+            if polling_failure:
+                diagnostic=json.loads((root/'terminal-diagnostics.json').read_text())
+                self.assertIn('tmux capture-pane',diagnostic['lastError'])
+                self.assertIn('signal=SIGTERM',diagnostic['lastError'])
+                self.assertIn("stderr=''",diagnostic['lastError'])
+                self.assertIn("stdout=''",diagnostic['lastError'])
             return packets[-1], calls, None if completed and not service else json.loads((root / 'shutdown.json').read_text())
+
+    def test_failed_terminal_sampling_does_not_stop_the_actor_or_skip_hidden_verification(self):
+        result,calls,_=self.run_attempt(completed=True,polling_failure=True)
+        self.assertEqual(result['execution'],'completed')
+        self.assertEqual(result['grading'],'failed')
+        self.assertIn('capture-failed',calls)
+        self.assertNotIn('shutdown',calls)
+        self.assertLess(calls.index('capture-failed'),calls.index('handoff'))
+        self.assertIn('verify',calls)
+
+    def test_real_cli_exit_without_completion_still_blocks_hidden_verification(self):
+        result,calls,receipt=self.run_attempt(unexpected_exit=True)
+        self.assertEqual(result['execution'],'failed')
+        self.assertEqual(result['grading'],'unavailable')
+        self.assertNotIn('handoff',calls);self.assertNotIn('verify',calls)
+        self.assertTrue(receipt['cliExited']);self.assertFalse(receipt['turnSaved'])
+
+    def test_final_events_are_drained_when_the_pinned_cli_exits_before_the_next_poll(self):
+        result,calls,_=self.run_attempt(completed=True,late_exit_completion=True)
+        self.assertEqual(result['execution'],'completed')
+        self.assertEqual(result['grading'],'failed')
+        self.assertNotIn('shutdown',calls);self.assertIn('verify',calls)
 
     def test_checkpoint_is_taken_only_after_shutdown_and_before_hidden_verifier(self):
         for service in [False,True]:

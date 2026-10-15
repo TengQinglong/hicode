@@ -72,6 +72,8 @@ bash hicode-eval/eval.sh gc --root /path/eval-data --apply --build-cache
 
 ## 开发边界与验证
 
+作答 CLI 固定后，生命周期由 pidfd 和完整 Actor 事件确认；实时终端采样失败沿现有 ScreenSampler 退避恢复并写 terminal-diagnostics.json，不因此终止作答。命令诊断使用安全操作名称，保留退出码、信号、耗时和超时额度；不附加完整参数或环境，当前模型 Key 在 stdout/stderr 摘要截断前脱敏。启动握手、事件完整性、证据预算及隐藏判题交接保持严格检查。执行模块只在空闲时重启 worker 部署。
+
 `src/host/layout.ts` 管路径；catalog 管成绩及环境状态；manager 管调度；resources 管归档和镜像生命周期；数据集 registry 管输入与原判题适配；Linux worker 管执行隔离、证据收集和收尾；web 只展示 HTTP 状态。不得从旧备份直接恢复运行配置或增加兼容分支。
 
 开发验证：`bun test hicode-eval/tests`、`bunx tsc --noEmit -p hicode-eval/tsconfig.json`；Python 边界用 `PYTHONPATH=hicode-eval/src/host:hicode-eval/src/worker:hicode-eval/src/datasets python3 -B -m unittest discover -s hicode-eval/tests`。测试使用临时目录和假模型，不产生模型费用；真实 Linux 隔离测试按可用内核能力另行执行并明确报告。

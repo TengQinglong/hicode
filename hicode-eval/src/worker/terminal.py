@@ -1,6 +1,49 @@
 """Capture the terminal after completion, independently of the live sampling interval."""
 import time
 import re
+import subprocess
+from protocol import CommandFailure, atomic_json
+
+
+class ScreenSampler:
+    """Live terminal images are observational after the CLI identity is pinned."""
+    def __init__(self, tmux, emit, diagnostic_path):
+        self.tmux = tmux
+        self.emit = emit
+        self.diagnostic_path = diagnostic_path
+        self.next_sample = 0
+        self.previous = None
+        self.failures = 0
+        self.diagnostic = {'version': 1, 'totalFailures': 0}
+
+    def poll(self, *, required):
+        now = time.monotonic()
+        if now < self.next_sample:
+            return
+        self.next_sample = now + 1
+        try:
+            screen = read_screen(self.tmux)
+        except (CommandFailure, OSError, subprocess.TimeoutExpired) as error:
+            # Startup and prompt delivery still require a working terminal.
+            if required:
+                raise
+            self.failures += 1
+            self.next_sample = time.monotonic() + min(8, 2 ** min(self.failures, 3))
+            self.diagnostic.update(state='degraded', consecutiveFailures=self.failures,
+                                   totalFailures=self.diagnostic['totalFailures'] + 1,
+                                   lastFailureAt=time.time(), lastError=str(error)[-2000:])
+            atomic_json(self.diagnostic_path, self.diagnostic)
+            if self.diagnostic['totalFailures'] == 1:
+                self.emit('error', message='Live terminal sampling failed; CLI liveness and execution events remain authoritative. '
+                          'See terminal-diagnostics.json. ' + str(error)[-500:])
+            return
+        if self.failures:
+            self.failures = 0
+            self.diagnostic.update(state='recovered', consecutiveFailures=0, recoveredAt=time.time())
+            atomic_json(self.diagnostic_path, self.diagnostic)
+        if screen != self.previous:
+            self.emit('screen', screen=screen)
+            self.previous = screen
 
 
 def _input_preview(screen):

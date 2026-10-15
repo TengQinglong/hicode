@@ -10,10 +10,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from protocol import hicode_command
-from cleanup import finalize_task, stop_task_processes, open_task_cli, terminate_task_cli
+from cleanup import finalize_task, stop_task_processes, open_task_cli, task_cli_exited, terminate_task_cli
 
 
 class CleanupTest(unittest.TestCase):
+    def test_liveness_uses_the_pinned_identity_and_rejects_an_invalid_fd(self):
+        with patch('cleanup.select.select', return_value=([], [], [])) as poll:
+            self.assertFalse(task_cli_exited(7))
+            poll.assert_called_once_with([7], [], [], 0)
+        with patch('cleanup.select.select', return_value=([7], [], [])):
+            self.assertTrue(task_cli_exited(7))
+        with patch('cleanup.select.select', side_effect=OSError('bad fd')):
+            with self.assertRaises(OSError):task_cli_exited(7)
+
     def test_graceful_signal_drains_events_before_confirming_exit(self):
         reads = Mock(return_value=False)
         with patch('cleanup.signal.pidfd_send_signal', create=True) as send, patch('cleanup.select.select', side_effect=[([], [], []), ([7], [], [])]):
@@ -59,8 +68,10 @@ class CleanupTest(unittest.TestCase):
                 try:
                     self.assertEqual(child.stdout.readline().strip(), 'READY')
                     fd = open_task_cli(65534, command)
+                    self.assertFalse(task_cli_exited(fd))
                     self.assertEqual(terminate_task_cli(fd, lambda: False, grace_seconds=.3 if ignores else 3), not ignores)
                     if not ignores:
+                        self.assertTrue(task_cli_exited(fd))
                         self.assertEqual(child.wait(timeout=3), 143)
                         self.assertEqual(events.read_text(), 'flushed')
                     else: self.assertIsNone(child.poll())

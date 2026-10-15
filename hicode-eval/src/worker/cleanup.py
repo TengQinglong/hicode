@@ -47,6 +47,11 @@ def open_task_cli(uid, command):
             os.close(fd)
 
 
+def task_cli_exited(fd):
+    """The pinned process identity, not a terminal command, owns liveness."""
+    return bool(select.select([fd], [], [], 0)[0])
+
+
 def terminate_task_cli(fd, drain_events, grace_seconds=10):
     """Only request shutdown here. The owner force-cleans all task processes afterwards."""
     started = time.monotonic()

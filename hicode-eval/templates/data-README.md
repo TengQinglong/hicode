@@ -22,6 +22,7 @@
 | `environments/tasks/`、`layers/` | 当前环境绑定、层身份及最多 32 KiB 构建日志 | 保留小型重建依据；存在回执不等于镜像可用 |
 | `environments/preparations/` | 审定的特殊准备输入 | 仅保留仍被题目引用的材料 |
 | `runs/<id>/` | 单题日志、终端、状态、判题和收集回执 | passed 后归档重型目录，保留小型终端和判题记录 |
+| `runs/<id>/evidence/terminal-diagnostics.json` | runner 终端采集失败与恢复诊断，仅发生采集异常时生成 | 随原证据保留／压缩；不是作答状态或判题结论 |
 | `runs/service/` | 当前 worker/dashboard 的启动、运行和环境维护日志；不存题目或成绩 | 每项只保留一份当前日志，重新运行时覆盖；不混入单题 Run |
 | `runs/<id>/evidence.tar.gz`、`archive.json` | 校验过的完整证据包和 SHA256 | 保留；不能直接作为可写工作区或 Actor 输入 |
 | `cache/payload/` | 当前冻结的 HiCode 源码与版本 | 有未结束批次时禁止替换；更新只能离线显式处理 |
@@ -38,6 +39,7 @@
 - 普通 Terminal 补判使用同一 regrade/recheck 入口，不提供重启脚本；须校验原答案、完成事件与容器销毁回执，直接运行原判题，不调用模型。服务题仍要求审定重启脚本与服务快照。判题 PATH 的首项必须对应所选 verifierPython，原测试启动的 python 子进程使用同一已准备环境。
 - 已登记题的环境可通过 prepare-environments --live 交给 worker 后台准备，其他题的执行继续；活动或待恢复题不得重建。原题和声明先审定，离线持锁或交 worker 在线登记，准备期间不运行清理，不提交正在构建的题。退出 worker 时取消当前准备、终止其宿主构建/下载进程组，不再启动后续题，再等待锁与 staging 收尾；已完成镜像保留，未完成题不记为依赖失败。
 - serve 只读原子记录并转交控制请求，不初始化执行资源。8878 是默认网页端口，8879 是默认 worker 端口。重启网页不停止跑题。
+- 作答 CLI 身份固定后，进程存活由同一 pidfd 判断，终端采集只负责画面。采集命令每次最多 2 秒，失败后按 2／4／8 秒退避、保留上一帧并记录 terminal-diagnostics.json，不因采集失败终止作答。启动／输入握手、事件完整性、输出预算和真实进程退出仍严格检查；tmux 错误只记录可信操作名称（如 tmux capture-pane），不拼接完整命令参数、提示词或环境；保留退出码、信号、耗时、超时额度和有界输出，当前模型 Key 在输出截断前脱敏。执行模块修改只在服务空闲时重启部署。
 - 完成定义必须同时满足执行 completed、原判题 passed 和收集 complete。错误、超时、取消不伪装成通过。启动前取消没有判题结论。
 - Docker create使用独立120秒、start使用60秒的有界预算，不计入模型作答时间。客户端超时不证明daemon取消了创建；未确认的create保留本题容器声明、网络和setup-failed.json的containerCreationPending标记，进入needs_recovery。只由worker在观察到归属匹配的容器后清理并确认收尾；一次空查询不能作为已清理证明。原异常证据保留，重试创建关联新尝试；修复部署仍须等待服务空闲。
 - 私有 verifier 只读挂载官方镜像中的 `/opt/ctrf` 与 `/opt/jest-ctrf` 报告工具（存在时），校验目录及 symlink 边界；不开放整份 `/opt`，不把报告工具追加到 Actor 视图。镜像固定 pnpm `.tools` 版本缓存复制到本题容器 `/opt/hicode-verifier-pnpm`，校验并重写内部链接后只读挂载；仅设置 PNPM_HOME，不挂载原 Home、用户设置或整份 /root，禁网判题不下载工具链。

@@ -1,9 +1,9 @@
 """Execute one assignment inside its disposable container and prepared environment."""
-import base64,fcntl,json,os,pwd,signal,subprocess,sys,time
+import base64,fcntl,json,os,pwd,shlex,signal,subprocess,sys,time
 from pathlib import Path
-from protocol import assignment_prompt,Events,atomic_json,namespace_argv,wait_verifier_handoff,hicode_command
-from terminal import capture,settle,submit_prompt
-from cleanup import stop_task_processes,finalize_task,open_task_cli,terminate_task_cli,process_start
+from protocol import assignment_prompt,Events,atomic_json,namespace_argv,wait_verifier_handoff,hicode_command,CommandFailure
+from terminal import capture,settle,submit_prompt,ScreenSampler
+from cleanup import stop_task_processes,finalize_task,open_task_cli,task_cli_exited,terminate_task_cli,process_start
 from model_proxy import Gateway
 from dataset_runtime import dataset_runtime
 from continuation import capture_checkpoint,restore_checkpoint,restore_service,model_bridge_port
@@ -85,19 +85,34 @@ def namespace(args,verifier=False,setup=False,actor=False):
                           actor_release=config['release'] if actor else None,actor_events=actor_events if actor else None,
                           model_gateway=actor and gateway is not None,home_alias=home_alias)
 
-def command(args,timeout=15,extra=None,cwd=None,output_path=None):
+def command(args,timeout=15,extra=None,cwd=None,output_path=None,operation=None):
     logical_home=home_alias or str(home)
     env={'PATH':'/opt/python313/bin:'+logical_home+'/.local/bin:'+logical_home+'/bin:'+os.environ['PATH'],'HOME':logical_home,'TERM':'xterm-256color','COLORTERM':'truecolor','LANG':'C.UTF-8'}
     env.update(dataset.command_environment(config,home,root))
     env.update(config.get('environment',{}))
     if extra:env.update(extra)
-    r=subprocess.run(args,cwd=cwd or project,env=env,preexec_fn=None if service is not None else demote,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=timeout)
+    # Only trusted operation labels belong in diagnostics, never full argv/env.
+    label=operation or Path(args[0]).name
+    started=time.monotonic()
+    try:
+        r=subprocess.run(args,cwd=cwd or project,env=env,preexec_fn=None if service is not None else demote,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise CommandFailure(f'Command timed out: operation={label}, timeout_seconds={timeout}, elapsed_ms={round((time.monotonic()-started)*1000)}') from None
+    except OSError as error:
+        raise CommandFailure(f'Command could not start: operation={label}, errno={error.errno}, elapsed_ms={round((time.monotonic()-started)*1000)}') from None
     if output_path is not None:output_path.write_text(r.stdout+'\n'+r.stderr)
-    if r.returncode:raise RuntimeError((r.stderr or r.stdout or 'Command failed')[-2000:])
+    if r.returncode:
+        try:signame=signal.Signals(-r.returncode).name if r.returncode<0 else 'none'
+        except ValueError:signame=str(-r.returncode)
+        key=os.environ.get(config['model']['apiKeyEnv'])
+        stdout=r.stdout.replace(key,'[redacted]') if key else r.stdout
+        stderr=r.stderr.replace(key,'[redacted]') if key else r.stderr
+        raise CommandFailure(f'Command failed: operation={label}, exit={r.returncode}, signal={signame}, elapsed_ms={round((time.monotonic()-started)*1000)}; stderr={stderr[-800:]!r}; stdout={stdout[-800:]!r}')
     return r.stdout
 
 socket=str(control/'tmux.sock')
-def tmux(*args,**kwargs):return command(['tmux','-S',socket,*args],**kwargs)
+def tmux(*args,**kwargs):
+    return command(['tmux','-S',socket,*args],operation='tmux '+args[0],**kwargs)
 
 def stop_user():
     stop_task_processes(uid)
@@ -173,7 +188,6 @@ try:
                                    'modelTransport':'unix-model-gateway' if gateway else 'direct'})
     emit('phase',phase='Starting HiCode')
     launch=control/'launch.sh'
-    import shlex
     actor_command=hicode_command(release,event_path,config['permissionMode'],model,
                                  continuation['checkpoint']['sessionId'] if continuation is not None else None)
     cli_command=actor_command
@@ -189,16 +203,13 @@ try:
     tmux('set-option','-t','hicode','history-limit','20000')
     tmux('pipe-pane','-O','-t','hicode:0.0',shlex.join(['python3','/opt/hicode-eval/record.py',str(logs/'terminal.bin')]))
     tmux('send-keys','-t','hicode:0.0','-l','exec bash '+shlex.quote(str(launch)));tmux('send-keys','-t','hicode:0.0','Enter')
-    startup=time.monotonic();start=None;submitted=None;last_screen=0;old_screen=None
+    startup=time.monotonic();start=None;submitted=None
+    sampler=ScreenSampler(tmux,emit,root/'terminal-diagnostics.json')
     while start is None or time.monotonic()-start<config['agentSeconds']:
         if (logs/'terminal.overflow').exists():raise RuntimeError('Terminal recording exceeds limit')
         if cancelled or (root/'cancel').exists():status='cancelled';break
         drain_events()
-        if time.monotonic()-last_screen>=1:
-            screen=tmux('capture-pane','-p','-e','-S','-20000','-t','hicode:0.0')
-            if len(screen.encode())>8*1024*1024:raise ValueError('Terminal exceeds budget')
-            if screen!=old_screen:emit('screen',screen=screen);old_screen=screen
-            last_screen=time.monotonic()
+        sampler.poll(required=cli_fd is None)
         if events.started and start is None:
             start=time.monotonic()
             emit('phase',phase='Running HiCode')
@@ -227,7 +238,17 @@ try:
         # take longer than a fresh TUI. This is separate from the model budget.
         if submitted is None and time.monotonic()-startup>(300 if continuation is not None else 40):raise RuntimeError('TUI ready event missing')
         if submitted is not None and not events.started and time.monotonic()-submitted>(120 if continuation is not None else 15):raise RuntimeError('Prompt submission was not acknowledged; no model request started')
-        if tmux('display-message','-p','-t','hicode:0.0','#{pane_dead}').strip()=='1':raise RuntimeError('HiCode exited before completion')
+        if cli_fd is not None:
+            if task_cli_exited(cli_fd):
+                # Exit may race the final saved events. Drain them before deciding,
+                # but never let a writer keep the runner in an unbounded join.
+                deadline=time.monotonic()+1
+                while drain_events():
+                    if time.monotonic()>=deadline:raise RuntimeError('CLI exit event drain exceeded deadline')
+                if events.complete() or events.failed_turn():continue
+                raise RuntimeError('HiCode exited before confirmed completion; see actor-events/events.jsonl')
+        elif tmux('display-message','-p','-t','hicode:0.0','#{pane_dead}').strip()=='1':
+            raise RuntimeError('HiCode exited before startup completed')
         time.sleep(.5)
     else:status='timeout'
     if status in ['timeout','cancelled'] or agent_failed:
