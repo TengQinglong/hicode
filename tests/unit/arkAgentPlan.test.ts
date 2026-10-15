@@ -73,7 +73,7 @@ test("Ark uses its dedicated endpoint and key, keeps explicit effort on retry, a
     });
 });
 
-test("Ark off and advisory reviews encode none, omit replay and leave original history intact", async () => {
+test("Ark explicit off encodes none in main and review requests without changing history", async () => {
     await withTempProject(async (cwd, storage) => {
         process.env.ARK_AGENT_PLAN_API_KEY = "fixture";
         const caller = createLLMCaller(resolveHiCodeSettings([]).values.sources["ark-agent-plan"]);
@@ -84,7 +84,7 @@ test("Ark off and advisory reviews encode none, omit replay and leave original h
         const history: Message[] = [user, first.message];
         const original = structuredClone(history);
         for (const kind of ["main", "task_review"] as const) {
-            const reply = await caller(history, [], storage, cwd, "deepseek-v4.1-flash", kind, undefined, undefined, undefined, undefined, undefined, kind === "main" ? "off" : "max");
+            const reply = await caller(history, [], storage, cwd, "deepseek-v4.1-flash", kind, undefined, undefined, undefined, undefined, undefined, "off");
             const body = bodies.at(-1)!;
             expect(body.reasoning_effort).toBe("none");
             expect(body.messages).toEqual([{role:"user",content:"inspect"},{role:"assistant",content:"done"}]);
@@ -119,7 +119,7 @@ test("Ark GLM Flash enforces thinking, replays tool reasoning, and keeps review 
         expect(bodies[1]?.reasoning_effort).toBe("max");
         expect(bodies[1]?.messages).toContainEqual(expect.objectContaining({role:"assistant",reasoning_content:"inspect first"}));
         const review=await caller(history,tools,storage,cwd,"glm-5.3-flash","task_review",undefined,undefined,undefined,undefined,undefined,"max");
-        expect(bodies[2]).toMatchObject({reasoning_effort:"low"});
+        expect(bodies[2]).toMatchObject({reasoning_effort:"max"});
         expect(bodies[2]).not.toHaveProperty("max_tokens");
         expect((bodies[2]?.messages as Record<string,unknown>[]).every(message=>!('reasoning_content' in message))).toBe(true);
         expect(review.message).not.toHaveProperty("reasoning");

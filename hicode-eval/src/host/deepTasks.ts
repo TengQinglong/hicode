@@ -14,7 +14,7 @@ const profileSchema=z.object({repository:z.string().regex(/^https:\/\/github\.co
   runtimeEnvironment:z.object({PYTHONPATH:z.enum(['/app','/app/src']).optional(),VIRTUAL_ENV:z.literal('/opt/venv').optional(),
     GOMODCACHE:z.literal('/opt/hicode-go/pkg/mod').optional(),GOPROXY:z.literal('off').optional(),
     CARGO_HOME:z.literal('/opt/hicode-rust/cargo').optional(),RUSTUP_HOME:z.literal('/opt/hicode-rust/rustup').optional(),
-    CARGO_NET_OFFLINE:z.literal('true').optional()}).strict(),
+    CARGO_NET_OFFLINE:z.literal('true').optional(),POLARS_FORCE_PKG:z.literal('compat').optional()}).strict(),
   runtimeTools:z.array(z.enum(['go-ctrf-json-reporter','rust-toolchain'])).max(2).optional()}).strict().superRefine((profile,ctx)=>{
   if(profile.declaredBaseCommit&&!profile.baseCommit.startsWith(profile.declaredBaseCommit))
     ctx.addIssue({code:z.ZodIssueCode.custom,path:['declaredBaseCommit'],message:'Original baseline must be a prefix of the reviewed complete commit'});

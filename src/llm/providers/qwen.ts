@@ -39,12 +39,12 @@ export const qwenProvider: LLMProvider = {
         }
 
         const review = options.kind === "task_review";
-        const thinkingOff = review || options.reasoning === "off";
-        const replay = !thinkingOff && (supportsPreservedThinking(options.model) ||
+        const thinkingOff = options.reasoning === "off";
+        const replay = !review && !thinkingOff && (supportsPreservedThinking(options.model) ||
             (source.id === "qwen-token-plan" && options.model === "deepseek-v4.1-flash"));
         const requestFields = {
             ...createQwenRequestFields(options.model, options.tools.length > 0),
-            ...reasoningRequestFields(source.id, options.model, review ? "default" : options.reasoning),
+            ...reasoningRequestFields(source.id, options.model, options.reasoning),
             ...(thinkingOff ? {
                 ...(supportsThinking(options.model) ? {enable_thinking: false} : {}),
                 ...(supportsPreservedThinking(options.model) ? {preserve_thinking: false} : {}),

@@ -3,22 +3,22 @@ import type {LLMProviderName} from "./providerRegistry.js";
 export const REASONING_EFFORTS = ["default", "off", "low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
 export interface ReasoningPreference {source: LLMProviderName; model: string; effort: ReasoningEffort}
-interface ReasoningCapability {efforts: readonly ReasoningEffort[]; switch: "enable_thinking" | "thinking" | "reasoning_effort"; reviewEffort: "off" | "low"}
+interface ReasoningCapability {efforts: readonly ReasoningEffort[]; switch: "enable_thinking" | "thinking" | "reasoning_effort"}
 
 /** Only confirmed model protocols expose configurable levels; unknown models retain their existing defaults. */
 export function reasoningCapability(source: LLMProviderName, model: string): ReasoningCapability | undefined {
     if (source === "ark-agent-plan" && model === "deepseek-v4.1-flash")
-        return {efforts: ["default", "off", "low", "high", "max"], switch: "reasoning_effort", reviewEffort: "off"};
+        return {efforts: ["default", "off", "low", "high", "max"], switch: "reasoning_effort"};
     if ((source === "qwen" && /^qwen3\.8-(?:flash|max)$/.test(model)) || (source === "qwen-token-plan" && model === "qwen3.8-flash"))
-        return {efforts: ["default", "off", "low", "medium", "xhigh"], switch: "enable_thinking", reviewEffort: "off"};
+        return {efforts: ["default", "off", "low", "medium", "xhigh"], switch: "enable_thinking"};
     if ((source === "qwen-token-plan" && model === "deepseek-v4.1-flash") ||
         (source === "deepseek" && (model === "deepseek-pro" || model === "deepseek-flash")))
-        return {efforts: ["default", "off", "low", "high", "max"], switch: source === "deepseek" ? "thinking" : "enable_thinking", reviewEffort: "off"};
+        return {efforts: ["default", "off", "low", "high", "max"], switch: source === "deepseek" ? "thinking" : "enable_thinking"};
     if (source === "glm" && model === "glm-5.2")
-        return {efforts: ["default", "off", "high", "max"], switch: "thinking", reviewEffort: "off"};
+        return {efforts: ["default", "off", "high", "max"], switch: "thinking"};
     if ((source === "glm" && (model === "glm-5.3" || model === "glm-5.3-flash")) ||
         (source === "ark-agent-plan" && model === "glm-5.3-flash"))
-        return {efforts: ["default", "low", "high", "max"], switch: "thinking", reviewEffort: "low"};
+        return {efforts: ["default", "low", "high", "max"], switch: "thinking"};
     return undefined;
 }
 

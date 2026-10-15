@@ -170,12 +170,12 @@ class ModelProxyTest(unittest.TestCase):
         response.close();client.close()
         self.assertTrue(self.disconnected.wait(2))
 
-    def test_frozen_reasoning_allows_auxiliary_off_but_rejects_changed_or_conflicting_levels(self):
-        policy={'switch':'enable_thinking','efforts':['default','off','low','high','max'],'effort':'max','reviewEffort':'off'}
+    def test_frozen_reasoning_rejects_lowered_or_conflicting_levels(self):
+        policy={'switch':'enable_thinking','efforts':['default','off','low','high','max'],'effort':'max'}
         value=validate_request(self.body(enable_thinking=True,reasoning_effort='max'),'fixture',policy)
         self.assertEqual(value['reasoning_effort'],'max')
-        validate_request(self.body(enable_thinking=False),'fixture',policy)
         for fields in [dict(enable_thinking=True,reasoning_effort='high'),dict(enable_thinking=True),
+                       dict(enable_thinking=False),
                        dict(thinking={'type':'enabled'},reasoning_effort='max'),
                        dict(enable_thinking=False,reasoning_effort='max'),
                        dict(enable_thinking=True,reasoning_effort=99),dict(enable_thinking='true'),
@@ -184,43 +184,45 @@ class ModelProxyTest(unittest.TestCase):
             with self.assertRaises(ValueError):validate_request(self.body(**fields),'fixture',policy)
         policy['effort']='default'
         validate_request(self.body(enable_thinking=True),'fixture',policy)
+        validate_request(self.body(enable_thinking=False),'fixture',policy)
         with self.assertRaises(ValueError):validate_request(self.body(enable_thinking=True,reasoning_effort='max'),'fixture',policy)
         policy['effort']='off'
+        validate_request(self.body(enable_thinking=False),'fixture',policy)
         with self.assertRaises(ValueError):validate_request(self.body(enable_thinking=True),'fixture',policy)
-        native={'switch':'thinking','efforts':['default','off','low','high','max'],'effort':'low','reviewEffort':'off'}
+        native={'switch':'thinking','efforts':['default','off','low','high','max'],'effort':'low'}
         validate_request(self.body(thinking={'type':'enabled'},reasoning_effort='low'),'fixture',native)
-        validate_request(self.body(thinking={'type':'disabled'}),'fixture',native)
+        with self.assertRaises(ValueError):validate_request(self.body(thinking={'type':'disabled'}),'fixture',native)
 
-    def test_ark_effort_only_protocol_freezes_main_and_allows_review_none(self):
-        policy={'switch':'reasoning_effort','efforts':['default','off','low','high','max'],'effort':'max','reviewEffort':'off'}
+    def test_ark_effort_only_protocol_preserves_frozen_effort(self):
+        policy={'switch':'reasoning_effort','efforts':['default','off','low','high','max'],'effort':'max'}
         validate_request(self.body(reasoning_effort='max'),'fixture',policy)
-        validate_request(self.body(reasoning_effort='none'),'fixture',policy)
         for fields in [dict(),dict(reasoning_effort='high'),dict(reasoning_effort='medium'),
+                       dict(reasoning_effort='none'),
                        dict(reasoning_effort='off'),dict(reasoning_effort='max',thinking={'type':'enabled'}),
                        dict(reasoning_effort='none',enable_thinking=False),dict(preserve_thinking=True),
                        dict(reasoning={'effort':'max'})]:
             with self.assertRaises(ValueError):validate_request(self.body(**fields),'fixture',policy)
         policy['effort']='default'
         validate_request(self.body(),'fixture',policy)
-        validate_request(self.body(reasoning_effort='none'),'fixture',policy)
+        with self.assertRaises(ValueError):validate_request(self.body(reasoning_effort='none'),'fixture',policy)
         with self.assertRaises(ValueError):validate_request(self.body(reasoning_effort='high'),'fixture',policy)
         policy['effort']='off'
         validate_request(self.body(reasoning_effort='none'),'fixture',policy)
         for fields in [dict(),dict(reasoning_effort='low')]:
             with self.assertRaises(ValueError):validate_request(self.body(**fields),'fixture',policy)
-        other={'switch':'thinking','efforts':policy['efforts'],'effort':'max','reviewEffort':'off'}
+        other={'switch':'thinking','efforts':policy['efforts'],'effort':'max'}
         with self.assertRaises(ValueError):validate_request(self.body(reasoning_effort='none'),'fixture',other)
 
-    def test_forced_thinking_accepts_frozen_effort_or_review_low_and_never_off(self):
-        policy={'switch':'thinking','efforts':['default','low','high','max'],'effort':'max','reviewEffort':'low'}
-        for effort in ['max','low']:
-            validate_request(self.body(thinking={'type':'enabled'},reasoning_effort=effort),'fixture',policy)
+    def test_forced_thinking_accepts_only_frozen_effort_and_never_off(self):
+        policy={'switch':'thinking','efforts':['default','low','high','max'],'effort':'max'}
+        validate_request(self.body(thinking={'type':'enabled'},reasoning_effort='max'),'fixture',policy)
         for fields in [dict(thinking={'type':'disabled'}),dict(thinking={'type':'enabled'},reasoning_effort='high'),
+                       dict(thinking={'type':'enabled'},reasoning_effort='low'),
                        dict(reasoning_effort='max'),dict(thinking={'type':'enabled'},reasoning_effort='medium')]:
             with self.assertRaises(ValueError):validate_request(self.body(**fields),'fixture',policy)
         policy['effort']='default'
         validate_request(self.body(thinking={'type':'enabled'}),'fixture',policy)
-        validate_request(self.body(thinking={'type':'enabled'},reasoning_effort='low'),'fixture',policy)
+        with self.assertRaises(ValueError):validate_request(self.body(thinking={'type':'enabled'},reasoning_effort='low'),'fixture',policy)
         with self.assertRaises(ValueError):validate_request(self.body(thinking={'type':'enabled'},reasoning_effort='max'),'fixture',policy)
 
     def test_all_current_provider_options_and_inline_images(self):

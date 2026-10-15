@@ -32,9 +32,7 @@ export function createGlmProvider(
 
             const capability = reasoningCapability(source.id, options.model);
             const canDisableThinking = capability?.efforts.includes("off") ?? true;
-            const effort = options.kind === "task_review" ? capability?.reviewEffort ?? "off" : options.reasoning;
-            // Forced-thinking models use their lightest supported level for advisory reviews.
-            // Unknown models retain the existing review-off behavior without exposing new choices.
+            const effort = options.reasoning;
             const requestFields = {
                 ...createGlmRequestFields(),
                 ...(effort === "off" ? {thinking: {type: "disabled"}} : reasoningRequestFields(source.id, options.model, effort)),

@@ -11,7 +11,7 @@ export const arkAgentPlanProvider: LLMProvider = {
         const apiKey = process.env[source.apiKeyEnv];
         if (!apiKey) throw new Error(`Missing ${source.apiKeyEnv}; check the project .env or ~/.hicode/.env`);
         const capability = reasoningCapability(source.id, options.model);
-        const effort = options.kind === "task_review" ? capability?.reviewEffort ?? "default" : options.reasoning;
+        const effort = options.reasoning;
         return callOpenAICompatible(options, {
             displayName: source.label,
             baseUrl: source.baseUrl || PROVIDER_BASE_URLS["ark-agent-plan"],

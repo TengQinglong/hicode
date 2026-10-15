@@ -22,10 +22,12 @@ class DeepSweTest(unittest.TestCase):
                          {'PYTHONDONTWRITEBYTECODE':'1'})
         rust={'CARGO_HOME':'/opt/hicode-rust/cargo','RUSTUP_HOME':'/opt/hicode-rust/rustup','CARGO_NET_OFFLINE':'true'}
         self.assertEqual(handler.command_environment({'deep':{'runtimeEnvironment':rust}},'/home','/run')['CARGO_HOME'],rust['CARGO_HOME'])
+        polars={'POLARS_FORCE_PKG':'compat'}
+        self.assertEqual(handler.command_environment({'deep':{'runtimeEnvironment':polars}},'/home','/run')['POLARS_FORCE_PKG'],'compat')
         go={'GOMODCACHE':'/opt/hicode-go/pkg/mod','GOPROXY':'off'}
         self.assertEqual(handler.command_environment({'deep':{'runtimeEnvironment':go}},'/home','/run')['GOPATH'],'/home/go')
         for bad in [None,[],{'PATH':'/other/bin'},{'PYTHONPATH':'/tests'},{'VIRTUAL_ENV':'/other/home'},
-                    {'PYTHONPATH':{}},{'GOPATH':'/root/go'},{'GOMODCACHE':'/opt/hicode-go/pkg/mod'},
+                    {'POLARS_FORCE_PKG':'auto'},{'POLARS_FORCE_PKG':'../tests'},{'PYTHONPATH':{}},{'GOPATH':'/root/go'},{'GOMODCACHE':'/opt/hicode-go/pkg/mod'},
                     {'CARGO_HOME':'/root/.cargo'},{'CARGO_HOME':'/opt/hicode-rust/cargo'},
                     {'CARGO_HOME':'/opt/hicode-rust/cargo','RUSTUP_HOME':'/other'}]:
             with self.assertRaises(ValueError):handler.command_environment({'deep':{'runtimeEnvironment':bad}},'/home','/run')
@@ -140,5 +142,47 @@ class PreparedPnpmTest(unittest.TestCase):
             (source/'escape').symlink_to(root)
             with patch('eval_datasets.deep_swe.Path',side_effect=paths),self.assertRaisesRegex(ValueError,'escapes tool cache'):
                 prepare_verifier_pnpm()
+
+
+class PreparedBrowserTest(unittest.TestCase):
+    def test_fixed_cache_is_shared_readonly_without_home_or_external_links(self):
+        from eval_datasets.deep_swe import prepare_browser_cache
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();source=root/'fixed';source.mkdir()
+            target=root/'task/ms-playwright'
+            binary=source/'chromium/chrome';binary.parent.mkdir();binary.write_text('fixed browser');binary.chmod(0o755)
+            (source/'browser').symlink_to(binary)
+            def paths(name):
+                if name=='/root/.cache/ms-playwright':return source
+                if name=='/opt/hicode-task/ms-playwright':return target
+                return Path(name)
+            with patch('eval_datasets.deep_swe.Path',side_effect=paths):
+                prepare_browser_cache();prepare_browser_cache()
+                handler=dataset_runtime({'dataset':'deep-swe'})
+                for home in ['/actor-home','/verifier-home']:
+                    env=handler.command_environment({'deep':{'runtimeEnvironment':{}}},home,None)
+                    self.assertEqual(env['PLAYWRIGHT_BROWSERS_PATH'],str(target))
+            self.assertEqual((target/'browser').read_text(),'fixed browser')
+            self.assertTrue((target/'browser').resolve().is_relative_to(target))
+            self.assertFalse(Path((target/'browser').readlink()).is_absolute())
+            self.assertEqual((target/'chromium/chrome').stat().st_mode & 0o777,0o555)
+            self.assertEqual(target.stat().st_mode & 0o777,0o555)
+
+    def test_absent_browser_does_not_add_dependencies_and_escape_is_rejected(self):
+        from eval_datasets.deep_swe import prepare_browser_cache
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();source=root/'fixed';target=root/'task/ms-playwright'
+            def paths(name):return source if name=='/root/.cache/ms-playwright' else target
+            with patch('eval_datasets.deep_swe.Path',side_effect=paths):prepare_browser_cache()
+            self.assertFalse(target.exists())
+            source.mkdir();outside=root/'secret';outside.write_text('outside cache')
+            (source/'escape').symlink_to(outside)
+            with patch('eval_datasets.deep_swe.Path',side_effect=paths),self.assertRaisesRegex(ValueError,'escapes fixed cache'):
+                prepare_browser_cache()
+            self.assertFalse(target.exists())
+            (source/'escape').unlink();(source/'file').write_text('browser data')
+            target.parent.mkdir();target.symlink_to(source)
+            with patch('eval_datasets.deep_swe.Path',side_effect=paths),self.assertRaisesRegex(ValueError,'prepared browser'):
+                prepare_browser_cache()
 
 if __name__=='__main__':unittest.main()

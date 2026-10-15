@@ -68,7 +68,12 @@ export function createFakeLLM(steps: FakeLLMStep[]): {
     cwd = process.cwd(),
     model = "glm-test",
     kind = "main",
-    signal
+    signal,
+    onStreamProgress,
+    onText,
+    readImage,
+    trace,
+    reasoning
   ) => {
     const options: LLMCallOptions = {
       messages: structuredClone(messages),
@@ -78,6 +83,11 @@ export function createFakeLLM(steps: FakeLLMStep[]): {
       model,
       kind,
       signal,
+      onStreamProgress,
+      onText,
+      readImage,
+      trace,
+      reasoning,
     };
     const callIndex = calls.length;
     calls.push(options);

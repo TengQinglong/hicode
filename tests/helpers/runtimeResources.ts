@@ -241,7 +241,7 @@ export function createTestRuntimeResources(
     model: {get: () => primaryModel.target.model, enumerable: true},
     provider: {get: () => primaryModel.target.source, enumerable: true},
     reasoning: {get: () => primaryModel.target.reasoning, enumerable: true},
-    fastReasoning: {get: () => {const target = settings.models.fast ?? primaryModel.target; return primaryModel.reasoningFor(target.source, target.model);}, enumerable: true},
+    fastReasoning: {get: () => {const target = settings.models.fast; return target ? primaryModel.reasoningFor(target.source, target.model) : primaryModel.target.reasoning;}, enumerable: true},
     fastModel: {get: () => (settings.models.fast ?? primaryModel.target).model, enumerable: true},
     fastProvider: {get: () => (settings.models.fast ?? primaryModel.target).source, enumerable: true},
   });

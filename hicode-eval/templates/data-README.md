@@ -47,7 +47,7 @@
 - 正常完成的服务题必须先确认 `--single-task` 已封锁执行（持久化成功、工具回执完整、无运行或待消费子 Agent），并关闭模型网关；保留 HiCode Runtime 及其托管 Shell 服务，让私有 verifier 在独立文件／PID 视图中访问本题服务。判题完成、取消或失败后再关闭 Runtime、服务 namespace 和容器。未确认封锁不得暴露隐藏测试；超时／作答失败仍走原有停止确认，不保证服务存活。不能通过关闭全局 Task 清理或自行 daemonize 来替代此交接。
 - 默认允许联网，数据集适配器按原题许可逐题收窄；Terminal-Bench 2.1 只有冻结 task.toml 的 environment.allow_internet=true 才开放，false／缺失则隔离，DeepSWE 始终隔离。settings 和批次 network=isolated 可进一步禁网，open 不能覆盖原题限制。同批允许混合模式，实际模式写入各 Run，retry 沿用原模式。服务题联网时共享本题独立容器的网络，禁网时保留私有无外网 namespace；两者均保留文件、进程、隐藏判题隔离和本题模型网关，真实 Key 不进入作答环境。修改默认配置只在空闲 worker 停止后持 service lease 原子保存，再恢复服务；不改变已有 Run。
 
-模型强度随连接声明保存在 `state/settings.json` 的 `model.reasoning.effort`。init 可从 HiCode 当前 Settings 导入；submit 的 --reasoning 选项优先于文件顶层；文件顶层 `reasoning: {effort: "max"}` 覆盖本批，省略沿用服务默认，`default` 保留厂商默认参数省略语义。批次冻结完整模型选择，manifest/job/Actor/模型网关均使用原值；retry 沿用原强度，regrade 不调用模型。不得给旧记录推填强度，实际字段查请求日志。GLM 5.3/5.3 Flash 强制思考，网关不接受 off，审定复盘使用 low；其他已支持关闭的型号继续使用 off。方舟 Agent Plan 为独立 `ark-agent-plan` 来源，使用 `ARK_AGENT_PLAN_API_KEY` 和专属 `/api/plan/v3`，与其他账号分开。DeepSeek 4.1 Flash 的 default 省略 effort、off 编码 none，审定复盘使用 none；网关仅接受冻结的主强度与审定辅助策略，不混用其他思考开关。更新源码只在空闲时更新 payload 与重启 worker，不需重建题目依赖镜像。
+模型强度随连接声明保存在 `state/settings.json` 的 `model.reasoning.effort`。init 可从 HiCode 当前 Settings 导入；submit 的 --reasoning 选项优先于文件顶层；文件顶层 `reasoning: {effort: "max"}` 覆盖本批，省略沿用服务默认，`default` 保留厂商默认参数省略语义。批次冻结完整模型选择，manifest/job/Actor/模型网关均使用原值；retry 沿用原强度，regrade 不调用模型。不得给旧记录推填强度，实际字段查请求日志。GLM 5.3/5.3 Flash 强制思考，网关不接受 off；后台复盘沿用本 Turn 冻结的模型强度，不再按用途关闭思考或降为 low。方舟 Agent Plan 为独立 `ark-agent-plan` 来源，使用 `ARK_AGENT_PLAN_API_KEY` 和专属 `/api/plan/v3`，与其他账号分开。DeepSeek 4.1 Flash 的 default 省略 effort、off 编码 none；网关显式档位只接受冻结值，default 保留 Provider 现有的有限停滞恢复，不混用其他思考开关。更新源码只在空闲时更新 payload 与重启 worker，不需重建题目依赖镜像。
 
 ## 镜像的实际存放位置
 
@@ -118,3 +118,7 @@ DeepSWE原题使用缩写Git基线时，declaredBaseCommit保存原始引用，b
 重型镜像准备可使用 `prepare-environments --live --after-evaluations`：请求立即入队，进度记录 waitingForEvaluations；有执行或排队评测时不启动构建，空闲后由同一worker继续。关闭会取消等待，不新建外部后台进程。
 
 评测容器的文件句柄（nofile）软／硬上限由 RunContainers 显式设置为 65536，不继承 Docker 的 1024 软上限；不改 VM／Docker 全局配置。该额度与收集的 100000 条目／8 GiB 边界无关。源码变更经空闲 worker 重启后仅对新容器生效，不修改现有 Run。
+
+DeepSWE 固定镜像含 /root/.cache/ms-playwright 时，作答准备和独立判题将经校验的浏览器缓存复制到 /opt/hicode-task/ms-playwright，内部链接须留在缓存内并重写为相对链接；限定25000条目／2 GiB，只复制普通文件、目录和内部链接。目录通过现有依赖视图只读挂载，两种独立 Home 使用同一 PLAYWRIGHT_BROWSERS_PATH；不暴露/root、不使用Actor下载结果、不在禁网判题时下载。无该缓存的题目不追加浏览器依赖。修改执行模块须等全部评测／构建空闲后重启worker生效。
+
+DeepSWE 的 Go 镜像准备必须用固定源镜像中 `GOTOOLCHAIN=local go env GOMODCACHE` 的实际目录复制模块与工具链缓存到 `/opt/hicode-go/pkg/mod`，不得假设缓存位于 `/root/go/pkg`；源缓存缺失或为 symlink 时构建失败。Actor 与独立 verifier 均须在禁网隔离视图中验证工具链和所需模块可读，不能以目录存在代替可用性验证。

@@ -29,8 +29,7 @@ export const deepseekProvider: LLMProvider = {
             baseUrl: source.baseUrl || PROVIDER_BASE_URLS.deepseek,
             apiKey,
             toolImages: supportsToolImages(source, options.model),
-            requestFields: {...createDeepSeekRequestFields(), ...reasoningRequestFields(source.id, options.model, options.kind === "task_review" ? "default" : options.reasoning),
-                ...(options.kind === "task_review" ? {thinking: {type: "disabled"}} : {})},
+            requestFields: {...createDeepSeekRequestFields(), ...reasoningRequestFields(source.id, options.model, options.reasoning)},
             ...(options.reasoning !== "off" && options.kind !== "task_review" ? {reasoningSource: source.id} : {}),
             disableThinkingOnFinalStallRetry: (options.reasoning ?? "default") === "default",
         });

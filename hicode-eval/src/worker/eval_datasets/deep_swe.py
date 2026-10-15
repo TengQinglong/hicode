@@ -131,6 +131,48 @@ def prepare_verifier_go(home):
     return target
 
 
+def prepare_browser_cache():
+    """Expose only fixed-image browser binaries; both Homes stay independent."""
+    source = Path('/root/.cache/ms-playwright')
+    if not source.exists() and not source.is_symlink():return
+    if source.is_symlink() or not source.is_dir() or source.resolve() != source:
+        raise ValueError('Invalid fixed-image browser cache')
+    target = Path('/opt/hicode-task/ms-playwright')
+    links = {}
+    total = 0
+    entries = list(source.rglob('*'))
+    if len(entries) > 25000:raise ValueError('Browser cache exceeds file budget')
+    for item in entries:
+        mode = item.lstat()
+        if stat.S_ISLNK(mode.st_mode):
+            resolved = item.resolve(strict=True)
+            if not resolved.is_relative_to(source):raise ValueError('Browser link escapes fixed cache')
+            links[item.relative_to(source)] = resolved.relative_to(source)
+        elif stat.S_ISREG(mode.st_mode):
+            total += mode.st_size
+            if total > 2 * 1024 ** 3:raise ValueError('Browser cache exceeds byte budget')
+        elif not stat.S_ISDIR(mode.st_mode):raise ValueError('Special browser cache entry')
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() or not target.is_dir() or target.resolve() != target:
+            raise ValueError('Invalid prepared browser cache')
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.parent.resolve() != target.parent:raise ValueError('Symlinked browser staging parent')
+    staging = target.with_name('.ms-playwright-staging')
+    if staging.exists() or staging.is_symlink():raise ValueError('Browser staging already exists')
+    try:
+        shutil.copytree(source, staging, symlinks=True)
+        for name, resolved in links.items():
+            link = staging / name
+            link.unlink();link.symlink_to(os.path.relpath(staging / resolved, link.parent))
+        for item in [staging, *staging.rglob('*')]:
+            if not item.is_symlink():item.chmod(0o555 if item.is_dir() or item.stat().st_mode & 0o111 else 0o444)
+        staging.rename(target)
+    except BaseException:
+        if staging.is_dir() and not staging.is_symlink():shutil.rmtree(staging)
+        raise
+
+
 class DeepSweRuntime:
     workdir = '/app'
     actor_environment = None
@@ -142,7 +184,7 @@ class DeepSweRuntime:
     def writable_runtime_bin(self, config):return False
     def command_environment(self, config, home, root):
         runtime = config['deep']['runtimeEnvironment']
-        if (not isinstance(runtime, dict) or set(runtime) - {'PYTHONPATH', 'VIRTUAL_ENV', 'GOMODCACHE', 'GOPROXY', 'CARGO_HOME', 'RUSTUP_HOME', 'CARGO_NET_OFFLINE'}
+        if (not isinstance(runtime, dict) or set(runtime) - {'PYTHONPATH', 'VIRTUAL_ENV', 'GOMODCACHE', 'GOPROXY', 'CARGO_HOME', 'RUSTUP_HOME', 'CARGO_NET_OFFLINE', 'POLARS_FORCE_PKG'}
                 or any(not isinstance(value, str) for value in runtime.values())):
             raise ValueError('Invalid reviewed DeepSWE runtime environment')
         if ('PYTHONPATH' in runtime and runtime['PYTHONPATH'] not in {'/app', '/app/src'}
@@ -153,14 +195,21 @@ class DeepSweRuntime:
                 or 'CARGO_HOME' in runtime and runtime['CARGO_HOME'] != '/opt/hicode-rust/cargo'
                 or 'RUSTUP_HOME' in runtime and runtime['RUSTUP_HOME'] != '/opt/hicode-rust/rustup'
                 or 'CARGO_NET_OFFLINE' in runtime and runtime['CARGO_NET_OFFLINE'] != 'true'
+                or 'POLARS_FORCE_PKG' in runtime and runtime['POLARS_FORCE_PKG'] != 'compat'
                 or ('CARGO_HOME' in runtime) != ('RUSTUP_HOME' in runtime)):
             raise ValueError('DeepSWE runtime environment escapes prepared dependencies')
         result = {'PYTHONDONTWRITEBYTECODE': '1', **runtime}
+        browsers = Path('/opt/hicode-task/ms-playwright')
+        if browsers.exists() or browsers.is_symlink():
+            if browsers.is_symlink() or not browsers.is_dir() or browsers.resolve() != browsers:
+                raise ValueError('Invalid prepared browser cache')
+            result['PLAYWRIGHT_BROWSERS_PATH'] = str(browsers)
         if 'GOMODCACHE' in runtime and home is not None:result['GOPATH'] = str(Path(home)/'go')
         if 'VIRTUAL_ENV' in runtime:result['PATH'] = runtime['VIRTUAL_ENV'] + '/bin:' + os.environ['PATH']
         return result
 
     def prepare_actor(self, config, project, logs, command, namespace):
+        prepare_browser_cache()
         if config['network'] != 'isolated':raise ValueError('DeepSWE requires no-network execution')
         runtime = self.command_environment(config, None, None)
         if 'VIRTUAL_ENV' in runtime:
@@ -175,6 +224,7 @@ class DeepSweRuntime:
         command(namespace(['git', '-C', '/app', 'config', 'user.email', 'hicode@localhost']))
 
     def grade(self, *, root, config, uid, gid, project, home, logs, command, namespace, demote, cancelled):
+        prepare_browser_cache()
         prepare_verifier_pnpm()
         verifier = logs / 'verifier'
         original = json.loads(checked_bytes(root / 'tests/config.json', 16 * 1024 * 1024))

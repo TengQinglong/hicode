@@ -17,7 +17,7 @@ test('official image tasks build and freeze reviewed preparation scripts as thei
  await writeFile(join(source,'task.toml'),`schema_version="1.3"\n[metadata]\ntask_id="fixture"\nrepository_url="https://github.com/example/project"\nbase_commit_hash="${commit}"\n[agent]\nnetwork_mode="no-network"\ntimeout_sec=10800\n[environment]\ndocker_image="${tag}"\nmemory_mb=8192\ngpus=0\n[verifier]\nnetwork_mode="no-network"\nenvironment_mode="separate"\ntimeout_sec=1800\n[[verifier.collect]]\ncommand="cd /app && mkdir -p /logs/artifacts && git config --global --add safe.directory /app && git diff --binary ${commit} HEAD > /logs/artifacts/model.patch"\ntimeout_sec=300\n`);
  await writeFile(join(preparation,'setup.sh'),'#!/bin/sh\nmkdir -p /opt/hicode-task/cache\n');
  task.preparation={directory:preparation,script:'setup.sh',sha256:createHash('sha256').update(JSON.stringify(await tree(preparation))).digest('hex')};
- await save(layout.definition('deep-swe'),{fixture:{repository:'https://github.com/example/project',baseCommit:commit,declaredImage:tag,image:ref,architecture:'amd64',agentSeconds:10800,verifierSeconds:1800,hashes:Object.fromEntries(Object.entries(await tree(source)).map(([name,file])=>[name,file.sha256])),runtimeEnvironment:{}}});
+ await save(layout.definition('deep-swe'),{fixture:{repository:'https://github.com/example/project',baseCommit:commit,declaredImage:tag,image:ref,architecture:'amd64',agentSeconds:10800,verifierSeconds:1800,hashes:Object.fromEntries(Object.entries(await tree(source)).map(([name,file])=>[name,file.sha256])),runtimeEnvironment:{GOMODCACHE:'/opt/hicode-go/pkg/mod',GOPROXY:'off'},runtimeTools:['go-ctrf-json-reporter']}});
  await mkdir(layout.runtime);await save(join(layout.runtime,'images.json'),{system:'ubuntu@sha256:'+'c'.repeat(64),python:'python@sha256:'+'d'.repeat(64),bun:'oven/bun@sha256:'+'e'.repeat(64),node:'node@sha256:'+'f'.repeat(64),uv:'ghcr.io/astral-sh/uv@sha256:'+'1'.repeat(64)});await writeFile(layout.runtimeDockerfile('deep-swe'),'FROM {{source}}\nUSER root\n');
  const sourceId='sha256:'+'b'.repeat(64),built=new Map<string,{Id:string;Config:{Labels:Record<string,string>}}>(),files:string[]=[];
  const fake=spyOn(transport,'run').mockImplementation(async argv=>{
@@ -35,6 +35,11 @@ test('official image tasks build and freeze reviewed preparation scripts as thei
   const store=new EnvironmentStore(layout.environments,'offline'),binding=await store.prepareTask(task);
   expect(binding.preparation?.kind).toBe('task');expect(binding.preparation?.parentImage).toBe(binding.dependencies.imageId);
   expect(files.some(file=>file.includes('"/bin/bash","/opt/hicode-task/source/setup.sh"'))).toBe(true);
+  const goRecipe=files.find(file=>file.includes('go-ctrf-json-reporter'))!;
+  expect(goRecipe).toContain('GOTOOLCHAIN=local go env GOMODCACHE');
+  expect(goRecipe).toContain('test -d "$go_cache" && test ! -L "$go_cache"');
+  expect(goRecipe).toContain('cp -a "$go_cache" /opt/hicode-go/pkg/mod');
+  expect(goRecipe).not.toContain('cp -a /root/go/pkg');
   expect(await store.resolve(task)).toEqual(binding);
   await writeFile(join(preparation,'setup.sh'),'tampered');await expect(store.prepareTask(task)).rejects.toThrow('frozen recipe');
  }finally{fake.mockRestore();await rm(root,{recursive:true,force:true});}

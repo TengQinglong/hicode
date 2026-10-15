@@ -115,7 +115,7 @@ test.each([
     });
 });
 
-test("Token Plan DeepSeek off and task review omit replay without discarding the original reasoning", async () => {
+test("Token Plan DeepSeek keeps review reasoning selection separate from historical replay", async () => {
     await withTempProject(async (cwd, storage) => {
         process.env.HICODE_REPLAY_TEST_KEY = "fixture-key";
         const caller = createLLMCaller({...source, id:"qwen-token-plan"});
@@ -131,7 +131,7 @@ test("Token Plan DeepSeek off and task review omit replay without discarding the
         const original = structuredClone(history);
         for (const kind of ["main", "task_review"] as const) {
             const reply = await caller(history, tools, storage, cwd, "deepseek-v4.1-flash", kind,
-                undefined, undefined, undefined, undefined, undefined, kind === "main" ? "off" : "max");
+                undefined, undefined, undefined, undefined, undefined, "off");
             expect(reply.message).not.toHaveProperty("reasoning");
             const request = requests.at(-1)!;
             expect(request.enable_thinking).toBe(false);
@@ -142,6 +142,11 @@ test("Token Plan DeepSeek off and task review omit replay without discarding the
                 {role:"tool", tool_call_id:"read-1", content:"verified contents"},
             ]);
         }
+        const review = await caller(history, tools, storage, cwd, "deepseek-v4.1-flash", "task_review",
+            undefined, undefined, undefined, undefined, undefined, "max");
+        expect(requests.at(-1)).toMatchObject({enable_thinking:true, reasoning_effort:"max"});
+        expect((requests.at(-1)!.messages as Record<string, unknown>[]).every(message => !("reasoning_content" in message))).toBe(true);
+        expect(review.message).not.toHaveProperty("reasoning");
         await caller(history, tools, storage, cwd, "deepseek-v4.1-flash", "main",
             undefined, undefined, undefined, undefined, undefined, "max");
         expect(requests.at(-1)).toMatchObject({enable_thinking:true, reasoning_effort:"max",

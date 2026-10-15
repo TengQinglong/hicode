@@ -84,7 +84,7 @@ class RunnerFailureTest(unittest.TestCase):
             config['reasoningPolicy']={'effort':reasoning or 'default'}
             if reasoning:
                 config['model'].update(model='qwen3.8-flash',reasoning={'effort':reasoning})
-                config['reasoningPolicy'].update(switch='enable_thinking',efforts=['default','off','low','medium','xhigh'],reviewEffort='off')
+                config['reasoningPolicy'].update(switch='enable_thinking',efforts=['default','off','low','medium','xhigh'])
             config['network'] = 'isolated' if isolated else 'open'
             config['continuationEnabled']=checkpoint or resume
             if resume:config['continuation']={'checkpoint':{'sessionId':'fixture','homePath':'/eval/runs/aaaaaaaaaaaaaaaa/home','elapsedSeconds':4200,'modelBridgePort':49152},'prompt':'继续原任务'}

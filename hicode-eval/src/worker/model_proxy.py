@@ -48,7 +48,7 @@ def validate_reasoning(value, policy):
             raise ValueError('Wrong reasoning protocol')
         selected = policy['effort']
         if effort == 'none':
-            if 'off' not in policy['efforts'] or policy['reviewEffort'] != 'off':raise ValueError('This model requires thinking')
+            if 'off' not in policy['efforts'] or selected != 'off':raise ValueError('Reasoning differs from the frozen batch')
             return
         if effort is not None and effort not in policy['efforts']:raise ValueError('Unsupported model reasoning level')
         if selected == 'off':raise ValueError('This batch disabled reasoning')
@@ -62,16 +62,16 @@ def validate_reasoning(value, policy):
     if 'reasoning' in value:raise ValueError('Unsupported reasoning protocol')
     if (switch == 'enable_thinking' and thinking is not None) or (switch == 'thinking' and 'enable_thinking' in value):raise ValueError('Wrong reasoning protocol')
     if effort is not None and effort not in policy['efforts']:raise ValueError('Unsupported model reasoning level')
-    # Purpose is not trusted from the actor. The reviewed auxiliary policy permits off
-    # or the lightest level for forced-thinking models; main calls retain the batch choice.
     selected = policy['effort']
     if off:
         if 'off' not in policy['efforts']:raise ValueError('This model requires thinking')
+        # Default retains the Provider's existing final-stall recovery; explicit
+        # levels cannot be lowered by claiming an advisory request purpose.
+        if selected not in {'default', 'off'}:raise ValueError('Reasoning differs from the frozen batch')
         return
     if selected == 'off':raise ValueError('This batch disabled reasoning')
     enabled = value.get('enable_thinking') is True if switch == 'enable_thinking' else thinking == {'type': 'enabled'}
     if not enabled:raise ValueError('Thinking must remain enabled')
-    if effort == policy['reviewEffort']:return
     if selected == 'default' and effort is not None:raise ValueError('Default batch must omit reasoning effort')
     if selected not in {'default', 'off'} and (effort != selected or not enabled):raise ValueError('Reasoning differs from the frozen batch')
 

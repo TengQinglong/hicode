@@ -14,6 +14,32 @@ import { createTestMemoryRuntime } from "../helpers/memory.js";
 
 const loadNoInstructions = async () => EMPTY_PROJECT_INSTRUCTIONS;
 
+test.each([false, true])("fast reasoning follows the active primary unless separately configured=%s", async explicitFast => {
+  await withTempProject(async cwd => {
+    const settings = createTestSettings();
+    const key = "HICODE_REVIEW_RESOURCE_TEST_KEY";
+    const previous = process.env[key];
+    process.env[key] = "offline-fixture";
+    settings.sources["ark-agent-plan"].apiKeyEnv = key;
+    const primary = {source: "ark-agent-plan" as const, model: "glm-5.3-flash", label: "GLM Flash"};
+    settings.models = {primary, ...(explicitFast ? {
+      fast: {source: "qwen" as const, model: "qwen3.8-flash", label: "Qwen Flash"},
+      reasoning: [{source: "qwen" as const, model: "qwen3.8-flash", effort: "low" as const}],
+    } : {})};
+    try {
+      const resources = await createRootRuntimeResources({cwd, settings,
+        fileSources: {settings: [], instructions: [], skills: [], agents: [], mcp: []}}, {mcpManager: false});
+      try {
+        resources.primaryModel.select({...primary, reasoning: "max"});
+        expect(resources.reasoning).toBe("max");
+        expect(resources.fastReasoning).toBe(explicitFast ? "low" : "max");
+      } finally {await resources.close();}
+    } finally {
+      if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
+    }
+  });
+});
+
 function createFakeTaskRuntime(): {
   manager: TaskRuntimeLike;
   state: { closeCount: number };

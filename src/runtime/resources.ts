@@ -389,7 +389,7 @@ export function createRootRuntimeResourcesFactory(
                     return primaryModel.target.source;
                 },
                 get reasoning() {return primaryModel.target.reasoning;},
-                get fastReasoning() {const target = settings.models.fast ?? primaryModel.target; return primaryModel.reasoningFor(target.source, target.model);},
+                get fastReasoning() {const target = settings.models.fast; return target ? primaryModel.reasoningFor(target.source, target.model) : primaryModel.target.reasoning;},
                 get fastModel() {return (settings.models.fast ?? primaryModel.target).model;},
                 get fastProvider() {return (settings.models.fast ?? primaryModel.target).source;},
                 primaryModel,

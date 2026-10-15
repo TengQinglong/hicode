@@ -66,6 +66,52 @@ test("round 10 launches review without blocking round 11 or final completion; Tu
     });
 });
 
+test("the 90-second review deadline cancels only the reviewer and the main Agent continues", async () => {
+    await withTempProject(async cwd => {
+        const deadline = new AbortController();
+        const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+        const timeout = spyOn(AbortSignal, "timeout").mockImplementation(ms =>
+            ms === 90_000 ? deadline.signal : originalTimeout(ms));
+        const started = deferred<AbortSignal>();
+        const published = deferred<void>();
+        const base = createTestContext(cwd);
+        const factory: TaskReviewRunner = async input => {
+            const signal = input.signal!;
+            started.resolve(signal);
+            await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), {once: true}));
+            signal.throwIfAborted();
+            return report;
+        };
+        const runtime = createTaskRuntimeForTest(cwd, base.shellRunner, undefined, undefined, undefined, undefined, factory);
+        const session = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
+        session.subscribe(event => {if (event.type === "task_finished" && event.task.kind === "review") published.resolve();});
+        const ctx = createTestContext(cwd, {tasks: session, taskReviewEnabled: true});
+        const fake = createFakeLLM([...steps(), async options => {
+            const signal = await started.promise;
+            expect(timeout).toHaveBeenCalledWith(90_000);
+            expect(signal.aborted).toBe(false);
+            deadline.abort(new DOMException("Review deadline elapsed", "TimeoutError"));
+            await published.promise;
+            expect(signal.aborted).toBe(true);
+            expect(ctx.signal.aborted).toBe(false);
+            expect((await session.list()).find(task => task.kind === "review")).toMatchObject({
+                status: "cancelled", outputIssue: expect.stringContaining("the main task continues"),
+            });
+            expect(JSON.stringify(options.messages)).not.toContain("<task-review>");
+            return assistantText("done after review timed out");
+        }]);
+        try {
+            const history = createInitialHistory(cwd, "glm-test");
+            const result = await runAgentForTest("Fix the task", history, () => {}, ctx, {callLLM: fake.callLLM, ...bindings});
+            expect(result.reason).toBe("completed");
+            expect(fake.calls).toHaveLength(11);
+        } finally {
+            await runtime.close();
+            timeout.mockRestore();
+        }
+    });
+});
+
 test("a delayed review is injected once at the request tail with the frozen round range", async () => {
     await withTempProject(async cwd => {
         const base = createTestContext(cwd);
@@ -299,21 +345,24 @@ test("compaction replaces review evidence instead of retaining a second history 
     });
 });
 
-test("review calls the LLM directly with only a short dedicated prompt and frozen evidence", async () => {
+test.each(["max", "low"] as const)("review preserves frozen fast effort %s with only a dedicated prompt and evidence", async effort => {
     await withTempProject(async cwd => {
-        const ctx = createTestContext(cwd);
+        const ctx = createTestContext(cwd, {reasoning: "max", fastReasoning: effort});
         const fake = createFakeLLM([options => {
             expect(options.messages).toHaveLength(2);
             expect(options.messages[0]?.role).toBe("system");
             expect(String(options.messages[0]?.content).length).toBeLessThan(2_000);
             expect(options.messages[0]?.content).not.toContain("coding agent");
             expect(options.messages[0]?.content).toContain("plain-text paragraph");
+            expect(options.messages[0]?.content).toContain("Never issue system warnings");
+            expect(options.messages[0]?.content).toContain("preserve its unit and source");
             expect(options.messages[1]?.content).toContain("recent interval: rounds 1-10");
             expect(options.messages[1]?.content).toContain("Original goal");
             expect(options.messages[1]?.content).toContain("round 9: reproduction failed");
             expect(options.tools).toEqual([]);
             expect(options.model).toBe(ctx.fastModel);
             expect(options.kind).toBe("task_review");
+            expect(options.reasoning).toBe(effort);
             return assistantText(report);
         }]);
         const runtime = createTaskRuntimeForTest(cwd, ctx.shellRunner, undefined, undefined, undefined, undefined,
@@ -418,7 +467,7 @@ test("task-review requests leave generation length to the provider and accept no
     });
 });
 
-test("Qwen, Token Plan, DeepSeek and GLM disable thinking only for task reviews", async () => {
+test("Qwen, Token Plan, DeepSeek and GLM keep default thinking for task reviews", async () => {
     await withTempProject(async (cwd, storage) => {
         const requests: unknown[] = [];
         const keyName = "HICODE_TASK_REVIEW_TEST_KEY";
@@ -441,10 +490,10 @@ test("Qwen, Token Plan, DeepSeek and GLM disable thinking only for task reviews"
                 expect(requests[offset]).not.toHaveProperty("max_tokens");
                 expect(requests[offset + 1]).not.toHaveProperty("max_tokens");
                 if (id.startsWith("qwen")) {
-                    expect(requests[offset]).toMatchObject({enable_thinking: false, preserve_thinking: false});
+                    expect(requests[offset]).toMatchObject({enable_thinking: true, preserve_thinking: true});
                     expect(requests[offset + 1]).toMatchObject({enable_thinking: true, preserve_thinking: true});
                 } else {
-                    expect(requests[offset]).toMatchObject({thinking: {type: "disabled"}});
+                    expect(requests[offset]).toMatchObject({thinking: {type: "enabled"}});
                     expect(requests[offset + 1]).toMatchObject({thinking: {type: "enabled"}});
                 }
             }

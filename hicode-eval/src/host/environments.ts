@@ -259,7 +259,7 @@ export class EnvironmentStore {
       const parentTag='hicode-env-parent:'+base.imageId.slice(7);await this.execute(this.docker('tag',base.imageId,parentTag));
       let dockerfile=template.replace('{{source}}',parentTag);
       if(metadata.runtimeTools?.includes('go-ctrf-json-reporter'))
-        dockerfile+='\nRUN install -m 755 /root/go/bin/go-ctrf-json-reporter /usr/local/bin/go-ctrf-json-reporter && mkdir -p /opt/hicode-go && cp -a /root/go/pkg /opt/hicode-go/pkg && chmod -R a+rX /opt/hicode-go\n'+
+        dockerfile+='\nRUN install -m 755 /root/go/bin/go-ctrf-json-reporter /usr/local/bin/go-ctrf-json-reporter && go_cache="$(GOTOOLCHAIN=local go env GOMODCACHE)" && test -d "$go_cache" && test ! -L "$go_cache" && mkdir -p /opt/hicode-go/pkg && cp -a "$go_cache" /opt/hicode-go/pkg/mod && chmod -R a+rX /opt/hicode-go\n'+
           'ENV GOMODCACHE=/opt/hicode-go/pkg/mod GOPROXY=off\n';
       if(metadata.runtimeTools?.includes('rust-toolchain'))
         dockerfile+='\nRUN mkdir -p /opt/hicode-rust && cp -a /root/.cargo /opt/hicode-rust/cargo && cp -a /root/.rustup /opt/hicode-rust/rustup && chmod -R a+rX /opt/hicode-rust\n'+

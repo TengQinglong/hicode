@@ -89,3 +89,7 @@ DeepSWE 补判也使用现有 regrade/recheck 入口，交持锁 worker 占一�
 公共运行底座保留；DeepSWE 的逐题官方镜像封装底图不属于公共底座，仅被通过题引用且无容器占用时可回收。按题目层、依赖层、底图的顺序删除，不强制删除有引用的镜像。
 
 重型镜像准备可使用 `prepare-environments --live --after-evaluations`：请求立即入队，进度记录 waitingForEvaluations；有执行或排队评测时不启动构建，空闲后由同一worker继续。关闭会取消等待，不新建外部后台进程。
+
+DeepSWE 固定镜像含 /root/.cache/ms-playwright 时，作答准备和独立判题将经校验的浏览器缓存复制到 /opt/hicode-task/ms-playwright，内部链接须留在缓存内并重写为相对链接；限定25000条目／2 GiB，只复制普通文件、目录和内部链接。目录通过现有依赖视图只读挂载，两种独立 Home 使用同一 PLAYWRIGHT_BROWSERS_PATH；不暴露/root、不使用Actor下载结果、不在禁网判题时下载。无该缓存的题目不追加浏览器依赖。修改执行模块须等全部评测／构建空闲后重启worker生效。
+
+DeepSWE 的 Go 镜像准备必须用固定源镜像中 `GOTOOLCHAIN=local go env GOMODCACHE` 的实际目录复制模块与工具链缓存到 `/opt/hicode-go/pkg/mod`，不得假设缓存位于 `/root/go/pkg`；源缓存缺失或为 symlink 时构建失败。Actor 与独立 verifier 均须在禁网隔离视图中验证工具链和所需模块可读，不能以目录存在代替可用性验证。
