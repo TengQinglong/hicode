@@ -103,7 +103,7 @@ describe("source-backed terminal scrollback", () => {
 
 test("incremental scrollback folds an already displayed Shell failure but preserves new errors and transcript", async () => {
     const taskId = "t_123456789abc";
-    const notification: UIThread = {id: "n", role: "task_notification", taskId, kind: "shell", status: "failed", shellTermination: "exit", label: "exit 1", summary: "exit 1"};
+    const notification: UIThread = {id: "n", role: "task_notification", taskId, kind: "shell", status: "failed", shellResult: {termination: "exit", outputFailed: false}, label: "exit 1", summary: "exit 1"};
     const wait: UIThread = {id: "w", role: "tool_call", toolCallId: "w", name: "task", args: JSON.stringify({action: "wait", task_id: taskId}),
         status: "done", outcome: "failed", result: "WAIT_RESULT", completedTask: {taskId, notificationId: "a".repeat(64)}};
     const options = {showWelcome: false, width: 100, height: 30};

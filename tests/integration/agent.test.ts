@@ -630,7 +630,7 @@ describe("agent loop", () => {
           expect(options.messages.some(
             (message) =>
               typeof message.content === "string" &&
-              message.content.includes("still has in_progress todos") &&
+              message.content.includes("still has unfinished todos") &&
               message.content.includes(activeTodo.content) &&
               message.content.includes("call todo_write to mark completed") &&
               message.content.includes(

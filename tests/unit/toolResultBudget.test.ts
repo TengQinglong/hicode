@@ -15,9 +15,11 @@ describe("tool result budgets", () => {
     await withTempProject(async cwd => {
       for (const quota of [0, 100_000]) {
         const store = createTestToolResultStore(cwd, `evidence-${quota}`, {maxSessionBytes: quota});
-        const output = {content: "failed".repeat(1000), outcome: "failed" as const};
+        const output = {content: "failed".repeat(1000), outcome: "failed" as const,
+          uiData: {type: "shell_result" as const, receipt: {termination: "exit" as const, outputFailed: false}}};
         const result = await processToolOutput({output, toolName: "bash", toolCallId: "check", maxResultSizeChars: 10, store});
         expect(result.outcome).toBe("failed");
+        expect(result.uiData).toEqual({type: "shell_result", receipt: {termination: "exit", outputFailed: quota === 0}});
       }
     });
   });

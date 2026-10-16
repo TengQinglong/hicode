@@ -80,7 +80,7 @@ test("failed Shell wait is shown once unless its completion notification is alre
         args: JSON.stringify({action: "wait", task_id: receipt.taskId}), status: "done", outcome: "failed",
         completedTask: receipt, result: "task_id: t_123456789abc kind: shell status: failed\nTermination: exit code 1"};
     const notification: UIThread = {id: "done", role: "task_notification", kind: "shell",
-        taskId: receipt.taskId, status: "failed", shellTermination: "exit", label: "pytest -q", summary: "exit 1 · 1 failed"};
+        taskId: receipt.taskId, status: "failed", shellResult: {termination: "exit", outputFailed: false}, label: "pytest -q", summary: "exit 1 · 1 failed"};
     expect(render(<MessageList threads={[waiting]}/>).lastFrame()).toContain("Termination: exit code 1");
     const frame = render(<MessageList threads={[notification, waiting]}/>).lastFrame()!;
     expect(frame).toContain("Background command exited");

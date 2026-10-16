@@ -1,3 +1,4 @@
+import {shellResultReceiptSchema} from "../tools/bash/receipt.js";
 import {fileReadReceiptSchema} from "../tools/readFile/receipt.js";
 import {agentReceiptSchema} from "../tools/agent/receipt.js";
 import {contentText, imageReferenceSchema} from "../images/content.js";
@@ -170,6 +171,7 @@ const persistedUIEventSchema = z.discriminatedUnion("type", [
         outcome: z.enum(["ok", "failed", "output_failed", "denied", "interrupted"]),
         agentReceipt: agentReceiptSchema.optional(),
         fileRead: fileReadReceiptSchema.optional(),
+        shellResult: shellResultReceiptSchema.optional(),
         completedTask: z.object({taskId: idSchema, notificationId: z.string().regex(/^[a-f0-9]{64}$/)}).strict().optional(),
     }).strict(),
     z.object({

@@ -388,12 +388,12 @@ describe("phase-based tool presentation", () => {
             kind: "shell",
             label: "node server.js",
             status: "failed",
-            shellTermination: "exit",
+            shellResult: {termination: "exit", outputFailed: false},
             summary: "exit 1 · Error: listen EADDRINUSE :::3000",
             resultId: "task_task-1",
         }, {
             id: "runtime-failure", role: "task_notification", taskId: "task-2", kind: "shell",
-            label: "node server.js", status: "failed", shellTermination: "spawn_error",
+            label: "node server.js", status: "failed", shellResult: {termination: "spawn_error", outputFailed: false},
             summary: "spawn error · permission denied",
         }];
         const frame = render(<MessageList threads={threads}/>).lastFrame() ?? "";

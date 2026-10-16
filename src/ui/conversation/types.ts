@@ -1,3 +1,4 @@
+import type {ShellResultReceipt} from "../../tools/bash/receipt.js";
 import type {HookExecution} from "../../hooks/types.js";
 import type {PersistedToolResult, ToolOutcome} from "../../toolResults/index.js";
 import type {AgentType} from "../../subagents/types.js";
@@ -19,8 +20,7 @@ export type UIThread =
         label: string;
         status: "completed" | "failed" | "cancelled" | "interrupted";
         summary: string;
-        shellTermination?: "exit" | "aborted" | "timeout" | "output_limit" | "spawn_error";
-        shellOutputIssue?: boolean;
+        shellResult?: ShellResultReceipt;
         resultId?: string;
     }
     | {

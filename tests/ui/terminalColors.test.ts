@@ -44,10 +44,15 @@ test("nonzero command exit is neutral while tool and task runtime failures stay 
     const [code, output, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(code).toBe(0);
     expect(stderr).toBe("");
-    const frame: unknown = JSON.parse(output);
-    if (typeof frame !== "string") throw new Error("Missing terminal frame");
-    expect(frame).toContain("\x1b[31m⎿\x1b[39m");
-    expect(frame).not.toContain("\x1b[31m●\x1b[1m\x1b[36m Background command exited");
-    expect(frame).toContain("\x1b[31m●\x1b[1m\x1b[36m Background task failed");
-    expect(frame).toContain("\x1b[90mFAILED example.py::test_case\x1b[39m");
+    const frames: Record<string, {normal: string; transcript: string}> = JSON.parse(output);
+    for (const [id, expectedColor] of Object.entries({exit: 90, signal: 33, timeout: 33, cancelled: 90,
+        spawn: 31, outputLimit: 31, delivery: 31, unknown: 31})) {
+        for (const frame of Object.values(frames[id]!)) {
+            expect(frame).toContain(`\x1b[${expectedColor}m⎿\x1b[39m`);
+            expect(frame).toContain(`\x1b[${expectedColor}m●`);
+            if (expectedColor !== 31) expect(frame).not.toContain("\x1b[31m");
+            expect(frame).toContain("Command exited with code 1");
+            expect(frame).toContain("\x1b[90mFAILED example.py::test_case\x1b[39m");
+        }
+    }
 }, 10000);

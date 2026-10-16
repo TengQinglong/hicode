@@ -25,7 +25,7 @@ export async function processToolOutput(input: {
         : input.output;
     const normalized = {...original, content: contentText(original.content)};
     const outcome = normalized.outcome ?? input.outcome ?? "ok";
-    const uiData = outcome === "ok" ? normalized.uiData : undefined;
+    const uiData = outcome === "ok" || normalized.uiData?.type === "shell_result" ? normalized.uiData : undefined;
     const displayContent = normalized.displayContent ?? normalized.content;
     const receipt = {...(normalized.completedTask ? {completedTask: normalized.completedTask} : {}),
         ...(normalized.runningTask ? {runningTask: normalized.runningTask} : {})};
@@ -74,7 +74,8 @@ export async function processToolOutput(input: {
             modelContent: replaceContentText(original.content, `Operation outcome before output delivery: ${outcome}.\n` + buildPersistFailureMessage(input.toolName, preview, error)),
             displayContent: `${preview}\n\n(Failed to save full result; operation outcome: ${outcome})`,
             outcome: outcome === "ok" ? "output_failed" : outcome,
-            ...(uiData ? {uiData} : {}),
+            ...(uiData ? {uiData: uiData.type === "shell_result"
+                ? {...uiData, receipt: {...uiData.receipt, outputFailed: true}} : uiData} : {}),
         };
     }
 }

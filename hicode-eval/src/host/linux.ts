@@ -127,13 +127,14 @@ export class LinuxMachine {
     await this.containers.assert(id);
     await run(this.docker('exec', this.containers.name(id), 'sh', '-c', `test ! -d /eval/runs/${id} || touch /eval/runs/${id}/cancel`), { timeout: 10000 });
   }
-  private async collect(id: string, path: string): Promise<void> {
+  private async collect(state: Run, path: string): Promise<void> {
+    const id=state.id;
     if(!this.workerBundle)throw Error('Evidence collector is not initialized');
     const exporter=this.workerBundle.evidenceExporter();
     const stage = join(path, 'collecting'); await rm(stage, { recursive: true, force: true }); await mkdir(stage);
     const exported='/eval/evidence-export/'+id;
     // Preserve Linux case-distinct names and links in a reversible storage view.
-    await run(this.docker('exec',this.containers.name(id),'python3','-c',exporter.source,
+    await run(this.docker('exec',this.containers.name(id),state.dataset==='deep-swe'?'/opt/hicode-control/bin/python3':'python3','-c',exporter.source,
       'export','/eval/runs/'+id,exported),{timeout:300000});
     // Native build outputs can span several GiB; export has a separate bounded window.
     await run(this.docker('cp', this.containers.name(id) + ':'+exported+'/.', stage), { timeout: 300000 });
@@ -187,7 +188,7 @@ export class LinuxMachine {
     const output = await run(this.docker('exec', this.containers.name(state.id), 'python3', '/opt/hicode-eval/recovery.py', state.id), {timeout: 30000});
     const result = packetSchema.parse({ ...JSON.parse(output), type: 'result' });
     if (result.type !== 'result') throw Error('Invalid recovery result');
-    await this.collect(state.id, path);
+    await this.collect(state, path);
     return { ...result, note: 'Recovered from verified durable evidence; no Agent or verifier rerun.' };
   }
   /** Explicitly discard an uncollectible cancelled workspace, never a completed answer. */
@@ -299,14 +300,14 @@ print(json.dumps({'result':outcome,'recovery':record(root/'recovery.json')}))`;
       }
       const code = await proc.exited;
       if (code || !result || buffer.trim()) throw Error(note || (await stderr).replaceAll(credential, '[redacted]').slice(-1000) || 'Runner ended without confirmed completion');
-      try {await this.collect(state.id, path);}
+      try {await this.collect(state, path);}
       catch (error) {throw new EvidenceCollectionError(result, String(error).replaceAll(credential, '[redacted]').slice(-2000));}
       if (note) await Bun.write(join(path, 'error.txt'), note);
       return { ...result, ...(note ? { note } : {}) };
     } catch (error) {
       if (!(error instanceof EvidenceCollectionError)) {
         if (!result) await this.cancel(state.id).catch(() => {});
-        await this.collect(state.id, path).catch(() => {});
+        await this.collect(state, path).catch(() => {});
       }
       throw error;
     } finally { clearTimeout(timer); }

@@ -27,7 +27,8 @@ export class SessionUIEventCollector {
 
         if (event.type === "tool_result_delivery") {
             if (event.status === "failed") this.currentEvents = this.currentEvents.map(item =>
-                item.type === "tool_call" && item.toolCallId === event.toolCallId ? {...item, outcome: event.outcome} : item);
+                item.type === "tool_call" && item.toolCallId === event.toolCallId ? {...item, outcome: event.outcome,
+                    ...(item.shellResult ? {shellResult: {...item.shellResult, outputFailed: true}} : {})} : item);
             return;
         }
         if (event.type === "tool_call_start") {
@@ -72,6 +73,7 @@ export class SessionUIEventCollector {
                 outcome: event.outcome ?? "ok",
                 ...(event.outcome === "ok" && event.uiData?.type === "file_read" ? {fileRead: event.uiData.receipt} : {}),
                 ...(event.outcome === "ok" && event.uiData?.type === "agent_receipt" ? {agentReceipt: event.uiData.receipt} : {}),
+                ...(event.uiData?.type === "shell_result" ? {shellResult: event.uiData.receipt} : {}),
                 ...(event.completedTask ? {completedTask: event.completedTask} : {}),
             },
         ]);

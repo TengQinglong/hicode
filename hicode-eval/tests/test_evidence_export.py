@@ -1,4 +1,6 @@
 import json
+import hashlib
+import tarfile
 import os
 from pathlib import Path
 import tempfile
@@ -13,6 +15,7 @@ class EvidenceExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory).resolve();source=root/'source';source.mkdir()
             (source/'job.json').write_text(json.dumps({'dataset':'deep-swe'}))
+            for name in ['outcome.json','result.json']:(source/name).write_text(json.dumps({'execution':'completed','grading':'failed','uid':20000}))
             for name in ['project','baseline','verifier-project','verifier-home']:
                 package=source/name/'node_modules';package.mkdir(parents=True)
                 for index in range(3):(package/str(index)).write_text('original')
@@ -30,6 +33,104 @@ class EvidenceExportTest(unittest.TestCase):
             (source/'job.json').write_text(json.dumps({'dataset':'terminal-bench-2.1'}))
             export(source,root/'terminal')
             self.assertTrue((root/'terminal/baseline/node_modules/0').is_file())
+
+    def test_large_dependencies_are_verified_in_parts_without_changing_actor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory).resolve();source=root/'source';project=source/'project';project.mkdir(parents=True)
+            (source/'job.json').write_text(json.dumps({'dataset':'deep-swe'}))
+            for name in ['outcome.json','result.json']:(source/name).write_text(json.dumps({'execution':'completed','grading':'failed','uid':20000}))
+            (project/'answer.ts').write_bytes(b'original answer')
+            deps=project/'node_modules';deps.mkdir()
+            for i in range(45):(deps/str(i)).write_bytes(('dependency-%s' % i).encode())
+            (deps/'external').symlink_to('/not-exported/secret')
+            (deps/'cycle').symlink_to('.')
+            original=(deps/'0').stat()
+            with patch('evidence_export.MAX_FILES',20),patch('evidence_export.DEPENDENCY_PART_ENTRIES',15):
+                export(source,root/'export')
+            receipt=json.loads((root/'export/dependency-archives.json').read_text())
+            self.assertEqual(receipt['entries'],47)
+            self.assertFalse(receipt['autoRestore'])
+            self.assertEqual(receipt['originalPath'],'project/node_modules')
+            self.assertFalse((root/'export/project/node_modules').exists())
+            self.assertEqual((root/'export/project/answer.ts').read_bytes(),b'original answer')
+            self.assertEqual((deps/'0').stat().st_ino,original.st_ino)
+            members={}
+            for part in receipt['archives']:
+                path=root/'export'/part['path']
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),part['sha256'])
+                with tarfile.open(path,'r:gz') as archive:
+                    self.assertLessEqual(len(archive.getmembers()),15)
+                    for member in archive:
+                        members[member.name]=archive.extractfile(member).read() if member.isfile() else member.linkname
+            self.assertEqual(members['0'],b'dependency-0')
+            self.assertEqual(members['external'],'/not-exported/secret')
+            self.assertEqual(members['cycle'],'.')
+            # Repeat recovery produces the same verified archives; no source metadata is inserted.
+            with patch('evidence_export.MAX_FILES',20),patch('evidence_export.DEPENDENCY_PART_ENTRIES',15):
+                export(source,root/'second')
+            self.assertEqual(json.loads((root/'second/dependency-archives.json').read_text()),receipt)
+            self.assertFalse((source/'dependency-archives.json').exists())
+
+    def test_dependency_archiving_does_not_hide_source_overflow_or_change_other_datasets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory).resolve();source=root/'source';deps=source/'project/node_modules';deps.mkdir(parents=True)
+            (source/'job.json').write_text(json.dumps({'dataset':'terminal-bench-2.1'}))
+            for i in range(30):(deps/str(i)).write_text('dependency')
+            with patch('evidence_export.MAX_FILES',20),self.assertRaisesRegex(ValueError,'file count'):
+                export(source,root/'terminal')
+            (source/'job.json').write_text(json.dumps({'dataset':'deep-swe'}))
+            for name in ['outcome.json','result.json']:(source/name).write_text(json.dumps({'execution':'completed','grading':'failed','uid':20000}))
+            for i in range(30):(source/('source-'+str(i))).write_text('answer')
+            with patch('evidence_export.MAX_FILES',20),self.assertRaisesRegex(ValueError,'Non-dependency'):
+                export(source,root/'deep')
+            self.assertTrue((deps/'0').exists())
+            self.assertFalse((root/'deep').exists())
+
+    def test_dependency_mutation_aborts_export_and_keeps_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory).resolve();source=root/'source';deps=source/'project/node_modules';deps.mkdir(parents=True)
+            (source/'job.json').write_text(json.dumps({'dataset':'deep-swe'}))
+            for name in ['outcome.json','result.json']:(source/name).write_text(json.dumps({'execution':'completed','grading':'failed','uid':20000}))
+            for i in range(30):(deps/str(i)).write_text('original')
+            addfile=tarfile.TarFile.addfile
+            def changing(archive,info,stream=None):
+                result=addfile(archive,info,stream)
+                if info.name=='0':(deps/'0').write_text('changed during export')
+                return result
+            with patch('evidence_export.MAX_FILES',20),patch.object(tarfile.TarFile,'addfile',changing),self.assertRaisesRegex(ValueError,'changed during export'):
+                export(source,root/'export')
+            self.assertFalse((root/'export').exists())
+            self.assertEqual((deps/'0').read_text(),'changed during export')
+
+    def test_archives_preserve_hardlink_bytes_and_nested_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory).resolve();source=root/'source';deps=source/'project/node_modules';(deps/'package').mkdir(parents=True)
+            (source/'job.json').write_text(json.dumps({'dataset':'deep-swe'}))
+            for name in ['outcome.json','result.json']:(source/name).write_text(json.dumps({'execution':'completed','grading':'failed','uid':20000}))
+            for i in range(30):(deps/'package'/str(i)).write_text('original')
+            os.link(deps/'package/0',deps/'linked')
+            with patch('evidence_export.MAX_FILES',20),patch('evidence_export.DEPENDENCY_PART_ENTRIES',15):
+                export(source,root/'export')
+            receipt=json.loads((root/'export/dependency-archives.json').read_text())
+            count=0
+            for part in receipt['archives']:
+                with tarfile.open(root/'export'/part['path'],'r:gz') as archive:
+                    for member in archive:
+                        if member.isfile():self.assertEqual(archive.extractfile(member).read(),b'original');count+=1
+            self.assertEqual(count,31)
+
+    def test_large_dependencies_require_consistent_terminal_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory).resolve();source=root/'source';deps=source/'project/node_modules';deps.mkdir(parents=True)
+            (source/'job.json').write_text(json.dumps({'dataset':'deep-swe'}))
+            for i in range(30):(deps/str(i)).write_text('original')
+            with patch('evidence_export.MAX_FILES',20),self.assertRaises(FileNotFoundError):export(source,root/'unsealed')
+            (source/'outcome.json').write_text(json.dumps({'execution':'completed','grading':'failed','uid':20000}))
+            (source/'result.json').write_text(json.dumps({'execution':'completed','grading':'passed','uid':20000}))
+            with patch('evidence_export.MAX_FILES',20),self.assertRaisesRegex(ValueError,'sealed outcome'):export(source,root/'mismatched')
+            self.assertFalse((root/'unsealed').exists())
+            self.assertFalse((root/'mismatched').exists())
+            self.assertEqual((deps/'0').read_text(),'original')
 
     def test_case_and_unicode_aliases_get_unique_storage_names(self):
         names=['include', 'INCLUDE', 'é', 'e\u0301', 'plain']

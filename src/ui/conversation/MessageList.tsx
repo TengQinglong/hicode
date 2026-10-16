@@ -1,3 +1,4 @@
+import {shellResultColor} from "./shellResultColor.js";
 import {Box, Static, Text} from "ink";
 import type {UIThread} from "./types.js";
 import {COLORS, SYMBOLS} from "../theme.js";
@@ -109,7 +110,10 @@ function ToolResultLines({
         : thread.name === "skill" && thread.status === "done" && thread.outcome === "ok"
         ? ["Instructions loaded · ctrl+o to expand"]
         : summarizeToolResult(thread.name, thread.result);
-    const failed = thread.outcome && thread.outcome !== "ok";
+    const markerColor = thread.outcome === "output_failed" || thread.outcome === "denied" ? COLORS.error
+        : thread.uiData?.type === "shell_result" ? shellResultColor(thread.uiData.receipt)
+        : thread.outcome === "interrupted" ? COLORS.dim
+        : thread.outcome && thread.outcome !== "ok" ? COLORS.error : COLORS.dim;
     return (
         <Box marginLeft={2} flexDirection="column">
             {lines.map((line, index) => (
@@ -117,7 +121,7 @@ function ToolResultLines({
                     key={`${index}:${line.slice(0, 40)}`}
                     line={line}
                     marker={index === 0 ? "⎿" : ""}
-                    markerColor={index === 0 && failed ? COLORS.error : COLORS.dim}
+                    markerColor={index === 0 ? markerColor : COLORS.dim}
                 />
             ))}
             {thread.persisted && (
@@ -143,15 +147,17 @@ function TaskNotificationView({
             : "failed";
     const kind = thread.kind === "agent" ? "Background Agent" : "Background task";
     const commandExit = thread.kind === "shell" && thread.status === "failed" &&
-        thread.shellTermination === "exit" && !thread.shellOutputIssue;
+        thread.shellResult?.termination === "exit" && !thread.shellResult.outputFailed;
     const commandTimeout = thread.kind === "shell" && thread.status === "failed" &&
-        thread.shellTermination === "timeout" && !thread.shellOutputIssue;
+        thread.shellResult?.termination === "timeout" && !thread.shellResult.outputFailed;
     const title = commandExit ? "Background command exited"
         : commandTimeout ? "Background command timed out" : `${kind} ${state}`;
     const label = thread.kind === "shell"
         ? describeToolCall("bash", JSON.stringify({command: thread.label})).detail
         : thread.label;
-    const color = thread.status === "failed" && !commandExit ? COLORS.error : COLORS.toolName;
+    const color = thread.kind === "shell" && thread.shellResult ? shellResultColor(thread.shellResult)
+        : thread.kind === "shell" && thread.status === "cancelled" ? COLORS.dim
+        : thread.status === "failed" ? COLORS.error : COLORS.toolName;
     if (thread.kind === "agent") return <Box marginTop={1}><Text color={color} wrap="truncate-end">{`${thread.status === "completed" ? "✓" : "●"} ${label} · ${state} · /tasks`}</Text></Box>;
     return (
         <Box flexDirection="column" marginTop={1}>

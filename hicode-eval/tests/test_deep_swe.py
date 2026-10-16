@@ -2,6 +2,9 @@ import copy
 import hashlib
 import json
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -101,12 +104,15 @@ class PreparedGoTest(unittest.TestCase):
             (actor/'goyacc').write_text('untrusted Actor tool')
             for name in ['goyacc','go-ctrf-json-reporter']:
                 tool=source/name;tool.write_text('fixed '+name);tool.chmod(0o755)
-            with patch('eval_datasets.deep_swe.Path',return_value=source):target=prepare_verifier_go(home)
-            self.assertEqual(target,home/'go/bin')
+            with patch('eval_datasets.deep_swe.Path',return_value=source):tools=prepare_verifier_go(home)
+            target=home/'go/bin'
+            self.assertEqual(set(tools),{target/'goyacc',target/'go-ctrf-json-reporter'})
             self.assertEqual((target/'goyacc').read_text(),'fixed goyacc')
             self.assertEqual((target/'go-ctrf-json-reporter').read_text(),'fixed go-ctrf-json-reporter')
             self.assertEqual((target/'goyacc').stat().st_mode & 0o777,0o555)
-            self.assertEqual(target.stat().st_mode & 0o777,0o555)
+            self.assertEqual(target.stat().st_mode & 0o777,0o755)
+            (target/'anko_test.log').write_text('private test log')
+            self.assertEqual((target/'anko_test.log').read_text(),'private test log')
 
     def test_fixed_tool_links_and_non_executables_are_rejected(self):
         from eval_datasets.deep_swe import prepare_verifier_go
@@ -120,6 +126,48 @@ class PreparedGoTest(unittest.TestCase):
             tool.unlink();tool.write_text('not executable');tool.chmod(0o644)
             with patch('eval_datasets.deep_swe.Path',return_value=source),self.assertRaisesRegex(ValueError,'regular executable'):
                 prepare_verifier_go(home)
+
+    @unittest.skipUnless(sys.platform=='linux' and os.getuid()==0 and shutil.which('bwrap')
+                         and os.environ.get('HICODE_EVAL_ACTOR_SMOKE')=='1',
+                         'Requires the dedicated Linux namespace environment')
+    def test_private_gopath_writes_do_not_make_fixed_tools_writable(self):
+        from eval_datasets.deep_swe import prepare_verifier_go
+        with tempfile.TemporaryDirectory(prefix='verifier-go-',dir='/eval') as tmp:
+            root=Path(tmp).resolve();root.chmod(0o755)
+            source=root/'fixed';source.mkdir()
+            binary=source/'fixed-tool';binary.write_text('#!/bin/sh\nprintf FIXED_TOOL_OK');binary.chmod(0o755)
+            project=root/'project';home=root/'home';logs=root/'logs';control=root/'control';tests=root/'tests'
+            for path in [project,home,logs,control,tests]:path.mkdir()
+            (logs/'verifier').mkdir()
+            with patch('eval_datasets.deep_swe.Path',return_value=source):tools=prepare_verifier_go(home)
+            subprocess.run(['chown','-hR','65534:65534',str(home),str(project)],check=True)
+            def demote():os.setgroups([]);os.setgid(65534);os.setuid(65534)
+            script='''import errno,os,subprocess
+from pathlib import Path
+home=Path(os.environ['HOME']);binary=home/'go/bin/fixed-tool'
+log=home/'go/bin/anko_test.log';log.write_text('first');log.write_text('second')
+assert log.read_text()=='second'
+generated=home/'go/bin/generated';generated.write_text('test-owned');generated.unlink()
+assert subprocess.check_output([str(binary)],text=True)=='FIXED_TOOL_OK'
+for mutate in [lambda:binary.write_text('changed'),lambda:binary.chmod(0o777),
+               lambda:binary.unlink(),lambda:binary.rename(binary.with_name('replaced'))]:
+    try:mutate()
+    except OSError as error:assert error.errno in {errno.EROFS,errno.EBUSY,errno.EPERM,errno.EACCES},error
+    else:raise AssertionError('Fixed tool changed')
+assert subprocess.check_output([str(binary)],text=True)=='FIXED_TOOL_OK'
+assert not Path('/root/go/bin').exists()
+print('PRIVATE_GOPATH_OK')
+'''
+            mounts=[arg for tool in tools for arg in ['--ro-bind',str(tool),str(tool)]]
+            runtime=[arg for name in ['/usr','/bin','/sbin','/lib','/lib64'] if Path(name).exists()
+                     for arg in ['--ro-bind',name,name]]
+            with patch('protocol.actor_readonly_mounts',return_value=runtime):
+                args=namespace_argv([*mounts,'python3','-c',script],project,home,logs,control,
+                                    tests=tests,isolated_network=True,verifier_release='/release')
+            result=subprocess.run(args,env={'PATH':os.environ['PATH'],'HOME':str(home),'LANG':'C.UTF-8'},
+                                  preexec_fn=demote,capture_output=True,text=True,timeout=15)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIn('PRIVATE_GOPATH_OK',result.stdout)
 
 
 class PreparedPnpmTest(unittest.TestCase):
@@ -142,6 +190,32 @@ class PreparedPnpmTest(unittest.TestCase):
             (source/'escape').symlink_to(root)
             with patch('eval_datasets.deep_swe.Path',side_effect=paths),self.assertRaisesRegex(ValueError,'escapes tool cache'):
                 prepare_verifier_pnpm()
+
+
+class PreparedCorepackTest(unittest.TestCase):
+    def test_only_fixed_pnpm_packages_are_visible_in_the_private_verifier(self):
+        from eval_datasets.deep_swe import prepare_verifier_corepack
+        from protocol import verifier_readonly_mounts
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();source=root/'fixed';binary=source/'10.24.0/bin/pnpm.cjs'
+            binary.parent.mkdir(parents=True);binary.write_text('fixed pnpm')
+            (source/'current').symlink_to(source/'10.24.0')
+            target=root/'staged'
+            with patch('eval_datasets.deep_swe.Path',side_effect=lambda name:source if name=='/root/.cache/node/corepack/v1/pnpm' else target):
+                prepare_verifier_corepack()
+            self.assertEqual((target/'v1/pnpm/current/bin/pnpm.cjs').read_text(),'fixed pnpm')
+            self.assertFalse((target/'v1/pnpm/current').readlink().is_absolute())
+            def mounted(name):
+                return target if name=='/opt/hicode-verifier-corepack' else root/'absent'
+            with patch('protocol.Path',side_effect=mounted):args=verifier_readonly_mounts()
+            self.assertIn('COREPACK_HOME',args)
+            self.assertIn(['--ro-bind',str(target),str(target)],[args[i:i+3] for i in range(len(args)-2)])
+            self.assertIn('COREPACK_ENABLE_NETWORK',args)
+            self.assertNotIn(str(source),args)
+            self.assertNotIn('/root',args)
+            (source/'escape').symlink_to(root)
+            with patch('eval_datasets.deep_swe.Path',side_effect=lambda name:source if name=='/root/.cache/node/corepack/v1/pnpm' else root/'another'),self.assertRaisesRegex(ValueError,'escapes package cache'):
+                prepare_verifier_corepack()
 
 
 class PreparedBrowserTest(unittest.TestCase):

@@ -44,8 +44,7 @@ export function createTaskNotificationThread(
         label: notification.label,
         status: notification.status,
         summary: notification.summary,
-        ...(notification.shellTermination ? {shellTermination: notification.shellTermination} : {}),
-        ...(notification.shellOutputIssue ? {shellOutputIssue: true} : {}),
+        ...(notification.shellResult ? {shellResult: notification.shellResult} : {}),
         ...(notification.resultId ? {resultId: notification.resultId} : {}),
     };
 }
@@ -110,6 +109,7 @@ export function threadsFromHistory(
         if (!target || target.role !== "tool_call") continue;
         target.outcome = event.outcome;
         if (event.completedTask) target.completedTask = event.completedTask;
+        if (event.shellResult) target.uiData = {type: "shell_result", receipt: event.shellResult};
         if (event.fileRead && event.outcome === "ok") target.uiData = {type: "file_read", receipt: event.fileRead};
         if (event.agentReceipt && event.outcome === "ok") target.uiData = {type: "agent_receipt", receipt: event.agentReceipt};
     }
@@ -395,7 +395,9 @@ export function reduceThreads(
             return threads.map((t) =>
                 t.role === "tool_call" && t.toolCallId === event.toolCallId
                     ? event.status === "saved" ? {...t, persisted: event.persisted}
-                        : {...t, outcome: event.outcome, result: event.result, hiddenByFileChange: false}
+                        : {...t, outcome: event.outcome, result: event.result, hiddenByFileChange: false,
+                            ...(t.uiData?.type === "shell_result"
+                                ? {uiData: {...t.uiData, receipt: {...t.uiData.receipt, outputFailed: true}}} : {})}
                     : t
             );
     }

@@ -271,6 +271,15 @@ def verifier_readonly_mounts():
                 raise ValueError('Prepared pnpm link escapes tool cache')
         # Prepared from fixed image tools, never the image's Home or user settings.
         result += ['--ro-bind', str(tools), str(tools), '--setenv', 'PNPM_HOME', str(tools.parent)]
+    cache = Path('/opt/hicode-verifier-corepack')
+    if cache.exists() or cache.is_symlink():
+        if cache.is_symlink() or not cache.is_dir() or cache.resolve() != cache:
+            raise ValueError('Invalid prepared Corepack cache')
+        for item in cache.rglob('*'):
+            if item.is_symlink() and not item.resolve(strict=True).is_relative_to(cache):
+                raise ValueError('Prepared Corepack link escapes package cache')
+        result += ['--ro-bind', str(cache), str(cache), '--setenv', 'COREPACK_HOME', str(cache),
+                   '--setenv', 'COREPACK_ENABLE_NETWORK', '0']
     return result
 
 

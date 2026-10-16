@@ -137,7 +137,6 @@ async function runAgentCore(
             ? undefined
             : Math.max(1, Math.floor(options.maxConsecutiveDeniedToolCalls));
     const todoProgress = new TodoProgress();
-    let completionGateUsed = false;
     let hookContinuationUsed = false;
     let completionNudge: string | undefined;
     let emptyResponseRetryUsed = false;
@@ -386,16 +385,18 @@ async function runAgentCore(
                     ].join("\n");
                     continue;
                 }
-                const completionReminder = textContent && !completionGateUsed
+                const completionReminder = textContent
                     ? formatTodoCompletionReminder(
                         textContent,
                         options.getTodos?.() ?? []
                     )
                     : undefined;
-                if (completionReminder && hasNextIteration) {
+                if (completionReminder) {
                     history.pop();
-                    completionGateUsed = true;
+                    await draft.finish("discarded");
+                    if (!hasNextIteration) break;
                     completionNudge = completionReminder;
+                    await appendQueuedInputs(inputChannel.drainSafeBoundary());
                     continue;
                 }
                 if (hasNextIteration) {

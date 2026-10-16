@@ -117,7 +117,9 @@ class ActorFilesystemTest(unittest.TestCase):
             mounts = verifier_readonly_mounts()
         self.assertEqual(mounts, ['--ro-bind', '/opt/ctrf', '/opt/ctrf', '--ro-bind', '/opt/jest-ctrf', '/opt/jest-ctrf',
             '--ro-bind', '/opt/hicode-verifier-pnpm/.tools', '/opt/hicode-verifier-pnpm/.tools',
-            '--setenv', 'PNPM_HOME', '/opt/hicode-verifier-pnpm'])
+            '--setenv', 'PNPM_HOME', '/opt/hicode-verifier-pnpm',
+            '--ro-bind', '/opt/hicode-verifier-corepack', '/opt/hicode-verifier-corepack',
+            '--setenv', 'COREPACK_HOME', '/opt/hicode-verifier-corepack', '--setenv', 'COREPACK_ENABLE_NETWORK', '0'])
         with patch('protocol.actor_readonly_mounts', return_value=[]), \
              patch('protocol.verifier_readonly_mounts', return_value=mounts) as reporters:
             actor = namespace_argv(['bun'], '/p', '/h', '/l', '/c', actor_release='/release', actor_events='/events')
@@ -126,6 +128,7 @@ class ActorFilesystemTest(unittest.TestCase):
         self.assertNotIn('/opt/ctrf', actor)
         self.assertNotIn('/opt/jest-ctrf', actor)
         self.assertNotIn('/opt/hicode-verifier-pnpm/.tools', actor)
+        self.assertNotIn('/opt/hicode-verifier-corepack', actor)
         self.assertNotIn(['--ro-bind', '/root', '/root'], [verifier[i:i+3] for i in range(len(verifier)-2)])
         self.assertIn('/opt/jest-ctrf', verifier)
         self.assertNotIn(['--ro-bind', '/opt', '/opt'], [verifier[i:i+3] for i in range(len(verifier)-2)])

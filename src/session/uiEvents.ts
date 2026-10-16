@@ -1,3 +1,4 @@
+import type {ShellResultReceipt} from "../tools/bash/receipt.js";
 import type {FileReadReceipt} from "../tools/readFile/receipt.js";
 import type {AgentReceipt} from "../tools/agent/receipt.js";
 import type {FileChange} from "../fileChanges/types.js";
@@ -22,6 +23,7 @@ interface PersistedToolCallUIEvent {
     outcome: ToolOutcome;
     agentReceipt?: AgentReceipt;
     fileRead?: FileReadReceipt;
+    shellResult?: ShellResultReceipt;
     completedTask?: TaskResultReceipt;
 }
 

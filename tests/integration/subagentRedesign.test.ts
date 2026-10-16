@@ -57,12 +57,13 @@ test("custom child inherits ordinary tools and parent model, owns Todo and Skill
     });
 });
 
-test("unfinished Todo returns incomplete after one reminder and stays available for followup", async () => {
+test("unfinished Todo survives interruption after repeated final attempts and stays available for followup", async () => {
     await withTempProject(async cwd => {
         const parent = createTestContext(cwd);
+        const interrupted = new AbortController();
         const fake = createFakeLLM([
             assistantToolCall("todo_write", {todos: [todo]}, "plan"),
-            assistantText("Finished."), assistantText("Still missing access."),
+            assistantText("Finished."), () => {interrupted.abort("user-cancel"); return assistantText("Still missing access.");},
             options => {
                 expect(JSON.stringify(options.messages)).toContain("in_progress");
                 expect(JSON.stringify(options.messages)).toContain("The unfinished plan is carried forward");
@@ -71,9 +72,8 @@ test("unfinished Todo returns incomplete after one reminder and stays available 
             }, assistantText("Verified after receiving access."),
         ]);
         const thread = createSubagentThreadForTest({agentId: "continuation", parentContext: parent, onEvent() {}, registry: registry(), agentOptions: {callLLM: fake.callLLM}}, assignment);
-        const first = await thread.run({prompt: "work", signal: parent.signal, inputChannel: EMPTY_AGENT_INPUT_CHANNEL});
-        expect(first.reason).toBe("incomplete");
-        expect(first.reply).toContain("Unfinished child tasks");
+        const first = await thread.run({prompt: "work", signal: interrupted.signal, inputChannel: EMPTY_AGENT_INPUT_CHANNEL});
+        expect(first.reason).toBe("interrupted");
         expect(first.iterations).toBe(3);
         const second = await thread.run({prompt: "continue", signal: parent.signal, inputChannel: EMPTY_AGENT_INPUT_CHANNEL});
         expect(second.reason).toBe("completed");
@@ -145,10 +145,23 @@ test("a read-only custom role cannot gain writes from a writable launch", async 
     });
 });
 
-test("background task snapshots expose independent todos and retain incomplete status", async () => {
+test("background task interruption retains unresolved pending todos", async () => {
     await withTempProject(async cwd => {
         const parent = createTestContext(cwd);
-        const fake = createFakeLLM([assistantToolCall("todo_write", {todos: [{...todo, status: "pending"}]}, "plan"), assistantText("Waiting for input.")]);
+        const waiting = Promise.withResolvers<void>();
+        const fake = createFakeLLM([
+            assistantToolCall("todo_write", {todos: [{...todo, status: "pending"}]}, "plan"),
+            assistantText("Waiting for input."),
+            async options => {
+                expect(JSON.stringify(options.messages)).toContain("still has unfinished todos");
+                waiting.resolve();
+                await new Promise<void>((_resolve, reject) => {
+                    if (options.signal?.aborted) reject(options.signal.reason);
+                    else options.signal?.addEventListener("abort", () => reject(options.signal?.reason), {once: true});
+                });
+                return assistantText("Not reached.");
+            },
+        ]);
         const runtime = createTaskRuntimeForTest(cwd, parent.shellRunner, (options, request) =>
             createSubagentThreadForTest({...options, registry: registry(), agentOptions: {callLLM: fake.callLLM}}, request), undefined, registry());
         const tasks = runtime.forSession({sessionId: parent.sessionId, toolResultStore: parent.toolResultStore});
@@ -158,9 +171,11 @@ test("background task snapshots expose independent todos and retain incomplete s
             const finished = new Promise<void>(resolve => {finish = resolve;});
             const unsubscribe = tasks.subscribe(event => {if (event.type === "task_finished") finish();});
             const task = await tasks.startAgent({request: assignment, parentContext: parent});
+            await waiting.promise;
+            await tasks.interrupt(task.id);
             await finished;
             unsubscribe();
-            expect(await tasks.get(task.id)).toMatchObject({status: "failed", reason: "incomplete", progress: {todos: [{...todo, status: "pending"}]}});
+            expect(await tasks.get(task.id)).toMatchObject({status: "interrupted", reason: "interrupted", progress: {todos: [{...todo, status: "pending"}]}});
         } finally {await runtime.close();}
     });
 });

@@ -31,8 +31,11 @@ describe("large tool result integration", () => {
         },
       ]);
       const history: Message[] = [{role: "system", content: "system"}];
-      const result = await runAgent("定位失败", history, () => {}, createTestContext(cwd), {callLLM: fake.callLLM});
+      const events: AgentEvent[] = [];
+      const result = await runAgent("定位失败", history, event => {events.push(event);}, createTestContext(cwd), {callLLM: fake.callLLM});
       expect(result.reply).toBe("已定位断言");
+      expect(events).toContainEqual(expect.objectContaining({type: "tool_call_end", toolCallId: "failed-test",
+        outcome: "failed", uiData: {type: "shell_result", receipt: {termination: "exit", outputFailed: false}}}));
       const bashCalls = history.flatMap(message => message.role === "assistant" ? message.tool_calls ?? [] : []).filter(call => call.function.name === "bash");
       expect(bashCalls).toHaveLength(2);
       expect(bashCalls.filter(call => JSON.parse(call.function.arguments).command.startsWith("node -e"))).toHaveLength(1);

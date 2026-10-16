@@ -429,3 +429,23 @@ test("one-shot Host omits hard timeout and rejects explicit yield without starti
         } finally {await resources.close();}
     });
 });
+
+test("ordinary nonzero exits retain structured presentation through inline Bash and task status/wait", async () => {
+    await withTempProject(async cwd => {
+        const {resources, tasks, ctx} = fixture(cwd);
+        try {
+            const inline = await executeToolResult("bash", JSON.stringify({command: "printf 'EXIT=0'; exit 1"}), ctx, "inline-exit");
+            const uiData = {type: "shell_result", receipt: {termination: "exit", outputFailed: false}};
+            expect(inline).toMatchObject({outcome: "failed", uiData});
+            expect(inline.modelContent).toContain("Command exited with code 1");
+            expect(inline.modelContent).toContain("EXIT=0");
+            const task = await tasks.startShell({command: "printf 'EXIT=0'; exit 1", cwd, toolCallId: "background-exit"});
+            const waited = await executeToolResult("task", JSON.stringify({action: "wait", task_id: task.id, wait_ms: 1000}), ctx, "wait-exit");
+            const status = await executeToolResult("task", JSON.stringify({action: "status", task_id: task.id}), ctx, "status-exit");
+            for (const result of [waited, status]) {
+                expect(result).toMatchObject({outcome: "failed", uiData});
+                expect(result.modelContent).toContain("exit code 1");
+            }
+        } finally {await resources.close();}
+    });
+});

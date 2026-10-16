@@ -342,3 +342,22 @@ test.each([false,true])('deferred preparation waits for evaluation or is cancell
   }
  }finally{finish();await lab.close();validate.mockRestore();resolve.mockRestore();prepare.mockRestore();build.mockRestore();execute.mockRestore();dispose.mockRestore();boundary.mockRestore();await f.cleanup();}
 });
+
+
+test('worker startup and read-only status keep queued attempts idle without model execution',async()=>{
+ const f=await fixture(),task=await seed(f,'queued-maintenance'),lab=new Lab(f.config,'unused');
+ const id='a'.repeat(16),batchId='f'.repeat(16);
+ await save(f.layout.batch(batchId),batchSchema.parse({version:1,id:batchId,name:'queued maintenance',taskRefs:[{dataset:task.dataset,id:task.id}],runIds:[id],createdAt:1,concurrency:1,budget:{},model:f.config.model,payload:{}}));
+ await save(join(f.layout.run(id),'state.json'),runSchema.parse({version:1,id,batchId,dataset:task.dataset,task:task.id,state:'queued',execution:'pending',grading:'pending',collection:'pending',model:'fake',budget:{},createdAt:1,updatedAt:1}));
+ const execute=spyOn(LinuxMachine.prototype,'execute').mockRejectedValue(Error('Unexpected paid execution'));
+ const prepare=spyOn(LinuxMachine.prototype,'prepare').mockRejectedValue(Error('Unexpected execution initialization'));
+ let worker:ReturnType<typeof serveWorker>|undefined;
+ try{
+  await lab.init();worker=serveWorker(lab,0);
+  const client=new Client(worker.port);await client.request('health');const status=await client.status();
+  expect(status.schedulingBlocked).toBe(false);
+  expect(status.runs[0]).toMatchObject({id,state:'queued',execution:'pending'});
+  await Bun.sleep(20);expect(execute).not.toHaveBeenCalled();expect(prepare).not.toHaveBeenCalled();
+  expect(lab.runs.get(id)?.state).toBe('queued');
+ }finally{worker?.stop(true);await lab.close();execute.mockRestore();prepare.mockRestore();await f.cleanup();}
+});

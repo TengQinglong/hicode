@@ -107,11 +107,11 @@ HiCode作答与续跑启动必须显式使用冻结release的tsconfig（bun --ts
 
 DeepSWE 作答失败但完整停止的原答案也可补判：必须校验收集哈希、保存完整的失败事件、shutdown 停机证明和容器销毁回执；补判仅更新独立判题结果，不能把 failed 执行改成 completed。
 
-DeepSWE 的 Go 私有判题从固定镜像 `/root/go/bin` 校验并复制普通可执行文件到新 verifier Home 的 `go/bin`，在原 GOPATH 位置只读挂载；保留独立可写 Home 和模块缓存，不使用 Actor 安装的工具，不暴露镜像 Home 或在禁网判题时下载。
+DeepSWE 的 Go 私有判题从固定镜像 `/root/go/bin` 校验并复制普通可执行文件到新 verifier Home 的 `go/bin`，只对这些已校验的工具文件逐个只读挂载；`go/bin` 目录保持本题用户可写，允许测试新建日志或自己的构建产物，不把整目录设为只读。保留独立可写 Home 和模块缓存，不使用 Actor 安装的工具，不暴露镜像 Home 或在禁网判题时下载。
 
 只有用户明确要求放弃已取消且收集失败的现场，才可通过同一 worker 的 `abandon-cancelled-run` 结束该尝试；先复用原 recovery 校验真实停机和 cancelled/unavailable 结果，保存 runs/<id>/abandonment.json 停机证明，再销毁本题容器。保留本机日志，明确丢弃未完整收集的工作区；collection 仍为 retained，不提供续跑、不造完整回执或通过成绩。普通取消和 recover 不自动丢弃现场。
 
-封存完成的 DeepSWE 现场因依赖条目超限时，可在停机证据校验后仅将 project/node_modules 分成每包最多 50000 条目的只读存储归档；逐文件核对字节、链接和未变更状态，记录 runs/<id>/evidence/dependency-archives.json 及归档 SHA256，保留源码、Git、补丁、日志与原判不变。原依赖在容器中保留至同一 worker 完成收集与销毁；不抬高收集的 100000 条目／8 GiB 边界。依赖包只是保留证据，不作为自动续跑输入、不自动解压；补判从固定镜像重建依赖。
+DeepSWE 正常收尾和 retained 恢复共用冻结的 evidence_export，并使用 ARM64 原生控制 Python：完整 Actor 因 project/node_modules 超过 100000 条目时，自动只在导出视图将该依赖树分成每包最多 50000 条目的存储归档，逐文件回读校验字节、模式、链接及未变更状态；dependency-archives.json 记录原路径、条目、原字节数、树哈希和分包 SHA256。依赖树另有 1000000 条目预算，原始依赖与其他证据合计仍限 8 GiB，导出文件仍限 100000 条目／8 GiB；非依赖源码／日志超限继续拒绝。原 Actor、Git、补丁和日志不改，不删除原依赖；失败清理导出视图并保留现场，重试重新生成。归档不自动解压、不作为自动续跑依赖，补判从固定镜像重建依赖。
 
 DeepSWE原题使用缩写Git基线时，declaredBaseCommit保存原始引用，baseCommit冻结官方完整40位提交，必须核验前缀与固定镜像HEAD；不改原题metadata、collect、文件哈希或验收。镜像型题的特殊依赖按审定preparation脚本构建独立task层，核验输入哈希，不通过修改活动题共享运行配方来补依赖。
 
@@ -122,3 +122,5 @@ DeepSWE原题使用缩写Git基线时，declaredBaseCommit保存原始引用，b
 DeepSWE 固定镜像含 /root/.cache/ms-playwright 时，作答准备和独立判题将经校验的浏览器缓存复制到 /opt/hicode-task/ms-playwright，内部链接须留在缓存内并重写为相对链接；限定25000条目／2 GiB，只复制普通文件、目录和内部链接。目录通过现有依赖视图只读挂载，两种独立 Home 使用同一 PLAYWRIGHT_BROWSERS_PATH；不暴露/root、不使用Actor下载结果、不在禁网判题时下载。无该缓存的题目不追加浏览器依赖。修改执行模块须等全部评测／构建空闲后重启worker生效。
 
 DeepSWE 的 Go 镜像准备必须用固定源镜像中 `GOTOOLCHAIN=local go env GOMODCACHE` 的实际目录复制模块与工具链缓存到 `/opt/hicode-go/pkg/mod`，不得假设缓存位于 `/root/go/pkg`；源缓存缺失或为 symlink 时构建失败。Actor 与独立 verifier 均须在禁网隔离视图中验证工具链和所需模块可读，不能以目录存在代替可用性验证。
+
+DeepSWE 私有 verifier 的 Corepack 缓存只从固定镜像 /root/.cache/node/corepack/v1/pnpm 经有界校验复制到 /opt/hicode-verifier-corepack，保持内部链接并只读挂载；仅私有判题设置 COREPACK_HOME 和 COREPACK_ENABLE_NETWORK=0，Actor 不可见，不挂载镜像 Home、不在判题时下载。

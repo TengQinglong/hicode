@@ -1,3 +1,4 @@
+import {shellResultUI} from "./receipt.js";
 import {captureApprovalEvidence} from "../../permissions/evidence.js";
 import {noMatchSearch, shellOutcome} from "./result.js";
 import {formatTaskHeader} from "../../tasks/format.js";
@@ -433,13 +434,14 @@ export const bashTool: Tool<typeof inputSchema> = {
                         signal: ctx.signal, onHandoff: () => {interaction = undefined;}});
                 if (started.kind === "inline") {
                     const status = started.outputIssue ? `\nOutput delivery failed: ${started.outputIssue}` : "";
-                    return {content: (started.persisted ? formatShellStatus(started.result) : formatShellResult(started.result, noMatchSearch(command, started.result))) + status,
+                    return {...shellResultUI(started.result.termination, !!started.outputIssue), content: (started.persisted ? formatShellStatus(started.result) : formatShellResult(started.result, noMatchSearch(command, started.result))) + status,
                         ...(started.persisted ? {persisted: started.persisted, displayContent: formatShellStatus(started.result) + "\n" + started.persisted.preview + status} : {}),
                         outcome: started.outputIssue && shellOutcome(command, started.result) === "ok" ? "output_failed" as const : shellOutcome(command, started.result)};
                 }
                 const task = started.task;
                 if (task.status !== "running") {
                     return {
+                        ...shellResultUI(task.termination, !!task.outputIssue),
                         content: formatObservedBackgroundTask(task, !run_in_background),
                         completedTask: {taskId: task.id, notificationId: taskNotificationId(task.id, 1)},
                         outcome: task.outputIssue
@@ -498,6 +500,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                     result.outputComplete === false;
                 if (!shouldPersist || result.termination.kind === "aborted") {
                     return {
+                        ...shellResultUI(result.termination),
                         content: formatShellResult(result, noMatches),
                         outcome: noMatches ? "ok" as const : shellOutcome(command, result),
                     };
@@ -511,6 +514,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                         complete: result.outputComplete,
                     });
                     return {
+                        ...shellResultUI(result.termination),
                         content: formatShellStatus(result),
                         displayContent: `${formatShellStatus(result)}\n${persisted.preview}`,
                         persisted,
@@ -518,6 +522,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                     };
                 } catch (error) {
                     return {
+                        ...shellResultUI(result.termination, true),
                         content: `${formatShellResult(result)}\n\nFailed to save full output: ${error instanceof Error ? error.message : String(error)}. Operation effects were not rolled back; inspect before retrying.`,
                         outcome: shellOutcome(command, result) === "ok" ? "output_failed" as const : shellOutcome(command, result),
                     };

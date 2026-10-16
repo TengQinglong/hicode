@@ -1,3 +1,4 @@
+import {shellResultUI} from "../bash/receipt.js";
 import {formatTaskHeader, formatTaskSummary, isTaskId} from "../../tasks/format.js";
 import {taskLookupFailure} from "./recovery.js";
 import {zodToJsonSchema} from "zod-to-json-schema";
@@ -148,7 +149,7 @@ export const taskTool: Tool<typeof inputSchema> = {
                 ctx.taskJoin?.markReported(completed);
                 return {content, outcome: completed.status === "failed" || completed.outputIssue ? "failed" : "ok"};
             }
-            return {content,
+            return {content, ...shellResultUI(completed.termination, !!completed.outputIssue),
                 ...(completed.status !== "running" ? {completedTask: {taskId: completed.id, notificationId: taskNotificationId(completed.id, 1)}} : {}),
                 outcome: completed.outputIssue && completed.termination?.kind === "exit" && completed.termination.code === 0
                     ? "output_failed" : completed.status === "failed" || completed.outputIssue ? "failed" : "ok"};
@@ -173,10 +174,12 @@ export const taskTool: Tool<typeof inputSchema> = {
             const operation = target.kind !== "agent" && target.status !== "running"
                 ? "Task already finished; no stop needed."
                 : "Task stopped.";
-            return {content: `${operation}\n${formatTask(task)}`, outcome: "ok"};
+            return {content: `${operation}\n${formatTask(task)}`, outcome: "ok",
+                ...(task.kind === "shell" ? shellResultUI(task.termination, !!task.outputIssue) : {})};
         }
         return {
             content: formatTask(task),
+            ...(task.kind === "shell" ? shellResultUI(task.termination, !!task.outputIssue) : {}),
             outcome: task.status === "failed" ? "failed" : "ok",
         };
     },

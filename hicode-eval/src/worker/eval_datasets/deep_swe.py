@@ -107,6 +107,40 @@ def prepare_verifier_pnpm():
         shutil.rmtree(parent);raise
 
 
+
+def prepare_verifier_corepack():
+    """Expose only pinned-image pnpm packages to Corepack's isolated verifier Home."""
+    source = Path('/root/.cache/node/corepack/v1/pnpm')
+    if not source.exists() and not source.is_symlink(): return
+    if source.is_symlink() or not source.is_dir() or source.resolve() != source:
+        raise ValueError('Invalid fixed Corepack pnpm cache')
+    entries, links, size = list(source.rglob('*')), {}, 0
+    if len(entries) > 25000: raise ValueError('Corepack cache exceeds file budget')
+    for item in entries:
+        info = item.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            resolved = item.resolve(strict=True)
+            if not resolved.is_relative_to(source): raise ValueError('Corepack cache link escapes package cache')
+            links[item.relative_to(source)] = resolved.relative_to(source)
+        elif stat.S_ISREG(info.st_mode): size += info.st_size
+        elif not stat.S_ISDIR(info.st_mode): raise ValueError('Invalid Corepack cache entry')
+        if size > 512 * 1024 * 1024: raise ValueError('Corepack cache exceeds byte budget')
+    parent = Path('/opt/hicode-verifier-corepack')
+    if parent.exists() or parent.is_symlink(): raise ValueError('Verifier Corepack staging already exists')
+    parent.mkdir(mode=0o755)
+    try:
+        target = parent / 'v1/pnpm'
+        target.parent.mkdir(mode=0o755)
+        shutil.copytree(source, target, symlinks=True)
+        for name, resolved in links.items():
+            link = target / name
+            link.unlink(); link.symlink_to(os.path.relpath(target / resolved, link.parent))
+        for item in [target, *target.rglob('*')]:
+            if not item.is_symlink(): item.chmod(item.stat().st_mode | (0o555 if item.is_dir() else 0o444))
+    except BaseException:
+        shutil.rmtree(parent); raise
+
+
 def prepare_verifier_go(home):
     """Use fixed-image tools, never binaries produced in the Actor's Home."""
     source = Path('/root/go/bin')
@@ -123,12 +157,16 @@ def prepare_verifier_go(home):
         if total > 128 * 1024 * 1024:raise ValueError('Fixed Go tools exceed byte budget')
     target = home / 'go/bin'
     target.mkdir(parents=True)
+    tools = []
     for item in entries:
         copied = target / item.name
         shutil.copyfile(item, copied, follow_symlinks=False)
         copied.chmod(0o555)
-    target.chmod(0o555)
-    return target
+        tools.append(copied)
+    # Tests may write logs or install their own binaries alongside fixed tools.
+    # The caller mounts only the validated tool files read-only.
+    target.chmod(0o755)
+    return tools
 
 
 def prepare_browser_cache():
@@ -226,6 +264,7 @@ class DeepSweRuntime:
     def grade(self, *, root, config, uid, gid, project, home, logs, command, namespace, demote, cancelled):
         prepare_browser_cache()
         prepare_verifier_pnpm()
+        prepare_verifier_corepack()
         verifier = logs / 'verifier'
         original = json.loads(checked_bytes(root / 'tests/config.json', 16 * 1024 * 1024))
         artifacts = root / 'artifacts';artifacts.mkdir(mode=0o755)
@@ -260,9 +299,9 @@ class DeepSweRuntime:
         baseline = root / 'baseline'
         if baseline.is_symlink() or not baseline.is_dir():raise ValueError('Missing protected DeepSWE baseline')
         shutil.copytree(baseline, fresh, symlinks=True);fresh_home.mkdir()
-        go_bin = prepare_verifier_go(fresh_home) if 'GOMODCACHE' in config['deep']['runtimeEnvironment'] else None
+        go_tools = prepare_verifier_go(fresh_home) if 'GOMODCACHE' in config['deep']['runtimeEnvironment'] else []
         subprocess.run(['chown', '-hR', f'{uid}:{gid}', str(fresh), str(fresh_home)], check=True)
-        tools = ['--ro-bind', str(go_bin), str(go_bin)] if go_bin is not None else []
+        tools = [arg for tool in go_tools for arg in ['--ro-bind', str(tool), str(tool)]]
         args = namespace_argv([*tools, '--ro-bind', str(artifacts), '/logs/artifacts', 'bash', '/tests/test.sh'],
                               fresh, fresh_home, logs, Path('/run/hicode-eval') / root.name,
                               tests=root / 'tests', isolated_network=True, verifier_release=config['release'])

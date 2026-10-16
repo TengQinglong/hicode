@@ -1,3 +1,4 @@
+import {shellResultReceipt} from "../tools/bash/receipt.js";
 import {formatTaskHeader} from "./format.js";
 import {createHash} from "node:crypto";
 import type {ManagedTask, ManagedShellTask} from "./managed.js";
@@ -104,8 +105,8 @@ export function notificationFor(task: TaskSnapshot): TaskNotification {
         label,
         status: task.status as TaskNotification["status"],
         summary,
-        ...(task.kind === "shell" && task.termination ? {shellTermination: task.termination.kind} : {}),
-        ...(task.kind === "shell" && task.outputIssue ? {shellOutputIssue: true} : {}),
+        ...(task.kind === "shell" && task.termination
+            ? {shellResult: shellResultReceipt(task.termination, !!task.outputIssue)} : {}),
         ...(resultId ? {resultId} : {}),
         message,
     };

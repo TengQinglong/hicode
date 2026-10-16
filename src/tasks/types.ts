@@ -1,3 +1,4 @@
+import type {ShellResultReceipt} from "../tools/bash/receipt.js";
 import type {ChildShellSession} from "./childAccess.js";
 import type {Todo} from "../todos.js";
 import type {AgentMessaging} from "../runtime/agentMessaging.js";
@@ -156,8 +157,7 @@ export interface TaskNotification {
     label: string;
     status: Exclude<AgentTaskStatus, "running">;
     summary: string;
-    shellTermination?: ShellTermination["kind"];
-    shellOutputIssue?: boolean;
+    shellResult?: ShellResultReceipt;
     resultId?: string;
     message: string;
 }
