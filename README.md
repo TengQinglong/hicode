@@ -28,11 +28,27 @@ HiCode 是一个基于 TypeScript 自研的轻量级终端 Code Agent，核心�
 
 题干说明：两道题的原题干未明确说明输出格式或行为要求，因此补充了说明，验收测试保持不变。
 
+评测说明：为控制成本，HiCode 每题验收通过后即记为通过，不再重复测试；若独立重复评测，平均通过率预计会略有下降。
+
+
 ### ⭐ DeepSWE 1.1
 
-🔥 持续评测中：截至 2026 年 10 月 15 日，HiCode 已通过 **77/113（68.1%）**，使用模型为 GLM 5.3 Flash + DeepSeek V4.1 Flash。
+DeepSWE 包含 113 道原创工程任务，覆盖 91 个开源仓库；官方参考解平均新增 **668 行代码、修改 7.4 个文件**，重点考察仓库探索与跨文件实现能力。[官方统计](https://arxiv.org/pdf/2607.07946#page=6)
 
-评测说明：HiCode 为控制成本（省钱），每题验收通过一次就记为通过，不再重复测试；重复评测时，通过率会略有下降。
+🔥 持续评测中。
+
+1. HiCode：截至 2026 年 10 月 16 日，已通过 **83/113（73.5%）**，使用 GLM 5.3 Flash + DeepSeek V4.1 Flash。
+2. [DeepSeek V4.1 Flash 公开参考](https://arxiv.org/html/2609.19969v1#S5.SS3.SSS4)：搭配 Codex、Claude Code、mini-SWE、DeepSeek Harness Minimal 的通过率分别为 **65.6%、69.8%、74.2%、72.6%**。推理强度为 max，每题独立评测 8 次，统计平均通过率。
+3. 其他模型的公开参考：[Kimi K3 + Kimi Code](https://www.kimi.com/en/blog/kimi-k3) **67.5%**、[GLM-5.3 + mini-SWE-agent](https://huggingface.co/zai-org/GLM-5.3) **66.9%**、[GLM-5.3-Flash + mini-SWE-agent](https://huggingface.co/zai-org/GLM-5.3-Flash) **63.4%**、[Qwen3.8-Max + Claude Code](https://huggingface.co/Qwen/Qwen3.8-2.4T-A95B-FP8#benchmark-results) **56.6%**。
+
+评测说明：从个人体感来看，DeepSWE 1.1 的难度显著高于 Terminal-Bench 2.1，平均输出 Token 消耗为其 **2.5 倍左右**。为控制成本，HiCode 每题验收通过后即记为通过，不再重复测试；若独立重复评测，平均通过率预计会有较明显的下降。
+
+
+---
+
+💰 **评测投入**：全部评测费用由项目作者个人承担。为控制开销，优先使用成本较低的模型，遇到未通过的难题后再使用 DeepSeek V4.1 Flash。
+
+🎯 **评测目的**：通过真实任务暴露问题，持续改进 HiCode 的 harness；通过率主要作为观察 HiCode 效果的间接指标。
 
 ---
 
