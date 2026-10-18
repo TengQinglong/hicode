@@ -3,7 +3,7 @@ import {Box, Text, useInput} from "ink";
 import stringWidth from "string-width";
 import type {ConfirmReq} from "../turn/types.js";
 import {COLORS} from "../theme.js";
-import {useTerminalWidth} from "../terminalSize.js";
+import {usePanelLayout} from "../panelLayout.js";
 
 const OPTIONS = [
     {label: "Run once", allow: true},
@@ -72,11 +72,6 @@ function truncateToWidth(value: string, width: number): string {
     return `${result}…`;
 }
 
-function fitRow(value: string, width: number): string {
-    const fitted = truncateToWidth(value, width);
-    return fitted + " ".repeat(Math.max(0, width - stringWidth(fitted)));
-}
-
 export function ElevatedBashDialog({
     req,
     onDone,
@@ -88,7 +83,7 @@ export function ElevatedBashDialog({
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [expanded, setExpanded] = useState(false);
     const completedRef = useRef(false);
-    const contentWidth = Math.max(20, useTerminalWidth() - 6);
+    const {width, padding, contentWidth} = usePanelLayout();
 
     const finish = (allow: boolean) => {
         if (completedRef.current) return;
@@ -120,7 +115,7 @@ export function ElevatedBashDialog({
         stringWidth(`$ ${commandLines[0] ?? ""}`) > contentWidth;
 
     return (
-        <Box flexDirection="column" paddingLeft={2}>
+        <Box flexDirection="column" paddingX={padding} width={width}>
             <Text color={COLORS.warning} bold>◆ RUN OUTSIDE SANDBOX</Text>
             <Box marginTop={1} flexDirection="column" width={contentWidth}>
                 <Text color={COLORS.dim} bold>PURPOSE</Text>
@@ -159,10 +154,7 @@ export function ElevatedBashDialog({
                             color={focused ? "white" : undefined}
                             bold={focused}
                         >
-                            {fitRow(
-                                `${focused ? "›" : " "} ${option.allow ? elevatedAction.action : option.label}`,
-                                contentWidth
-                            )}
+                            {`${focused ? "›" : " "} ${option.allow ? elevatedAction.action : option.label}`}
                         </Text>
                     );
                 })}

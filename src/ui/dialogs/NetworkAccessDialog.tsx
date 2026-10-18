@@ -1,27 +1,14 @@
 import {useRef, useState} from "react";
 import {Box, Text, useInput} from "ink";
-import stringWidth from "string-width";
 import type {ConfirmReq} from "../turn/types.js";
 import {COLORS} from "../theme.js";
-import {useTerminalWidth} from "../terminalSize.js";
+import {usePanelLayout} from "../panelLayout.js";
 
 const OPTIONS = [
     {label: "Allow for this session", scope: "session"},
     {label: "Allow this connection", scope: "once"},
     {label: "Cancel", scope: undefined},
 ] as const;
-
-function fitRow(value: string, width: number): string {
-    if (stringWidth(value) > width) {
-        let result = "";
-        for (const character of Array.from(value)) {
-            if (stringWidth(`${result}${character}…`) > width) break;
-            result += character;
-        }
-        return `${result}…`;
-    }
-    return value + " ".repeat(width - stringWidth(value));
-}
 
 export function isNetworkAccessRequest(req: ConfirmReq): boolean {
     return req.presentation?.kind === "network_access";
@@ -37,7 +24,7 @@ export function NetworkAccessDialog({
     const presentation = req.presentation;
     const [selectedIndex, setSelectedIndex] = useState(0);
     const completedRef = useRef(false);
-    const contentWidth = Math.max(20, useTerminalWidth() - 6);
+    const {width, padding, contentWidth} = usePanelLayout();
 
     const finish = (scope: "once" | "session" | undefined) => {
         if (completedRef.current) return;
@@ -64,7 +51,7 @@ export function NetworkAccessDialog({
     }
 
     return (
-        <Box flexDirection="column" paddingLeft={2}>
+        <Box flexDirection="column" paddingX={padding} width={width}>
             <Text color={COLORS.warning} bold>◆ NETWORK ACCESS</Text>
             <Box marginTop={1} flexDirection="column" width={contentWidth}>
                 <Text color={COLORS.dim} bold>REQUEST</Text>
@@ -85,7 +72,7 @@ export function NetworkAccessDialog({
                             color={focused ? "white" : undefined}
                             bold={focused}
                         >
-                            {fitRow(`${focused ? "›" : " "} ${option.label}`, contentWidth)}
+                            {`${focused ? "›" : " "} ${option.label}`}
                         </Text>
                     );
                 })}

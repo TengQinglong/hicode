@@ -3,7 +3,8 @@ import {Box, Text, useInput} from "ink";
 import {stripVTControlCharacters} from "node:util";
 import type {LoadedSkill} from "../../skills/types.js";
 import {layoutTerminalMarkdown} from "../conversation/TerminalMarkdown.js";
-import {useTerminalSize} from "../terminalSize.js";
+import {panelWindow, usePanelLayout, wrapPanelText} from "../panelLayout.js";
+import {PanelViewport} from "../dialogs/PanelViewport.js";
 import {COLORS} from "../theme.js";
 
 const sourceLabels = {project: "Project", user: "User", bundled: "Built-in", host: "Host"};
@@ -16,10 +17,8 @@ export function SkillsDialog({issues = [], skills, projectDirectory, userDirecto
     userDirectory: string;
     onClose(): void;
 }) {
-    const {width, height} = useTerminalSize();
-    const columns = Math.max(1, Math.min(76, width - 4));
-    const visibleItems = Math.max(1, Math.min(6, Math.floor((height - 10) / 3)));
-    const visibleLines = Math.max(2, Math.min(18, height - 10));
+    const {width, height, padding, contentWidth: columns} = usePanelLayout();
+    const visibleLines = Math.max(1, height - 10);
     const [index, setIndex] = useState(0);
     const [detail, setDetail] = useState(false);
     const [issuesOpen, setIssuesOpen] = useState(false);
@@ -52,29 +51,32 @@ export function SkillsDialog({issues = [], skills, projectDirectory, userDirecto
             else setIndex(Math.max(0, Math.min(index + delta, skills.length - 1)));
         }
     });
-    const listStart = Math.max(0, index - visibleItems + 1);
+    const labels = skills.map(skill => wrapPanelText(`❯ ${clean(skill.name)} · ${sourceLabels[skill.source]}`, columns));
+    const descriptions = skills.map(skill => wrapPanelText(clean(skill.description).replace(/\s+/g, " ").trim() || "No description provided.", Math.max(1, columns - 2)));
+    const window = panelWindow(skills.map((_, i) => labels[i]!.length + descriptions[i]!.length + 1), index, height - 8);
 
-    return <Box flexDirection="column" paddingLeft={2} paddingRight={2}>
+    return <Box flexDirection="column" paddingX={padding} width={width}>
         <Box flexDirection="column" width={columns}>
             <Text bold color={COLORS.accent}>◆ Skills <Text color={COLORS.dim} bold={false}>· {skills.length} available</Text></Text>
             {issues.length > 0 && <Text color={COLORS.dim}>{issues.length} loading issue(s) · i {issuesOpen ? "back" : "details"}</Text>}
             {detail && selected && <Box marginTop={1}>
-                <Text bold wrap="truncate-end">{clean(selected.name)} <Text bold={false} color={COLORS.dim}>· {sourceLabels[selected.source]}</Text></Text>
+                <Text bold>{clean(selected.name)} <Text bold={false} color={COLORS.dim}>· {sourceLabels[selected.source]}</Text></Text>
             </Box>}
             {showingText ? <Box flexDirection="column" marginTop={1}>
                 {rows.slice(start, start + visibleLines).map((row, i) => <Text key={i}>{row || " "}</Text>)}
                 {rows.length > visibleLines && <Text color={COLORS.dim}>{start + 1}–{Math.min(rows.length, start + visibleLines)} / {rows.length}</Text>}
             </Box> : <Box flexDirection="column" marginTop={1}>
-                {skills.slice(listStart, listStart + visibleItems).map((skill, i) => {
-                    const active = listStart + i === index;
-                    return <Box key={skill.name} flexDirection="column" marginBottom={1}>
-                        <Text wrap="truncate-end" color={active ? COLORS.accent : undefined} bold={active}>
-                            {active ? "❯ " : "  "}{clean(skill.name)} <Text bold={false} color={COLORS.dim}>· {sourceLabels[skill.source]}</Text>
-                        </Text>
-                        <Box paddingLeft={2}><Text color={COLORS.dim} wrap="truncate-end">{clean(skill.description).replace(/\s+/g, " ").trim() || "No description provided."}</Text></Box>
-                    </Box>;
-                })}
-                {skills.length > visibleItems && <Text color={COLORS.dim}>{index + 1} / {skills.length}</Text>}
+                <PanelViewport width={columns} height={Math.max(2, height - 8)} resetKey={selected?.name ?? "empty"}
+                    lines={skills.slice(window.start, window.end).flatMap((skill, i) => {
+                        const active = window.start + i === index;
+                        return [
+                            ...wrapPanelText(`${active ? "❯ " : "  "}${clean(skill.name)} · ${sourceLabels[skill.source]}`, columns)
+                                .map((line, j) => <Text key={`name-${i}-${j}`} color={active ? COLORS.accent : undefined} bold={active}>{line}</Text>),
+                            ...descriptions[window.start + i]!.map((line, j) => <Text key={`description-${i}-${j}`} color={COLORS.dim}>{`  ${line}`}</Text>),
+                            " ",
+                        ];
+                    })}/>
+                {(window.start > 0 || window.end < skills.length) && <Text color={COLORS.dim}>{index + 1} / {skills.length}</Text>}
             </Box>}
             <Box marginTop={1}><Text color={COLORS.dim}>{showingText
                 ? `↑↓ scroll · Esc ${detail ? "back" : "close"}`

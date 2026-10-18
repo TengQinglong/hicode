@@ -1,11 +1,11 @@
 import {reasoningCapability, type ReasoningEffort} from "../../llm/reasoningPolicy.js";
 import {useMemo, useState} from "react";
 import {Box, Text, useInput} from "ink";
-import stringWidth from "string-width";
 import type {ModelTargetSettings} from "../../settings/types.js";
 import {formatModelTarget} from "../../llm/modelCatalog.js";
+import {PanelViewport} from "../dialogs/PanelViewport.js";
 import {COLORS} from "../theme.js";
-import {useTerminalWidth} from "../terminalSize.js";
+import {panelWindow, usePanelLayout, wrapPanelText} from "../panelLayout.js";
 
 const SOURCE_LABELS: Record<ModelTargetSettings["source"], string> = {
     glm: "ZHIPU GLM",
@@ -18,15 +18,6 @@ const SOURCE_LABELS: Record<ModelTargetSettings["source"], string> = {
 
 function sameTarget(left: ModelTargetSettings, right: ModelTargetSettings): boolean {
     return left.source === right.source && left.model === right.model;
-}
-
-function fitRow(value: string, width: number): string {
-    let result = "";
-    for (const segment of Array.from(value)) {
-        if (stringWidth(result + segment) > width) break;
-        result += segment;
-    }
-    return result + " ".repeat(Math.max(0, width - stringWidth(result)));
 }
 
 export function ModelDialog({
@@ -51,9 +42,7 @@ export function ModelDialog({
         models.findIndex((target) => sameTarget(target, current))
     );
     const [selectedIndex, setSelectedIndex] = useState(initialIndex);
-    const panelWidth = Math.max(12, Math.min(52, useTerminalWidth() - 4));
-    const rowWidth = Math.min(52, panelWidth);
-    const reasoningWidth = panelWidth - 4;
+    const {width, height, padding, contentWidth: panelWidth} = usePanelLayout();
     const groups = useMemo(() => {
         const result: Array<{
             source: ModelTargetSettings["source"];
@@ -67,6 +56,10 @@ export function ModelDialog({
         return result;
     }, [models]);
 
+    const ordered = groups.flatMap(group => group.entries);
+    const window = panelWindow(ordered.map(({target}) => wrapPanelText(`› ● ${formatModelTarget(target)}`, panelWidth).length + 1),
+        ordered.findIndex(entry => entry.index === selectedIndex), height - 9);
+    const visible = new Set(ordered.slice(window.start, window.end).map(entry => entry.index));
     const selected = models[selectedIndex];
     const capability = selected ? reasoningCapability(selected.source, selected.model) : undefined;
     const efforts = capability?.efforts ?? ["default"];
@@ -104,21 +97,18 @@ export function ModelDialog({
     });
 
     return (
-        <Box flexDirection="column" paddingLeft={2}>
+        <Box flexDirection="column" paddingX={padding} width={width}>
             <Text color={COLORS.accent} bold>
                 ◆ MODEL{choosingReasoning && <Text color={COLORS.dim} bold={false}> · 2/2 Reasoning</Text>}
             </Text>
 
             {choosingReasoning && selected ? (
                 <Box marginTop={1} flexDirection="column" width={panelWidth} borderStyle="round" borderColor={COLORS.border} paddingX={1}>
-                    <Text bold wrap="truncate-end">{selected.label}</Text>
+                    <Text bold>{selected.label}</Text>
                     <Box marginTop={1} flexDirection="column">
                         {efforts.map((effort, index) => {
                             const focused = index === effortIndex;
-                            const row = fitRow(
-                                `${focused ? "›" : " "} ${effort === savedEffort ? "●" : " "} ${effort}`,
-                                reasoningWidth
-                            );
+                            const row = `${focused ? "›" : " "} ${effort === savedEffort ? "●" : " "} ${effort}`;
                             return (
                                 <Text key={effort} backgroundColor={focused ? COLORS.accent : undefined} color={focused ? "white" : undefined} bold={focused}>
                                     {row}
@@ -129,34 +119,17 @@ export function ModelDialog({
                 </Box>
             ) : groups.length > 0 ? (
                 <Box marginTop={1} flexDirection="column">
-                    {groups.map((group) => (
-                        <Box
-                            key={group.source}
-                            flexDirection="column"
-                        >
-                            <Text color={COLORS.dim} bold>
-                                {SOURCE_LABELS[group.source]}
-                            </Text>
-                            {group.entries.map(({target, index}) => {
+                    <PanelViewport width={panelWidth} height={Math.max(2, height - 8)} resetKey={selected ? `${selected.source}:${selected.model}` : "empty"}
+                        lines={groups.filter(group => group.entries.some(entry => visible.has(entry.index))).flatMap(group => [
+                            ...wrapPanelText(SOURCE_LABELS[group.source], panelWidth).map((line, i) => <Text key={`source-${group.source}-${i}`} color={COLORS.dim} bold>{line}</Text>),
+                            ...group.entries.filter(entry => visible.has(entry.index)).flatMap(({target, index}) => {
                                 const focused = index === selectedIndex;
                                 const active = sameTarget(target, current);
-                                const row = fitRow(
-                                    `${focused ? "›" : " "} ${active ? "●" : " "} ${formatModelTarget(target)}`,
-                                    rowWidth
-                                );
-                                return (
-                                    <Text
-                                        key={`${target.source}:${target.model}`}
-                                        backgroundColor={focused ? COLORS.accent : undefined}
-                                        color={focused ? "white" : undefined}
-                                        bold={focused}
-                                    >
-                                        {row}
-                                    </Text>
-                                );
-                            })}
-                        </Box>
-                    ))}
+                                return wrapPanelText(`${focused ? "›" : " "} ${active ? "●" : " "} ${formatModelTarget(target)}`, panelWidth)
+                                    .map((line, i) => <Text key={`${target.source}:${target.model}:${i}`}
+                                        backgroundColor={focused ? COLORS.accent : undefined} color={focused ? "white" : undefined} bold={focused}>{line}</Text>);
+                            }),
+                        ])}/>
                 </Box>
             ) : (
                 <Box marginTop={1}>

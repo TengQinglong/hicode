@@ -1,18 +1,8 @@
-import {useMemo} from "react";
 import {Box, Text, useInput} from "ink";
-import SelectInput from "ink-select-input";
+import {PanelSelect} from "../dialogs/PanelSelect.js";
 import type {SessionIndexEntry} from "../../session/index.js";
 import {COLORS} from "../theme.js";
-import {DialogIndicator, DialogItem} from "../dialogs/DialogFrame.js";
-
-interface ResumeItem {
-    label: string;
-    value: string;
-}
-
-function pad(value: string, width: number): string {
-    return value.length >= width ? `${value.slice(0, width - 1)} ` : value.padEnd(width, " ");
-}
+import {usePanelLayout} from "../panelLayout.js";
 
 function formatRelativeTime(iso: string): string {
     const time = new Date(iso).getTime();
@@ -36,14 +26,6 @@ function formatRelativeTime(iso: string): string {
     return `${Math.floor(diffMonths / 12)}y ago`;
 }
 
-function formatSessionLabel(session: SessionIndexEntry): string {
-    const modified = pad(formatRelativeTime(session.updatedAt), 20);
-    const created = pad(formatRelativeTime(session.createdAt), 20);
-    const count = pad(String(session.messageCount), 8);
-    const summary = session.summary || session.sessionId;
-    return `${modified}${created}${count}${summary}`;
-}
-
 export function ResumePicker({
                                  sessions,
                                  onSelect,
@@ -55,29 +37,30 @@ export function ResumePicker({
     onCancel: () => void;
     cancelLabel?: string;
 }) {
-    const items = useMemo<ResumeItem[]>(
-        () =>
-            sessions.map((session, index) => ({
-                label: `${index + 1}. ${formatSessionLabel(session)}`,
-                value: session.sessionId,
-            })),
-        [sessions]
-    );
+    const {width, height, padding, contentWidth} = usePanelLayout();
+    const compact = contentWidth < 80;
+    const items = sessions.map((session, index) => {
+        const modified = formatRelativeTime(session.updatedAt);
+        const created = formatRelativeTime(session.createdAt);
+        const count = String(session.messageCount);
+        const summary = session.summary || session.sessionId;
+        return {
+            value: session.sessionId,
+            label: compact ? `${index + 1}. ${summary}` : `${modified.padEnd(12)}${created.padEnd(12)}${count.padEnd(8)}${summary}`,
+            ...(compact ? {description: `Modified ${modified} · Created ${created} · ${count} messages`} : {}),
+        };
+    });
 
     useInput((_input, key) => {
         if (key.escape) onCancel();
     });
 
     return (
-        <Box flexDirection="column">
-            <Box marginBottom={1}>
-                <Text bold>    {pad("Modified", 20)}{pad("Created", 20)}{pad("# Msg", 8)}Summary</Text>
-            </Box>
-            <SelectInput
+        <Box flexDirection="column" width={width} paddingX={padding}>
+            {!compact && <Box marginBottom={1}><Text bold>{`  ${"Modified".padEnd(12)}${"Created".padEnd(12)}${"# Msg".padEnd(8)}Summary`}</Text></Box>}
+            <PanelSelect width={contentWidth} rows={Math.max(2, height - 9)}
                 items={items}
-                onSelect={(item: ResumeItem) => onSelect(item.value)}
-                indicatorComponent={DialogIndicator}
-                itemComponent={DialogItem}
+                onSelect={(item) => onSelect(item.value)}
             />
             <Box marginTop={1}>
                 <Text color={COLORS.dim}>↑↓ select · enter resume · esc {cancelLabel}</Text>

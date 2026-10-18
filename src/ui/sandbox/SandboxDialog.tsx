@@ -2,7 +2,7 @@ import {useRef, useState} from "react";
 import {Box, Text, useInput} from "ink";
 import type {SandboxStatus} from "../../sandbox/types.js";
 import {COLORS} from "../theme.js";
-import {useTerminalWidth} from "../terminalSize.js";
+import {usePanelLayout} from "../panelLayout.js";
 
 type NetworkMode = "restricted" | "open";
 const options = [
@@ -21,7 +21,7 @@ export function SandboxDialog({status, configured, fullAccess, onSave, onClose}:
     const [saved, setSaved] = useState<NetworkMode>();
     const [error, setError] = useState<string>();
     const [saving, setSaving] = useState(false);
-    const width = useTerminalWidth();
+    const {width, padding} = usePanelLayout();
     const configuredMode = saved ?? configured;
     const pendingRestart = status.kind === "ready" && status.networkMode !== configuredMode;
     const busy = useRef(false);
@@ -39,7 +39,7 @@ export function SandboxDialog({status, configured, fullAccess, onSave, onClose}:
         else if (key.upArrow || key.downArrow) setSelected(i => 1 - i);
         else if (key.return) void save();
     });
-    return <Box flexDirection="column" paddingLeft={2} paddingY={1} width={Math.max(1, Math.min(84, width - 2))}>
+    return <Box flexDirection="column" paddingX={padding} paddingY={1} width={width}>
         <Text bold color={COLORS.accent}>◆ Sandbox network</Text>
         <Box marginTop={1} flexDirection="column">
             <Text color={COLORS.dim}>{fullAccess ? "Full Access is active; sandbox settings are not applied." : status.kind === "ready"

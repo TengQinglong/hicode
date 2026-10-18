@@ -336,7 +336,7 @@ describe("RuntimeBootstrap lifecycle", () => {
 
       instance.stdin.write("\u001b");
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(instance.lastFrame()).toContain("new session");
+      expect(instance.lastFrame()).toContain("Ask HiCode to build, inspect, or fix something");
     });
   });
 

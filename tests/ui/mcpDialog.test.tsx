@@ -81,6 +81,27 @@ test("long tool lists scroll in a narrow terminal", async () => {
     expect(frame.split("\n").length).toBeLessThanOrEqual(24);
 });
 
+test("tool names use wide space and keep unsaved policy changes through repeated resize", async () => {
+    const long = "inspect_" + "repository_section_".repeat(5) + "END_MARKER";
+    const f = fixture(["first", long]);
+    const view = render(<McpDialog manager={f.manager} getRules={empty} onSave={f.manager.setToolPolicy} onClose={() => {}}/>);
+    await tick(); view.stdin.write("\r"); await tick();
+    view.stdin.write("\x1b[B"); await tick(); view.stdin.write("\x1b[B"); await tick();
+    view.stdin.write(" "); await tick();
+    for (const width of [40, 160, 40]) {
+        Object.defineProperties(view.stdout, {columns: {configurable: true, value: width}, rows: {configurable: true, value: 40}});
+        view.stdout.emit("resize"); await new Promise(resolve => setTimeout(resolve, 110));
+        const frame = view.lastFrame()!;
+        expect(frame.split("\n").every(line => stringWidth(line) <= width)).toBe(true);
+        expect(frame.replace(/\s/g, "")).toContain(long);
+        expect(frame).toContain("Ask every time");
+        if (width === 160) expect(frame.split("\n").some(line => line.includes(long))).toBe(true);
+        expect(f.saved).toEqual([]);
+    }
+    view.stdin.write("\r"); await tick();
+    expect(f.saved).toEqual([{default: "ask", exceptions: {[name(long)]: "ask"}}]);
+});
+
 test("/mcp opens and saves policy locally without model work", async () => withTempProject(async cwd => {
     const f = fixture(["execute"]);
     const resources = createTestRuntimeResources(cwd, {mcpManager: f.manager}); let calls = 0;

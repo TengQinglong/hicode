@@ -10,11 +10,41 @@ import {withTempProject} from "../helpers/tempProject.js";
 import {AppForTest} from "../helpers/AppForTest.js";
 import {createTestRuntimeResources} from "../helpers/runtimeResources.js";
 import {LLM_PROVIDER_NAMES} from "../../src/llm/providerRegistry.js";
+import stringWidth from "string-width";
 
 const oldKey = process.env.GLM_API_KEY;
 afterEach(() => {cleanup(); if (oldKey === undefined) delete process.env.GLM_API_KEY; else process.env.GLM_API_KEY = oldKey;});
 const tick = () => new Promise(resolve => setTimeout(resolve, 15));
 async function until(check: () => boolean) {for (let i = 0; i < 100 && !check(); i++) await tick(); expect(check()).toBe(true);}
+
+test("model ID input wraps and expands while keeping the exact unsaved value", async () => {
+    await withTempProject(async (cwd, storage) => {
+        const settings = resolveHiCodeSettings([]).values;
+        const runtime = createPrimaryModelRuntime(settings.models.primary, settings.sources, [settings.models.primary]);
+        const configuration = createModelConfiguration(storage, cwd, runtime);
+        const save = spyOn(configuration, "addModel");
+        const view = render(<ProvidersDialog runtime={runtime} configuration={configuration} onSelect={async () => {}} onClose={() => {}}/>);
+        await tick(); view.stdin.write("\r"); await tick();
+        view.stdin.write("\x1b[B"); await tick(); view.stdin.write("\x1b[B"); await tick();
+        view.stdin.write("\r"); await tick();
+        const id = "deployment/" + "custom-model-".repeat(6) + "END_MARKER";
+        view.stdin.write(id); await tick();
+        for (const width of [40, 160, 40]) {
+            Object.defineProperties(view.stdout, {columns: {configurable: true, value: width}, rows: {configurable: true, value: 40}});
+            view.stdout.emit("resize"); await new Promise(resolve => setTimeout(resolve, 110));
+            const frame = view.lastFrame()!;
+            expect(frame.split("\n").every(line => stringWidth(line) <= width)).toBe(true);
+            expect(frame.replace(/\s/g, "")).toContain(id);
+            if (width === 160) expect(frame).toContain(id);
+            expect(save).not.toHaveBeenCalled();
+        }
+        view.stdin.write("\r"); await tick();
+        expect(view.lastFrame()!.replace(/\s/g, "")).toContain(id);
+        expect(view.lastFrame()).toContain("Display name");
+        expect(save).not.toHaveBeenCalled();
+        view.unmount(); save.mockRestore();
+    });
+});
 
 test("Ark provider saves a masked dedicated key and configures DeepSeek reasoning through the existing picker", async () => {
     const previous = process.env.ARK_AGENT_PLAN_API_KEY;

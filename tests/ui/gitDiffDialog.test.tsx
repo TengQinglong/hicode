@@ -61,6 +61,29 @@ function result(): GitDiffSnapshotResult {
 }
 
 describe("GitDiffDialog", () => {
+    test("long paths and diff lines expand without rereading Git or losing detail selection", async () => {
+        const data = result();
+        if (data.status !== "available") throw Error("Expected fixture");
+        const path = "src/" + "nested/".repeat(13) + "END_MARKER.ts";
+        data.snapshot.files[0]!.status.path = path;
+        let reads = 0;
+        const view = render(<GitDiffDialog loadDiff={async () => {reads++; return data;}} onClose={() => {}}/>);
+        await waitForRender();
+        for (const width of [40, 160, 40]) {
+            Object.defineProperty(view.stdout, "columns", {configurable: true, value: width});
+            view.stdout.emit("resize"); await new Promise(resolve => setTimeout(resolve, 110));
+            const frame = view.lastFrame()!;
+            expect(frame.split("\n").every(line => stringWidth(line) <= width)).toBe(true);
+            expect(frame.replace(/\s/g, "")).toContain(path);
+            if (width === 160) expect(frame.split("\n").some(line => line.includes(path))).toBe(true);
+        }
+        view.stdin.write("\r"); await waitForRender();
+        Object.defineProperty(view.stdout, "columns", {configurable: true, value: 160});
+        view.stdout.emit("resize"); await new Promise(resolve => setTimeout(resolve, 110));
+        expect(view.lastFrame()).toContain(path);
+        expect(view.lastFrame()).toContain("Esc back to files");
+        expect(reads).toBe(1);
+    });
     test("App rerenders preserve the open diff; Escape returns before closing", async () => {
         await withTempProject(async cwd => {
             const resources = createTestRuntimeResources(cwd);
