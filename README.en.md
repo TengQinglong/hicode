@@ -71,6 +71,8 @@ Historical results: as of October 7, 2026, **39 Terminal-Bench 2.0 tasks** and *
 
 ### Recent improvements
 
+- 🛠️ **10-17 · Execution framework improvements**: unified background subagent execution and result notifications, strengthened todo completion checks, and improved background reviews, request error recovery, and tool result presentation for more reliable execution of complex tasks.
+
 - 🧠 **10-11 · Models and long-running tasks**: added reasoning-effort controls and reasoning replay across requests, and improved background reviews, web retrieval, and tool waits for more reliable execution of complex tasks.
 
 - 🧱 **10-04 · Test environment isolation**: shared Linux base, reusable images by dependency version, and a separate container per task to reduce repeated setup and interference.
