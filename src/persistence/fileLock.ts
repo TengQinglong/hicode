@@ -87,10 +87,10 @@ async function lockWithIdentity<T>(path: string, action: () => Promise<T>, local
                 // enter alongside the initializer of a replacement directory.
                 if (entries.length === 1 && entries[0]!.name === owner) return await action();
             } catch (error) {
-                // macOS can report EINVAL instead of ENOENT if another releaser
-                // removes the directory during exclusive marker creation. Retry
-                // only before publication; no action has acquired the lease yet.
-                if (published || (!isCode(error, "ENOENT") && !(process.platform === "darwin" && isCode(error, "EINVAL")))) throw error;
+                // A releaser can remove the directory between mkdir and inspection,
+                // even after publication; the lease is gone, so clean up and retry.
+                // macOS may report EINVAL instead of ENOENT during exclusive marker creation.
+                if (!isCode(error, "ENOENT") && !(process.platform === "darwin" && !published && isCode(error, "EINVAL"))) throw error;
             } finally {
                 if (published) {
                     try { await unlink(marker); }

@@ -504,7 +504,7 @@ describe("bash tool contract", () => {
       expect(result.modelContent).toContain("timeout 100ms");
       expect(result.modelContent).toContain("command and its child processes have terminated");
       expect(result.modelContent).toContain("run_in_background=true");
-      expect(result.modelContent).toContain("set a longer timeout_ms");
+      expect(result.modelContent).toContain("Set a longer timeout_ms");
       expect(result.modelContent).toContain("Check partial effects");
     });
   });
