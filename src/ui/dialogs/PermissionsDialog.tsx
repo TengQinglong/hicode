@@ -105,8 +105,8 @@ export function PermissionsDialog({
 
     return (
         <Box flexDirection="column" paddingLeft={2} width={rowWidth + 2}>
-            <Text color={COLORS.accent} bold>◆ Execution permissions</Text>
-            <Text color={COLORS.dim}>Choose how additional access is approved.</Text>
+            <Text color={COLORS.accent} bold>◆ Access & approval</Text>
+            <Text color={COLORS.dim}>Choose who approves extra access, or allow host execution.</Text>
             <Box marginTop={1} flexDirection="column">
                 {OPTIONS.map((option, index) => {
                     const focused = index === selectedIndex;
@@ -131,7 +131,7 @@ export function PermissionsDialog({
                 })}
             </Box>
             <Box marginTop={1} flexDirection="column">
-                <Text color={COLORS.dim}>Build/Plan controls the work mode; this controls access and approval.</Text>
+                <Text color={COLORS.dim}>Build/Plan chooses the work mode. /sandbox controls network access for sandboxed commands.</Text>
                 <Text color={COLORS.dim}>↑↓ select · enter switch · esc back</Text>
             </Box>
         </Box>

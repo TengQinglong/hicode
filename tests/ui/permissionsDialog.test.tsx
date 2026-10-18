@@ -25,25 +25,28 @@ describe("PermissionsDialog", () => {
         await flush();
 
         const frame = instance.lastFrame() ?? "";
-        expect(frame).toContain("◆ Execution permissions");
-        expect(frame).toContain("Ask for approval");
-        expect(frame).toContain("Approve for me");
+        expect(frame).toContain("◆ Access & approval");
+        expect(frame).toContain("Ask me");
+        expect(frame).toContain("Agent review");
         expect(frame).toContain("Full Access");
-        expect(frame).toContain("› Ask for approval  (current)");
+        expect(frame).toContain("› Ask me  (current)");
         expect(frame).not.toContain("●");
         const lines = frame.split("\n");
-        const title = lines.find(line => line.includes("Ask for approval"))!;
-        const description = lines.find(line => line.includes("Workspace reads"))!;
-        expect(title.indexOf("Ask")).toBe(description.indexOf("Workspace"));
-        expect(frame).toMatch(/Network policy follows \/sandbox settings\.\n\s*\n/);
-        expect(frame).toContain("this controls access and approval");
+        const title = lines.find(line => line.includes("Ask me"))!;
+        const description = lines.find(line => line.includes("You approve requests"))!;
+        expect(title.indexOf("Ask")).toBe(description.indexOf("You"));
+        const text = frame.replace(/\s+/g, " ");
+        expect(text).toContain("You approve requests for extra access.");
+        expect(text).toContain("An independent Agent reviews requests for extra access");
+        expect(text).toContain("Ordinary commands run outside HiCode's sandbox as your OS account");
+        expect(text).toContain("/sandbox controls network access for sandboxed commands.");
         expect(frame).not.toContain("Read Only");
         expect(frame).not.toContain("Bypass");
 
         instance.stdin.write(DOWN);
         await flush();
-        expect(instance.lastFrame()).toContain("› Approve for me");
-        expect(instance.lastFrame()).toContain("Ask for approval  (current)");
+        expect(instance.lastFrame()).toContain("› Agent review");
+        expect(instance.lastFrame()).toContain("Ask me  (current)");
         instance.stdin.write(ENTER);
         await flush();
         expect(onSelect).toHaveBeenCalledWith("auto-review");
@@ -70,7 +73,7 @@ describe("PermissionsDialog", () => {
         instance.stdin.write(ENTER);
         await flush();
         expect(onSelect).not.toHaveBeenCalled();
-        expect(instance.lastFrame()).toContain("◆ Execution permissions");
+        expect(instance.lastFrame()).toContain("◆ Access & approval");
 
         instance.stdin.write(ENTER);
         await flush();

@@ -7,15 +7,15 @@ const PERMISSION_MODE_SET = new Set<PermissionMode>([
 ]);
 
 const SHORT_LABELS: Record<PermissionMode, string> = {
-    ask: "Ask for approval",
-    "auto-review": "Approve for me",
+    ask: "Ask me",
+    "auto-review": "Agent review",
     "full-access": "Full Access",
 };
 
 const DESCRIPTIONS: Record<PermissionMode, string> = {
-    ask: "Workspace reads, edits and ordinary commands run directly; extra access requires approval. Network policy follows /sandbox settings.",
-    "auto-review": "An independent Agent reviews extra access; you are asked when a decision is needed.",
-    "full-access": "Access files and the network as the current OS account without confirming each additional access request.",
+    ask: "You approve requests for extra access. Authorized workspace actions run directly; commands use the sandbox unless host execution is approved.",
+    "auto-review": "An independent Agent reviews requests for extra access, using the same access boundaries as Ask me. You are asked when your input is needed.",
+    "full-access": "Ordinary commands run outside HiCode's sandbox as your OS account, without per-request access approval. OS permissions and explicit deny rules still apply.",
 };
 
 export function parsePermissionMode(value: string): PermissionMode | null {

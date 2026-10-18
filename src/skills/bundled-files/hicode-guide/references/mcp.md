@@ -58,7 +58,7 @@ Press r in the server list, or use `/mcp reconnect <name>`, to re-read configura
 
 The model sees tool names such as `mcp__local_tools__lookup`. It uses `tool_search` to discover a relevant tool and load its full schema for Function Calling. This does not start an unconfigured server or grant access. The loaded tool set has a bounded working set; an unused schema can later be unloaded and rediscovered.
 
-Without service trust, a connected server's read-only tool is allowed by default only when `readOnlyHint=true` and `destructiveHint` is not true. Missing/conflicting annotations or write/destructive tools use ordinary approval policy. Settings deny/ask rules still apply. Approve for me can review requests; Full Access preauthorizes ordinary asks but does not bypass denies or server-start approval. Plan and read-only children do not gain write tools.
+Without service trust, a connected server's read-only tool is allowed by default only when `readOnlyHint=true` and `destructiveHint` is not true. Missing/conflicting annotations or write/destructive tools use ordinary approval policy. Settings deny/ask rules still apply. The independent Agent can review requests; Full Access preauthorizes ordinary asks but does not bypass denies or server-start approval. Plan and read-only children do not gain write tools.
 
 For a deliberately trusted operation, use the offered persistent approval or an exact actual tool name in project-local rules. For example, replace the placeholder in this fragment with the name exposed by the connected server:
 

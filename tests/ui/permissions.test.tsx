@@ -30,13 +30,13 @@ describe("permission confirmation UI", () => {
       await flush();
       instance.stdin.write(ENTER);
       await flush(60);
-      expect(instance.lastFrame()).toContain("Approve for me | Plan");
+      expect(instance.lastFrame()).toContain("Agent review | Plan");
       instance.stdin.write("/build");
       await flush();
       instance.stdin.write(ENTER);
       await flush(60);
-      expect(instance.lastFrame()).toContain("Approve for me");
-      expect(instance.lastFrame()).not.toContain("Approve for me | Plan");
+      expect(instance.lastFrame()).toContain("Agent review");
+      expect(instance.lastFrame()).not.toContain("Agent review | Plan");
     });
   });
   test("Shift+Tab 只切换 Build/Plan，不改变权限 Profile", async () => {
@@ -49,17 +49,17 @@ describe("permission confirmation UI", () => {
       );
       await flush(10);
       const initial = instance.lastFrame() ?? "";
-      expect(initial).toContain("Approve for me");
-      expect(initial).not.toContain("Approve for me | Plan");
+      expect(initial).toContain("Agent review");
+      expect(initial).not.toContain("Agent review | Plan");
 
       instance.stdin.write("\u001B[Z");
       await flush(10);
-      expect(instance.lastFrame()).toContain("Approve for me | Plan");
+      expect(instance.lastFrame()).toContain("Agent review | Plan");
 
       instance.stdin.write("\u001B[Z");
       await flush(10);
-      expect(instance.lastFrame()).not.toContain("Approve for me | Plan");
-      expect(instance.lastFrame()).toContain("Approve for me");
+      expect(instance.lastFrame()).not.toContain("Agent review | Plan");
+      expect(instance.lastFrame()).toContain("Agent review");
     });
   });
 

@@ -11,7 +11,7 @@ Slash commands below are typed into the HiCode input box, not the operating-syst
 | `/build` | Execute work under the selected permission profile. |
 | `/providers` | Configure provider keys, endpoints and model lists. |
 | `/model` | Select and persist the primary model. |
-| `/permissions` | Select Ask for approval, Approve for me or Full Access. |
+| `/permissions` | Select Ask me, Agent review or Full Access. |
 | `/sandbox` | Inspect sandbox status and configure its network policy; restart to apply a changed policy. |
 | `/add-dir` | List writable directories for this session. |
 | `/add-dir <path>` | Authorize an existing directory for this session. |
