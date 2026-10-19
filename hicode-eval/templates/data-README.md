@@ -64,6 +64,7 @@
 - 用户明确授权修复 Colima 自身 DNS 入口时，只操作指定 profile，使用 VM 的 networkctl 实际报告的上游，修复失效的 resolv.conf；需要持久化时使用该 profile 的幂等启动 provision。正常 DNS 入口保持不变，不更换公网解析器、不修改宿主 DNS/代理或 TLS，不把此维护操作加入题目执行链。验证包括普通域名解析、原域名 HTTPS 和 Docker 官方 digest 拉取；已有镜像的拉取不作为下载带宽证据，重启持久性未经重启实测不能宣称已验证。
 - Docker daemon 若持续卡在 `Initializing buildkit`，常规路径仍使用受管 BuildKit GC。只有在服务完全空闲、daemon 无法启动且任务镜像确认由 containerd 保留时，才可停止 Docker，把唯一的 `/var/lib/docker/buildkit` 可重建元数据移动到 VM 内明确的恢复目录；禁止删除 Docker Root，并须验证镜像、正式安全预检和 worker 后再恢复评测。
 - 扩容只用 Colima 官方命令，在无活动评测、构建及容器执行时调整指定 profile；不直接改虚拟盘文件，不切换默认 Docker context，不停止其他项目的虚拟机。
+- 内存与并发调整须预留虚拟机系统余量，同时核对服务总并发（包含补判）和批次并发；每题内存上限不是预留内存。用户授权调整数据集默认资源时，在空闲worker停止后持同一service lease校验并保存settings，重启后验证生效，记录实际资源；重型题运行期间不同时构建环境。
 - 已退役的专用 Colima profile 仅在用户明确授权、当前 settings 和环境绑定不再引用、无活动或待恢复任务时，使用 `colima delete --profile NAME --data --force` 清理；保留宿主题目、成绩、日志和离线备份，不直接删除虚拟盘文件。
 - Docker 内释放空间不保证 Mac 文件立即缩小。服务空闲时可对审定 Colima 数据盘执行 fstrim，再分别测 Linux df 和宿主 du；不要通过重建空盘掩盖实际占用。
 
@@ -123,4 +124,4 @@ DeepSWE 固定镜像含 /root/.cache/ms-playwright 时，作答准备和独立�
 
 DeepSWE 的 Go 镜像准备必须用固定源镜像中 `GOTOOLCHAIN=local go env GOMODCACHE` 的实际目录复制模块与工具链缓存到 `/opt/hicode-go/pkg/mod`，不得假设缓存位于 `/root/go/pkg`；源缓存缺失或为 symlink 时构建失败。Actor 与独立 verifier 均须在禁网隔离视图中验证工具链和所需模块可读，不能以目录存在代替可用性验证。
 
-DeepSWE 私有 verifier 的 Corepack 缓存只从固定镜像 /root/.cache/node/corepack/v1/pnpm 经有界校验复制到 /opt/hicode-verifier-corepack，保持内部链接并只读挂载；仅私有判题设置 COREPACK_HOME 和 COREPACK_ENABLE_NETWORK=0，Actor 不可见，不挂载镜像 Home、不在判题时下载。
+DeepSWE 私有 verifier 的 Corepack 缓存从固定镜像 /root/.cache/node/corepack/v1/pnpm 经有界校验复制到 /opt/hicode-verifier-corepack，保持内部链接并只读挂载。固定镜像若有 lastKnownGood.json，只读取最多16 KiB的普通非链接文件；仅保留 pnpm 激活记录，校验版本格式并确认该版本目录实际存在于固定缓存，拒绝外部路径和未缓存版本，不复制其他包管理器设置。私有判题显式设置 COREPACK_HOME、COREPACK_ENABLE_NETWORK=0、COREPACK_DEFAULT_TO_LATEST=0，使用固定激活版本，不查询最新版本；Actor不可见，不挂载镜像Home、不在判题时下载。

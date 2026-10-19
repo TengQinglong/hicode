@@ -279,7 +279,7 @@ def verifier_readonly_mounts():
             if item.is_symlink() and not item.resolve(strict=True).is_relative_to(cache):
                 raise ValueError('Prepared Corepack link escapes package cache')
         result += ['--ro-bind', str(cache), str(cache), '--setenv', 'COREPACK_HOME', str(cache),
-                   '--setenv', 'COREPACK_ENABLE_NETWORK', '0']
+                   '--setenv', 'COREPACK_ENABLE_NETWORK', '0', '--setenv', 'COREPACK_DEFAULT_TO_LATEST', '0']
     return result
 
 

@@ -125,6 +125,22 @@ def prepare_verifier_corepack():
         elif stat.S_ISREG(info.st_mode): size += info.st_size
         elif not stat.S_ISDIR(info.st_mode): raise ValueError('Invalid Corepack cache entry')
         if size > 512 * 1024 * 1024: raise ValueError('Corepack cache exceeds byte budget')
+    # Corepack needs its fixed-image activation record when packageManager is absent.
+    activation = source.parent.parent / 'lastKnownGood.json'
+    active_pnpm = None
+    if activation.exists() or activation.is_symlink():
+        if activation.is_symlink() or not activation.is_file() or activation.resolve() != activation:
+            raise ValueError('Invalid fixed Corepack activation metadata')
+        record = json.loads(checked_bytes(activation, 16384))
+        if not isinstance(record, dict): raise ValueError('Invalid Corepack activation record')
+        if 'pnpm' in record:
+            active_pnpm = record['pnpm']
+            if (not isinstance(active_pnpm, str) or len(active_pnpm) > 256
+                    or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?', active_pnpm)):
+                raise ValueError('Invalid Corepack pnpm activation version')
+            selected = source / active_pnpm.split('+', 1)[0]
+            if selected.is_symlink() or not selected.is_dir() or selected.resolve() != selected:
+                raise ValueError('Activated Corepack pnpm version is not in the fixed cache')
     parent = Path('/opt/hicode-verifier-corepack')
     if parent.exists() or parent.is_symlink(): raise ValueError('Verifier Corepack staging already exists')
     parent.mkdir(mode=0o755)
@@ -132,6 +148,10 @@ def prepare_verifier_corepack():
         target = parent / 'v1/pnpm'
         target.parent.mkdir(mode=0o755)
         shutil.copytree(source, target, symlinks=True)
+        if active_pnpm is not None:
+            staged_activation = parent / 'lastKnownGood.json'
+            staged_activation.write_text(json.dumps({'pnpm': active_pnpm}) + '\n')
+            staged_activation.chmod(0o444)
         for name, resolved in links.items():
             link = target / name
             link.unlink(); link.symlink_to(os.path.relpath(target / resolved, link.parent))
