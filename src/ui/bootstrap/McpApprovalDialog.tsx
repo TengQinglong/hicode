@@ -2,7 +2,7 @@ import {useRef, useState} from "react";
 import {Box, Text, useInput} from "ink";
 import type {McpApprovalDecision, McpApprovalRequest} from "../../mcp/index.js";
 import {COLORS} from "../theme.js";
-import {useTerminalWidth} from "../terminalSize.js";
+import {usePanelLayout} from "../panelLayout.js";
 
 const OPTIONS: Array<{label: string; value: McpApprovalDecision; description: string}> = [
     {label: "Connect for this session", value: "once", description: "Use existing tool approvals; ask to connect again next launch."},
@@ -40,7 +40,7 @@ export function McpApprovalDialog({
 }) {
     const [selectedIndex, setSelectedIndex] = useState(0);
     const completed = useRef(false);
-    const width = Math.max(1, Math.min(96, useTerminalWidth() - 4));
+    const {width: terminalWidth, padding, contentWidth: width} = usePanelLayout();
     const finish = (decision: McpApprovalDecision) => {
         if (completed.current) return;
         completed.current = true;
@@ -58,7 +58,7 @@ export function McpApprovalDialog({
     });
 
     return (
-        <Box flexDirection="column" paddingLeft={2} paddingRight={2}>
+        <Box flexDirection="column" paddingX={padding} width={terminalWidth}>
             <Box flexDirection="column" width={width}>
                 <Text color={COLORS.accent} bold>◆ MCP CONNECTION · {request.serverName}</Text>
                 <Text color={COLORS.dim}>Choose connection and tool permissions for this project.</Text>

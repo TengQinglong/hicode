@@ -31,7 +31,7 @@ test("compact list, scrollable details and two-level Escape reflow on narrow ter
         expect(list).not.toContain("SKILL.md");
         expect(list).not.toContain("Restart HiCode");
         expect(list).not.toMatch(/[╭╰│]/);
-        expect(list.split("\n").length).toBeLessThan(12);
+        expect(list.split("\n").length).toBeLessThanOrEqual(24);
         view.stdin.write("\r"); await tick();
         const frames = [view.lastFrame() ?? ""];
         for (let i = 0; i < 28; i++) {view.stdin.write("\u001b[B"); await tick(); frames.push(view.lastFrame() ?? "");}

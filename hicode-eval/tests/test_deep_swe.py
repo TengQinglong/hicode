@@ -197,25 +197,46 @@ class PreparedCorepackTest(unittest.TestCase):
         from eval_datasets.deep_swe import prepare_verifier_corepack
         from protocol import verifier_readonly_mounts
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp).resolve();source=root/'fixed';binary=source/'10.24.0/bin/pnpm.cjs'
+            root=Path(tmp).resolve();source=root/'fixed/v1/pnpm';binary=source/'10.24.0/bin/pnpm.cjs'
             binary.parent.mkdir(parents=True);binary.write_text('fixed pnpm')
             (source/'current').symlink_to(source/'10.24.0')
+            (source.parent.parent/'lastKnownGood.json').write_text(json.dumps({'pnpm':'10.24.0+sha512.abc','npm':'not-copied'}))
             target=root/'staged'
             with patch('eval_datasets.deep_swe.Path',side_effect=lambda name:source if name=='/root/.cache/node/corepack/v1/pnpm' else target):
                 prepare_verifier_corepack()
             self.assertEqual((target/'v1/pnpm/current/bin/pnpm.cjs').read_text(),'fixed pnpm')
             self.assertFalse((target/'v1/pnpm/current').readlink().is_absolute())
+            self.assertEqual(json.loads((target/'lastKnownGood.json').read_text()),{'pnpm':'10.24.0+sha512.abc'})
+            self.assertEqual((target/'lastKnownGood.json').stat().st_mode & 0o777,0o444)
             def mounted(name):
                 return target if name=='/opt/hicode-verifier-corepack' else root/'absent'
             with patch('protocol.Path',side_effect=mounted):args=verifier_readonly_mounts()
             self.assertIn('COREPACK_HOME',args)
             self.assertIn(['--ro-bind',str(target),str(target)],[args[i:i+3] for i in range(len(args)-2)])
             self.assertIn('COREPACK_ENABLE_NETWORK',args)
+            self.assertIn('COREPACK_DEFAULT_TO_LATEST',args)
             self.assertNotIn(str(source),args)
             self.assertNotIn('/root',args)
             (source/'escape').symlink_to(root)
             with patch('eval_datasets.deep_swe.Path',side_effect=lambda name:source if name=='/root/.cache/node/corepack/v1/pnpm' else root/'another'),self.assertRaisesRegex(ValueError,'escapes package cache'):
                 prepare_verifier_corepack()
+
+
+    def test_activation_rejects_untrusted_paths_versions_and_oversized_records(self):
+        from eval_datasets.deep_swe import prepare_verifier_corepack
+        cases=[json.dumps({'pnpm':'../outside'}),json.dumps({'pnpm':'https://example.test/pnpm.tgz'}),
+               json.dumps({'pnpm':'99.0.0'}),json.dumps({'pnpm':None}),'[]','not-json',' '*16385,'symlink']
+        for body in cases:
+            with self.subTest(body=body[:80]),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp).resolve();source=root/'fixed/v1/pnpm';(source/'10.24.0').mkdir(parents=True)
+                activation=source.parent.parent/'lastKnownGood.json'
+                if body=='symlink':
+                    external=root/'other.json';external.write_text('{"pnpm":"10.24.0"}');activation.symlink_to(external)
+                else:activation.write_text(body)
+                target=root/'staged'
+                with patch('eval_datasets.deep_swe.Path',side_effect=lambda name:source if name=='/root/.cache/node/corepack/v1/pnpm' else target),self.assertRaises(ValueError):
+                    prepare_verifier_corepack()
+                self.assertFalse(target.exists())
 
 
 class PreparedBrowserTest(unittest.TestCase):

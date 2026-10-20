@@ -33,7 +33,7 @@ describe("StatusBar token state", () => {
       permissionMode="auto-review" collaborationMode="plan"
       tokenCount={0} percentUsed={0} warning={false} tokenStatus="unavailable"
     />);
-    expect(instance.lastFrame()).toContain("Qwen | Approve for me | Plan | /project/");
+    expect(instance.lastFrame()).toContain("Qwen | Agent review | Plan | /project/");
   });
   test("新进程在首次模型调用前明确显示新会话", () => {
     const frame = renderStatusBar("unavailable");

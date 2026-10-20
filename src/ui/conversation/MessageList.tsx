@@ -189,6 +189,7 @@ function AgentProgress({
     thread: ToolCallThread;
     transcript: boolean;
 }) {
+    if (agentIdentity(thread)) return null;
     const progress = thread.subagentProgress ?? [];
     if (progress.length === 0 || (thread.status === "done" && !transcript)) {
         return null;

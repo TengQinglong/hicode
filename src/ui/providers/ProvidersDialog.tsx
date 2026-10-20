@@ -5,7 +5,10 @@ import {LLM_PROVIDER_NAMES, PROVIDER_BASE_URLS, type LLMProviderName} from "../.
 import type {PrimaryModelRuntime} from "../../runtime/primaryModel.js";
 import type {ModelConfiguration} from "../../settings/modelConfiguration.js";
 import type {ModelTargetSettings} from "../../settings/types.js";
+import {PanelViewport} from "../dialogs/PanelViewport.js";
+import {MultilineTextInput} from "../input/MultilineTextInput.js";
 import {ModelDialog} from "../model/ModelDialog.js";
+import {usePanelLayout, panelWindow, wrapPanelText} from "../panelLayout.js";
 import {COLORS} from "../theme.js";
 
 type Page = {kind: "select-model"; source: LLMProviderName | null} | {kind: "list"} | {kind: "provider" | "remove-model" | "key" | "endpoint" | "model-id"; source: LLMProviderName}
@@ -18,6 +21,7 @@ export function ProvidersDialog({runtime, configuration, onSelect, onClose}: {
     onSelect(target: ModelTargetSettings): Promise<void>;
     onClose(): void;
 }) {
+    const {width, height, padding, contentWidth} = usePanelLayout();
     const [page, setPage] = useState<Page>({kind: "list"});
     const [selected, setSelected] = useState(0);
     const [value, setValue] = useState("");
@@ -112,6 +116,8 @@ export function ProvidersDialog({runtime, configuration, onSelect, onClose}: {
         }
     }, {isActive: page.kind !== "select-model"});
 
+    const previewWindow = panelWindow((source?.models ?? []).map(model => wrapPanelText(`  ${model.label} · ${model.id}`, contentWidth).length), 0, height - 18);
+    const modelWindow = panelWindow((source?.models ?? []).map(model => wrapPanelText(`  ${model.label} · ${model.id}`, contentWidth).length), selected, height - 10);
     const row = (text: string, index: number) => <Text key={text} color={index === selected ? COLORS.accent : undefined} bold={index === selected}>{index === selected ? "› " : "  "}{text}</Text>;
     if (page.kind === "select-model") {
         const provider = page.source;
@@ -126,7 +132,7 @@ export function ProvidersDialog({runtime, configuration, onSelect, onClose}: {
             }}
         />;
     }
-    return <Box flexDirection="column" paddingLeft={2} paddingRight={2}>
+    return <Box flexDirection="column" width={width} paddingX={padding}>
         <Text bold color={COLORS.accent}>◆ {source?.label ?? "PROVIDERS"}</Text>
         {page.kind === "list" ? <Box marginTop={1} flexDirection="column">
             {LLM_PROVIDER_NAMES.map((name, index) => row(`${sources[name].label} · ${configured(name) ? "Configured" : "Key required"}`, index))}
@@ -145,13 +151,14 @@ export function ProvidersDialog({runtime, configuration, onSelect, onClose}: {
             </Box>
             <Box marginTop={1} flexDirection="column">
                 <Text color={COLORS.dim}>Models</Text>
-                {source?.models.slice(0, 8).map(model => <Text key={model.id} wrap="truncate-end">  {model.label} · {model.id}</Text>)}
-                {source && source.models.length > 8 && <Text color={COLORS.dim}>  {source.models.length - 8} more models available</Text>}
+                <PanelViewport width={contentWidth} height={Math.max(2, height - 18)} resetKey={source?.id ?? "empty"}
+                    lines={(source?.models ?? []).slice(previewWindow.start, previewWindow.end).flatMap(model => wrapPanelText(`  ${model.label} · ${model.id}`, contentWidth))}/>
+                {source && previewWindow.end < source.models.length && <Text color={COLORS.dim}>{source.models.length - previewWindow.end} more · Choose model and start to view all</Text>}
             </Box>
         </> : page.kind === "remove-model" ? <Box marginTop={1} flexDirection="column">
             <Text color={COLORS.dim}>Select a model to remove</Text>
             {!source?.models.length && <Text>No models configured.</Text>}
-            {source?.models.slice(Math.max(0, selected - 7), Math.max(0, selected - 7) + 8).map((model, index) => row(`${model.label} · ${model.id}`, Math.max(0, selected - 7) + index))}
+            {source?.models.slice(modelWindow.start, modelWindow.end).map((model, index) => row(`${model.label} · ${model.id}`, modelWindow.start + index))}
             {row("Back", source?.models.length ?? 0)}
         </Box> : page.kind === "confirm-remove" ? <Box marginTop={1} flexDirection="column">
             <Text>Remove {page.label}?</Text>
@@ -162,8 +169,12 @@ export function ProvidersDialog({runtime, configuration, onSelect, onClose}: {
         </Box> : <Box marginTop={1} flexDirection="column">
             <Text>{page.kind === "key" ? "API key (hidden)" : page.kind === "endpoint" ? "API base URL (empty restores default)" : page.kind === "model-id" ? "Model ID (required, exactly as the API expects)" : "Display name (optional, defaults to model ID)"}</Text>
             {page.kind === "model-label" && <><Text color={COLORS.dim}>Model ID: {page.id}</Text><Text>Image input: {imageInput ? "Enabled" : "Disabled"} · Tab toggle</Text><Text color={COLORS.dim}>Enable only when this model and endpoint support images.</Text></>}
-            <Box><Text color={COLORS.accent}>› </Text><TextInput value={value} onChange={next => setValue(next.slice(0, page.kind === "key" ? 8192 : 2048))}
-                mask={page.kind === "key" ? "•" : undefined} focus={!busy} onSubmit={input => {void save(input);}}/></Box>
+            {page.kind === "key" ? <Box><Text color={COLORS.accent}>› </Text><TextInput value={value}
+                onChange={next => setValue(next.slice(0, 8192))} mask="•" focus={!busy}
+                onSubmit={input => {void save(input);}}/></Box>
+                : !busy && <MultilineTextInput value={value} onChange={next => setValue(next.slice(0, 2048))}
+                    width={contentWidth} leadingContent="› " maxRows={Math.max(1, height - 12)}
+                    onSubmit={input => {void save(input);}}/>}
         </Box>}
         {error && <Box marginTop={1}><Text color={COLORS.error}>{error}</Text></Box>}
         {notice && <Box marginTop={1}><Text color={COLORS.dim}>{notice}</Text></Box>}

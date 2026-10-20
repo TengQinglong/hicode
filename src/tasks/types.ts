@@ -134,7 +134,6 @@ export interface StartShellTaskInput {
 
 export interface RunShellTaskInput extends StartShellTaskInput {
     waitMs: number;
-    timeoutMs?: number;
     signal: AbortSignal;
     onHandoff(): void;
 }

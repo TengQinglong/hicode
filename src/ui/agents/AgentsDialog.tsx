@@ -1,7 +1,6 @@
 import {useEffect, useMemo, useRef, useState} from "react";
 import {Box, Text, useInput} from "ink";
-import SelectInput from "ink-select-input";
-import TextInput from "ink-text-input";
+import {PanelSelect} from "../dialogs/PanelSelect.js";
 import type {
     AgentAuthoringRuntime,
     AgentDefinition,
@@ -14,8 +13,7 @@ import type {
 import {formatSubagentModel} from "../../subagents/index.js";
 import {MultilineTextInput} from "../input/MultilineTextInput.js";
 import {COLORS} from "../theme.js";
-import {DialogIndicator, DialogItem} from "../dialogs/DialogFrame.js";
-import {useTerminalWidth} from "../terminalSize.js";
+import {usePanelLayout} from "../panelLayout.js";
 
 type Stage =
     | "list"
@@ -46,20 +44,6 @@ function agentDescription(definition: AgentDefinition): string {
     }
     return definition.whenToUse;
 }
-
-function AgentListItem({label, description, source, divider, isSelected}: Pick<DialogItem, "label" | "description" | "source" | "divider"> & {isSelected?: boolean}) {
-    const width = Math.max(1, Math.min(76, useTerminalWidth() - 4));
-    return <Box flexDirection="column" width={width} marginTop={divider ? 1 : 0} marginBottom={description ? 1 : 0}>
-        <Box>
-            <Text color={isSelected ? COLORS.accent : COLORS.dim}>{isSelected ? "❯ " : "  "}</Text>
-            <Text bold={isSelected} color={isSelected ? COLORS.accent : undefined}>{label}</Text>
-            {source && <Text color={COLORS.dim}> · {source}</Text>}
-        </Box>
-        {description && <Box paddingLeft={2}><Text color={COLORS.dim} wrap="truncate-end">{description.replace(/\s+/g, " ")}</Text></Box>}
-    </Box>;
-}
-
-function NoIndicator() {return null;}
 
 const EMPTY_DRAFT: AgentDefinitionDraft = {
     name: "",
@@ -128,7 +112,7 @@ export function AgentsDialog({
     fastModel: string;
     onClose(): void;
 }) {
-    const width = Math.max(1, Math.min(76, useTerminalWidth() - 4));
+    const {width: terminalWidth, height, padding, contentWidth: width} = usePanelLayout();
     const [stage, setStage] = useState<Stage>("list");
     const [selected, setSelected] = useState<AgentDefinition>();
     const [scope, setScope] = useState<AgentDefinitionScope>("project");
@@ -280,7 +264,7 @@ export function AgentsDialog({
     };
 
     return (
-        <Box marginTop={1} marginBottom={1} paddingLeft={2} flexDirection="column">
+        <Box marginTop={1} marginBottom={1} paddingX={padding} width={terminalWidth} flexDirection="column">
             <Box
                 width={width}
                 flexDirection="column"
@@ -296,11 +280,8 @@ export function AgentsDialog({
 
                 {stage === "list" && (
                     <Box marginTop={1} flexDirection="column">
-                        <SelectInput
-                            items={listItems}
-                            indicatorComponent={NoIndicator}
-                            itemComponent={AgentListItem}
-                            limit={8}
+                        <PanelSelect width={width} rows={Math.max(2, height - 10)}
+                            items={listItems.map(item => ({...item, label: item.source ? `${item.label} · ${item.source}` : item.label}))}
                             onSelect={(item: DialogItem) => {
                                 if (item.value === "close") return onClose();
                                 if (item.value === "create") {
@@ -345,11 +326,9 @@ export function AgentsDialog({
                                 <Text color={COLORS.dim}>{issue.message}</Text>
                             </Box>
                         ))}
-                        <SelectInput
+                        <PanelSelect width={width} rows={Math.max(2, height - 10)}
                             items={[{label: "Back", value: "back"}]}
                             onSelect={() => setStage("list")}
-                            indicatorComponent={DialogIndicator}
-                            itemComponent={DialogItem}
                         />
                     </Box>
                 )}
@@ -358,19 +337,19 @@ export function AgentsDialog({
                     <Box marginTop={1} flexDirection="column">
                         <Text bold>{draft.name || "New Agent"}</Text>
                         <Text>{draft.description || "Add when this agent should be used."}</Text>
-                        <Box marginY={1}><Text wrap="truncate-end">{draft.systemPrompt ? draft.systemPrompt.slice(0, 1200).split("\n").slice(0, 8).join("\n") : "Add instructions for the assigned work."}</Text></Box>
+                        <Box marginY={1}><Text>{draft.systemPrompt ? draft.systemPrompt.slice(0, 1200).split("\n").slice(0, 8).join("\n") : "Add instructions for the assigned work."}</Text></Box>
                         <Text color={COLORS.dim}>Model · Same as main agent</Text>
                         <Text color={COLORS.dim}>Access · {draft.readOnly ? "Read-only" : "Parent-authorized work"}</Text>
                         <Text color={COLORS.dim}>Tools · {draft.tools?.join(" · ") ?? "Inherited"}</Text>
                         <Text color={COLORS.dim}>Save to · {scope === "project" ? "This project" : "Personal"}</Text>
-                        <SelectInput items={[
+                        <PanelSelect width={width} rows={Math.max(2, height - 10)} items={[
                             {label: "Save Agent", value: "save"},
                             ...EDIT_FIELDS.filter(field => !stored || field !== "name").map(field => ({label: `Edit ${fieldLabel(field)}`, value: field})),
                             {label: draft.readOnly ? "Allow parent-authorized changes" : "Make read-only", value: "access"},
                             {label: "Restrict tools (advanced)", value: "tools"},
                             ...(!stored ? [{label: scope === "project" ? "Save as personal Agent" : "Save in this project", value: "scope"}] : []),
                             {label: "Cancel", value: "cancel"},
-                        ]} indicatorComponent={DialogIndicator} itemComponent={DialogItem}
+                        ]}
                             onSelect={(item: DialogItem) => {
                                 if (item.value === "save") {void save(draft); return;}
                                 if (item.value === "access") {setDraft({...draft, readOnly: !draft.readOnly}); return;}
@@ -386,11 +365,11 @@ export function AgentsDialog({
                     <Box marginTop={1} flexDirection="column">
                         <Text bold>Tool restrictions</Text>
                         <Text color={COLORS.dim}>Inherited tools follow parent permissions. Select only to narrow access.</Text>
-                        <SelectInput limit={10} items={[
+                        <PanelSelect width={width} rows={Math.max(2, height - 10)} items={[
                             {label: "Inherit available tools", value: "inherit"},
                             {label: "Done", value: "done"},
                             ...manager.listTools().map(name => ({label: `${!draft.tools || draft.tools.includes(name) ? "☑" : "☐"} ${name}`, value: name})),
-                        ]} indicatorComponent={DialogIndicator} itemComponent={DialogItem}
+                        ]}
                             onSelect={(item: DialogItem) => {
                                 if (item.value === "inherit") {setDraft({...draft, tools: undefined}); setStage("preview"); return;}
                                 if (item.value === "done") {setStage("preview"); return;}
@@ -403,13 +382,11 @@ export function AgentsDialog({
                 {stage === "method" && (
                     <Box marginTop={1} flexDirection="column">
                         <Text bold>Creation method</Text>
-                        <SelectInput
+                        <PanelSelect width={width} rows={Math.max(2, height - 10)}
                             items={[
                                 {label: "Generate with HiCode · create a candidate from a description", value: "generate"},
                                 {label: "Manual · enter the definition yourself", value: "manual"},
                             ]}
-                            indicatorComponent={DialogIndicator}
-                            itemComponent={DialogItem}
                             onSelect={(item: DialogItem) => {
                                 if (item.value === "generate") setStage("generate");
                                 else beginEditor(EMPTY_DRAFT);
@@ -460,14 +437,10 @@ export function AgentsDialog({
                                 maxRows={10}
                             />
                         ) : (
-                            <Box>
-                                <Text color={COLORS.accent}>❯ </Text>
-                                <TextInput
-                                    value={currentValue}
-                                    onChange={(value) => setDraft(updateField(draft, field, value))}
-                                    onSubmit={submitField}
-                                />
-                            </Box>
+                            <MultilineTextInput value={currentValue}
+                                onChange={(value) => setDraft(updateField(draft, field, value))}
+                                onSubmit={submitField} leadingContent="❯ " width={width}
+                                maxRows={Math.max(1, height - 10)}/>
                         )}
                     </Box>
                 )}
@@ -483,7 +456,7 @@ export function AgentsDialog({
                         </Box>
                         <Text color={COLORS.dim}>Tools · {selected.allowedTools?.length ?? "Inherited"}</Text>
                         <Box marginBottom={1}><Text>{selected.allowedTools?.join(" · ") ?? "Available tools from the main agent, excluding parent controls."}</Text></Box>
-                        <SelectInput
+                        <PanelSelect width={width} rows={Math.max(2, height - 10)}
                             items={selected.source === "builtin" || selected.source === "host"
                                 ? [{label: "Back", value: "back"}]
                                 : [
@@ -491,8 +464,6 @@ export function AgentsDialog({
                                     {label: "Delete", value: "delete"},
                                     {label: "Back", value: "back"},
                                 ]}
-                            indicatorComponent={DialogIndicator}
-                            itemComponent={DialogItem}
                             onSelect={(item: DialogItem) => {
                                 if (item.value === "edit" && stored) {
                                     beginEditor(draftFromStored(stored), stored);
@@ -509,13 +480,11 @@ export function AgentsDialog({
                         <Text color={COLORS.warning}>
                             Confirm deletion of {selected.agentType}? This deletes the corresponding Markdown file.
                         </Text>
-                        <SelectInput
+                        <PanelSelect width={width} rows={Math.max(2, height - 10)}
                             items={[
                                 {label: "Cancel", value: "cancel"},
                                 {label: "Confirm deletion", value: "delete"},
                             ]}
-                            indicatorComponent={DialogIndicator}
-                            itemComponent={DialogItem}
                             onSelect={(item: DialogItem) => {
                                 if (item.value === "delete") void deleteSelected();
                                 else setStage("detail");
@@ -537,7 +506,7 @@ export function AgentsDialog({
                 {stage === "error" && (
                     <Box marginTop={1} flexDirection="column">
                         <Text color={COLORS.error}>Operation failed: {error}</Text>
-                        <SelectInput
+                        <PanelSelect width={width} rows={Math.max(2, height - 10)}
                             items={[{
                                 label: errorReturnStage === "preview"
                                     ? "Back to preview"
@@ -548,8 +517,6 @@ export function AgentsDialog({
                                             : "Back to Agent list",
                                 value: "back",
                             }]}
-                            indicatorComponent={DialogIndicator}
-                            itemComponent={DialogItem}
                             onSelect={() => {
                                 setError(undefined);
                                 setStage(errorReturnStage);

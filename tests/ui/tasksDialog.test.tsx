@@ -76,7 +76,7 @@ test("Agent detail uses terminal height, scrolls, preserves selection and return
       expect(view.lastFrame()).toContain("Line 15");
       expect(view.lastFrame()).not.toContain("13 rounds");
       expect(view.lastFrame()).not.toContain("**Implemented**");
-      for (let i = 0; i < 5; i++) {view.stdin.write("\u001b[B"); await new Promise(resolve => setTimeout(resolve, 10));}
+      for (let i = 0; i < 8; i++) {view.stdin.write("\u001b[B"); await new Promise(resolve => setTimeout(resolve, 10));}
       expect(view.lastFrame()).not.toContain("Final report");
       view.stdin.write("r"); await new Promise(resolve => setTimeout(resolve, 30));
       expect(view.lastFrame()).not.toContain("Final report");
@@ -106,7 +106,7 @@ test("任务面板区分层级，停止任务不提示停止，窄屏中文标�
     Object.defineProperty(instance.stdout, "columns", {configurable: true, get: () => columns});
     try {
       await until(() => instance.lastFrame()?.includes("0 running · 1 finished") === true);
-      for (const width of [100, 40, 24]) {
+      for (const width of [100, 160, 40, 24]) {
         columns = width; instance.stdout.emit("resize");
         await new Promise(resolve => setTimeout(resolve, 90));
         const frame = instance.lastFrame() ?? "";

@@ -125,7 +125,7 @@ export class FileSuggestions {
         const escaped = privateRelative.replace(/[\[\]*?{}]/g, value => `[${value}]`);
         const command = COMMAND + (isPathInside(root, privateRoot) && privateRelative ? ` -g ${quote(`!/${escaped}`)}` : "");
         if (!ctx.toolNames.includes("bash")) throw new Error("This session does not allow file enumeration");
-        const result = await this.runtime.executeTool("bash", JSON.stringify({command, timeout_ms: 10_000}), {...ctx, fileState: createFileStateTracker()}, `file-suggestions:${randomUUID()}`);
+        const result = await this.runtime.executeTool("bash", JSON.stringify({command}), {...ctx, fileState: createFileStateTracker()}, `file-suggestions:${randomUUID()}`);
         ctx.signal.throwIfAborted();
         if (result.outcome !== "ok") throw new Error(contentText(result.modelContent).slice(0, 240));
         const text = contentText(result.modelContent);

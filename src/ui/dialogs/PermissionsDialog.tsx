@@ -1,20 +1,11 @@
 import {useState} from "react";
 import {Box, Text, useInput} from "ink";
-import stringWidth from "string-width";
 import {getPermissionModeDescription, getPermissionModeShortLabel, type PermissionMode} from "../../permissions/index.js";
 import {COLORS} from "../theme.js";
-import {useTerminalWidth} from "../terminalSize.js";
+import {PanelViewport} from "./PanelViewport.js";
+import {panelWindow, wrapPanelText, usePanelLayout} from "../panelLayout.js";
 
 const OPTIONS: readonly PermissionMode[] = ["ask", "auto-review", "full-access"];
-
-function fitRow(value: string, width: number): string {
-    let result = "";
-    for (const segment of Array.from(value)) {
-        if (stringWidth(result + segment) > width) break;
-        result += segment;
-    }
-    return result + " ".repeat(Math.max(0, width - stringWidth(result)));
-}
 
 export function PermissionsDialog({
     current,
@@ -34,7 +25,7 @@ export function PermissionsDialog({
     const [selectedIndex, setSelectedIndex] = useState(initialIndex);
     const [confirmFullAccess, setConfirmFullAccess] = useState(false);
     const [confirmIndex, setConfirmIndex] = useState(1);
-    const rowWidth = Math.max(24, Math.min(76, useTerminalWidth() - 6));
+    const {width, height, padding, contentWidth} = usePanelLayout();
 
     useInput((_input, key) => {
         if (confirmFullAccess) {
@@ -76,7 +67,7 @@ export function PermissionsDialog({
     if (confirmFullAccess) {
         const actions = ["Enable Full Access", "Back"];
         return (
-            <Box flexDirection="column" paddingLeft={2} width={rowWidth + 2}>
+            <Box flexDirection="column" paddingX={padding} width={width}>
                 <Text color={COLORS.error} bold>◆ Enable Full Access?</Text>
                 <Box marginTop={1} flexDirection="column">
                     <Text>Allow this session to access files and the network as the current OS account.</Text>
@@ -92,7 +83,7 @@ export function PermissionsDialog({
                             color={index === confirmIndex ? "white" : undefined}
                             bold={index === confirmIndex}
                         >
-                            {fitRow(`${index === confirmIndex ? "›" : " "} ${label}`, rowWidth)}
+                            {`${index === confirmIndex ? "›" : " "} ${label}`}
                         </Text>
                     ))}
                 </Box>
@@ -103,36 +94,32 @@ export function PermissionsDialog({
         );
     }
 
+    const subtitle = "Choose who approves extra access, or allow host execution.";
+    const explanation = "Build/Plan chooses the work mode. /sandbox controls network access for sandboxed commands.";
+    const shortcuts = "↑↓ select · enter switch · esc back";
+    const bodyHeight = Math.max(2, height - 6 - wrapPanelText(subtitle, contentWidth).length
+        - wrapPanelText(explanation, contentWidth).length - wrapPanelText(shortcuts, contentWidth).length);
+    const options = OPTIONS.map((option, index) => {
+        const focused = index === selectedIndex;
+        const label = `${getPermissionModeShortLabel(option)}${option === current ? "  (current)" : ""}${option === "full-access" && !allowFullAccess ? "  (disabled by Host)" : ""}`;
+        return [
+            ...wrapPanelText(label, Math.max(1, contentWidth - 2)).map((line, i) => <Text key={`label-${i}`} color={focused ? COLORS.accent : undefined} bold={focused}>{i === 0 && focused ? "› " : "  "}{line}</Text>),
+            ...wrapPanelText(getPermissionModeDescription(option), Math.max(1, contentWidth - 2)).map((line, i) => <Text key={`description-${i}`} color={COLORS.dim}>{`  ${line}`}</Text>), " ",
+        ];
+    });
+    const window = panelWindow(options.map(lines => lines.length), selectedIndex, bodyHeight);
     return (
-        <Box flexDirection="column" paddingLeft={2} width={rowWidth + 2}>
-            <Text color={COLORS.accent} bold>◆ Execution permissions</Text>
-            <Text color={COLORS.dim}>Choose how additional access is approved.</Text>
+        <Box flexDirection="column" paddingX={padding} width={width}>
+            <Text color={COLORS.accent} bold>◆ Access & approval</Text>
+            <Text color={COLORS.dim}>{subtitle}</Text>
             <Box marginTop={1} flexDirection="column">
-                {OPTIONS.map((option, index) => {
-                    const focused = index === selectedIndex;
-                    const active = option === current;
-                    return (
-                        <Box key={option} marginTop={index === 0 ? 0 : 1}>
-                            <Box width={2} flexShrink={0}>
-                                <Text color={COLORS.accent}>{focused ? "›" : " "}</Text>
-                            </Box>
-                            <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-                                <Text color={focused ? COLORS.accent : undefined} bold={focused}>
-                                    {getPermissionModeShortLabel(option)}
-                                    <Text color={COLORS.dim} bold={false}>
-                                        {active ? "  (current)" : ""}
-                                        {option === "full-access" && !allowFullAccess ? "  (disabled by Host)" : ""}
-                                    </Text>
-                                </Text>
-                                <Text color={COLORS.dim}>{getPermissionModeDescription(option)}</Text>
-                            </Box>
-                        </Box>
-                    );
-                })}
+                <PanelViewport width={contentWidth} height={bodyHeight} resetKey={OPTIONS[selectedIndex]!}
+                    lines={options.slice(window.start, window.end).flat()}/>
+                {(window.start > 0 || window.end < options.length) && <Text color={COLORS.dim}>{selectedIndex + 1}/{options.length}</Text>}
             </Box>
             <Box marginTop={1} flexDirection="column">
-                <Text color={COLORS.dim}>Build/Plan controls the work mode; this controls access and approval.</Text>
-                <Text color={COLORS.dim}>↑↓ select · enter switch · esc back</Text>
+                <Text color={COLORS.dim}>{explanation}</Text>
+                <Text color={COLORS.dim}>{shortcuts}</Text>
             </Box>
         </Box>
     );

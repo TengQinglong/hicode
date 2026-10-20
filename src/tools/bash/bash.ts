@@ -34,24 +34,17 @@ const inputSchema = z.object({
         .min(1)
         .optional()
         .describe("Existing working directory, relative to the current project or an absolute path permitted by runtime policy. To create a directory, run mkdir from an existing parent first. Each call is independent; previous cd state is not retained."),
-    timeout_ms: z
-        .number()
-        .int()
-        .min(100)
-        .max(600_000)
-        .optional()
-        .describe("Optional hard execution deadline in milliseconds (100-600000), not a waiting window. Set only when forced termination is intended. For training, builds or other finite work of uncertain duration or expected to exceed 10 minutes, omit this field and inspect/wait on the returned Task ID. Omission sets no implicit hard timeout; explicit limits kill the process tree even after yielding. Omit with run_in_background=true; an accidental value is ignored safely."),
     run_in_background: z
         .boolean()
         .optional()
-        .describe("For services, GUIs and watchers. Returns a task ID immediately; use task to inspect/stop. Omit timeout_ms. Runs until exit, explicit stop or Runtime shutdown. In Ask mode background tasks can use existing Session network grants but cannot request new ones; run installs in the foreground when approval may be needed."),
+        .describe("For services/watchers or finite work the user permits to finish after this reply. Returns a Task ID after a brief startup check; report started, not completed. Do not use when the current request requires the result. Survives a normal reply; runs until exit, explicit stop or owner shutdown. In Ask mode background tasks can use existing Session network grants but cannot request new ones; run installs in the foreground when approval may be needed."),
     yield_time_ms: z.number().int().min(100).max(30_000).optional()
-        .describe("Wait 100-30000ms (default 10000 in continuable execution); return final output or the same running process as a Task ID. timeout_ms is a separate total execution limit. In restricted Ask, explicit yield has no human network approval channel; omit it to keep foreground interaction. One-shot hosts and protected file searches do not accept yield. Do not combine with run_in_background=true."),
+        .describe("Wait 100-30000ms (default 10000 in continuable execution); return final output or the same running process as a Task ID. This is only a waiting window, never a process deadline. In restricted Ask, explicit yield has no human network approval channel; omit it to keep foreground interaction. One-shot hosts and protected file searches do not accept yield. Do not combine with run_in_background=true."),
     sandbox_permissions: z
         .enum(["use_default", "require_escalated"])
         .optional()
         .describe("use_default follows the runtime sandbox policy; network access is authorized by domain/port without inherently leaving the sandbox. Use require_escalated only when leaving the sandbox is necessary; it has a separate authorization boundary."),
-});
+}).strict();
 
 type CommandCwdResult =
     | {ok: true; path: string}
@@ -160,7 +153,7 @@ function formatShellResult(result: ShellExecutionResult, noMatches?: "rg" | "gre
     const detail =
         termination.kind === "spawn_error" ? termination.error.message : output;
     const timeoutNotice = termination.kind === "timeout"
-        ? "\nThe command and its child processes have terminated; they will not continue in the background. Check partial effects and available checkpoints before retrying. If this finite task needs more time or its duration is uncertain, omit timeout_ms on retry and inspect/wait on the returned Task ID in continuable execution. Set a longer timeout_ms (maximum 600000) only when forced termination is intended; yield_time_ms only controls when control returns, not process lifetime. Use run_in_background=true for persistent services/watchers; in Ask mode background and yielded commands cannot request new network approval."
+        ? "\nThe command and its child processes have terminated under a host execution deadline; they will not continue in the background. Check partial effects and available checkpoints before retrying. yield_time_ms only controls when control returns, not process lifetime."
         : "";
     const heading = termination.kind === "exit" && !termination.signal
         ? `Command exited with code ${termination.code}`
@@ -227,10 +220,11 @@ export const bashTool: Tool<typeof inputSchema> = {
 - Use $TMPDIR for temporary files and clean up only artifacts you created; directory grants and explicit denials still apply.
 - Each call is a separate process: pass cwd rather than relying on a previous cd. Run tests/builds directly; the runtime preserves and budgets output. Do not add tail/head/grep just to shorten results or mask failures with || echo. Search returned saved paths with rg, then read_file at relevant lines; rerun only after a relevant change or for a new check. Avoid byte truncation of non-ASCII text.
 - When independent operations need separate success/failure judgments, issue separate Bash calls in the same tool batch. A command list joined with semicolons exposes only its final status; it does not report each operation's exit code.
+- A running Task ID returns control, not a stable workspace. If a background command changes Git state (such as stash/restore or branch switching), installs dependencies or rewrites build outputs, wait for that exact task to finish and inspect its result and resulting workspace state before running edits, builds or tests that depend on those changes. Continue only independent work while it runs; completion alone does not prove restoration succeeded.
 - Access uses the runtime's current sandbox and approval policy. Network authorization follows actual domains/ports; dependency downloads do not inherently require leaving the sandbox. For a necessary command blocked by sandbox permissions, request require_escalated for that operation rather than changing implementation to evade the restriction. A denial or unavailable approval channel is not permission to bypass it.
 - Local search uses rg --files (paths), ls (directory entries), rg -n (content) and rg -F (literal text). Quote globs and paths; use -e for the pattern. Recognized read commands run with no writes or network, trusted host programs, no rg config/global-ignore files, and exact authorized read scopes. Read-only roles support literal rg/ls/pwd/cat/head/tail/wc/echo commands and safe combinations, not shell expansion, redirection, preprocessing or arbitrary programs. Search saved output using its exact provided path; private storage directory scans are forbidden. Use read_file before editing: Bash output does not establish a file read version. Missing rg is a host setup issue, not a reason to install during the task.
-- Run a minimal existing syntax/build/test check before starting a server. Use run_in_background for services, GUIs and watchers, omit timeout_ms, and manage the returned task ID with task. Ordinary continuable commands wait 10 seconds by default, then return the same running process as a Task; yield_time_ms changes only that window. Use task wait with its ID when its result blocks work, not sleep/pgrep loops. Omitted timeout_ms sets no hard execution limit; an explicit timeout terminates the process and its children even after yield. Restricted Ask commands stay foreground for network interaction unless explicitly yielded; one-shot Hosts and protected file commands stay foreground. Do not use shell &. For finite subprocess/signal tests, use one foreground test program to create, signal, wait for and clean up its own children in a finally block; keep normal Sandbox and permission checks. Reuse an existing managed service; stop it before restarting and do not overlap instances or take over unrelated processes with lsof/kill.
-- For training, builds and other finite tasks of uncertain duration or expected to exceed 10 minutes, use ordinary Bash without timeout_ms; use the returned Task ID to inspect progress, wait or stop. Do not set the maximum timeout merely because the task is long or restart a task that is still running. Set a hard deadline only when forced termination is intended. Overall task limits, cancellation and Runtime shutdown still apply.
+- Run a minimal existing syntax/build/test check before starting a server. Use run_in_background for services/watchers or finite work the user permits to finish after your reply; manage the returned Task ID with task. Report startup separately from completion. When the requested result depends on a test/build, use ordinary Bash and collect its result before claiming completion. Ordinary continuable commands wait 10 seconds by default, then return the same running process as a Task; yield_time_ms changes only that window. Use task wait with its ID when its result blocks work, not sleep/pgrep loops. Bash has no model-set execution deadline. Waiting does not stop the process; explicit task stop, owner shutdown and host execution budgets still apply. A normal final reply does not close background tasks. Restricted Ask commands stay foreground for network interaction unless explicitly yielded; one-shot Hosts and protected file commands stay foreground. Do not use shell &. For finite subprocess/signal tests, use one foreground test program to create, signal, wait for and clean up its own children in a finally block; keep normal Sandbox and permission checks. Reuse an existing managed service; stop it before restarting and do not overlap instances or take over unrelated processes with lsof/kill.
+- For tests, training, builds and installs of uncertain duration, inspect progress and wait on the same Task ID. Do not invent a short kill deadline with shell timeout or restart a task that is still running. Stop explicitly when the user requests it or evidence shows the work is unnecessary or stuck; elapsed time or silence alone is not proof. Use a shell deadline only when forced termination is part of the requested operation.
 - For a port conflict, use supported temporary CLI/env options without changing project defaults or stopping unrelated processes. A genuine permission denial must not be bypassed by switching ports.
 - Local HTTP probes verify endpoints only: use bounded readiness retries and fail on HTTP errors (for example --fail-with-body); inspect required status/fields. Do not use fixed sleeps or treat HTTP 200 as browser verification. Do not create missing browser capability; existing E2E runs unchanged, and new automation infrastructure requires an explicit user request.
 - For failed network queries/downloads, inspect the actual error, including saved output, before diagnosing DNS, connection, TLS, HTTP errors or transfer timeout. Received HTTP headers or partial body followed by timeout means this transfer is incomplete, not that networking is unavailable. If an extra connectivity probe is needed, prefer the target resource's headers or small metadata with bounded connection and total timeouts; do not download entire registry indexes or large files just to test connectivity. HEAD rejection alone does not establish unavailability. Set download limits for the actual resource and task; retry only with new evidence or a corrected request, not repeated identical failures.
@@ -335,7 +329,6 @@ export const bashTool: Tool<typeof inputSchema> = {
     execute: async ({
                         command,
                         cwd,
-                        timeout_ms,
                         run_in_background,
                         yield_time_ms,
                         sandbox_permissions,
@@ -365,7 +358,7 @@ export const bashTool: Tool<typeof inputSchema> = {
             ctx.shellRunner.sandboxStatus.kind === "ready" && ctx.shellRunner.sandboxStatus.networkMode === "restricted";
         const canContinue = !!ctx.tasks?.shellContinuation && !workspace && !readAccess && (!restrictedHuman || yield_time_ms !== undefined);
         if (yield_time_ms !== undefined && !canContinue) return {content:
-            "This command requires foreground execution (one-shot Host or protected file access). Omit yield_time_ms; it will wait for completion, explicit timeout, or cancellation without an implicit 30-second limit.", outcome: "failed" as const};
+            "This command requires foreground execution (one-shot Host or protected file access). Omit yield_time_ms; it will wait for completion or cancellation without an implicit 30-second limit.", outcome: "failed" as const};
         const managed = run_in_background === true || canContinue;
         let interaction: Pick<ToolContext, "canUseTool" | "onApprovalEvent"> | undefined = run_in_background || (restrictedHuman && yield_time_ms !== undefined)
             ? undefined : {canUseTool: ctx.canUseTool, onApprovalEvent: ctx.onApprovalEvent};
@@ -430,7 +423,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                     networkAccess,
                 };
                 const started = run_in_background ? {kind: "task" as const, task: await ctx.tasks.startShell(taskInput)}
-                    : await ctx.tasks.runShell({...taskInput, waitMs: yield_time_ms ?? 10_000, timeoutMs: timeout_ms,
+                    : await ctx.tasks.runShell({...taskInput, waitMs: yield_time_ms ?? 10_000,
                         signal: ctx.signal, onHandoff: () => {interaction = undefined;}});
                 if (started.kind === "inline") {
                     const status = started.outputIssue ? `\nOutput delivery failed: ${started.outputIssue}` : "";
@@ -462,9 +455,6 @@ export const bashTool: Tool<typeof inputSchema> = {
                         `Queued: ${task.timing.queuedMs} ms; running: ${task.timing.runningMs} ms`,
                         "Lifecycle: managed by the current HiCode Runtime; terminates when HiCode exits.",
                         `Cwd: ${displayToolPath(ctx.cwd, commandCwd) || "."}`,
-                        ...(timeout_ms !== undefined && run_in_background
-                            ? ["Ignored timeout_ms: explicit background services do not use a hard execution timeout."]
-                            : []),
                         runningOutput(task, run_in_background === true),
                         "Use task to inspect output, completion status or stop the task.",
                     ].join("\n"),
@@ -484,7 +474,7 @@ export const bashTool: Tool<typeof inputSchema> = {
                     command,
                     cwd: commandCwd,
                     signal: ctx.signal,
-                    timeoutMs: timeout_ms ?? null,
+                    timeoutMs: null,
                     outputFilePath: capturePath,
                     maxOutputBytes: ctx.toolResultStore.maxArtifactBytes,
                     previewChars: 30_000,

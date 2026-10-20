@@ -72,7 +72,7 @@ class H(http.server.BaseHTTPRequestHandler):
   time.sleep(${v.cancel?60:0})
   results=[m.get('content','') for m in request['messages'] if m.get('role')=='tool'];text=json.dumps(results)
   call=None
-  if command and not results:call={'name':'bash','arguments':json.dumps({'command':command,'timeout_ms':150000,'yield_time_ms':30000})}
+  if command and not results:call={'name':'bash','arguments':json.dumps({'command':command,'yield_time_ms':30000})}
   elif command and not list(Path('/eval/runs').glob('*/project/.probe-passed')):
    match=re.search(r't_[0-9a-f]+',text)
    if match:call={'name':'task','arguments':json.dumps({'action':'wait','task_id':match.group(0)})}

@@ -119,7 +119,8 @@ class ActorFilesystemTest(unittest.TestCase):
             '--ro-bind', '/opt/hicode-verifier-pnpm/.tools', '/opt/hicode-verifier-pnpm/.tools',
             '--setenv', 'PNPM_HOME', '/opt/hicode-verifier-pnpm',
             '--ro-bind', '/opt/hicode-verifier-corepack', '/opt/hicode-verifier-corepack',
-            '--setenv', 'COREPACK_HOME', '/opt/hicode-verifier-corepack', '--setenv', 'COREPACK_ENABLE_NETWORK', '0'])
+            '--setenv', 'COREPACK_HOME', '/opt/hicode-verifier-corepack', '--setenv', 'COREPACK_ENABLE_NETWORK', '0',
+            '--setenv', 'COREPACK_DEFAULT_TO_LATEST', '0'])
         with patch('protocol.actor_readonly_mounts', return_value=[]), \
              patch('protocol.verifier_readonly_mounts', return_value=mounts) as reporters:
             actor = namespace_argv(['bun'], '/p', '/h', '/l', '/c', actor_release='/release', actor_events='/events')

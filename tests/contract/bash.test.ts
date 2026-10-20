@@ -98,13 +98,13 @@ function createTaskSession(
 }
 
 describe("bash tool contract", () => {
-  test("yield 等待结束只转交同一进程，显式执行超时仍有效", async () => {
+  test("yield 等待结束只转交同一进程，取消当前轮不会停止已交接任务", async () => {
     await withTempProject(async cwd => {
       const {runtime, tasks} = createTaskSession(cwd);
       const controller = createTurnAbortController();
       const ctx = createTestContext(cwd, {tasks, signal: controller.signal});
       try {
-        const result = await executeToolResult("bash", JSON.stringify({command: "echo once >> marker; sleep 30", yield_time_ms: 100, timeout_ms: 500}), ctx, "yield-call");
+        const result = await executeToolResult("bash", JSON.stringify({command: "echo once >> marker; sleep 30", yield_time_ms: 100}), ctx, "yield-call");
         expect(result.outcome).toBe("ok");
         expect(contentText(result.modelContent)).toContain("same process");
         const task = (await tasks.list())[0]!;
@@ -112,8 +112,8 @@ describe("bash tool contract", () => {
         controller.abort("user-cancel");
         await new Promise(resolve => setTimeout(resolve, 30));
         expect((await tasks.get(task.id))?.status).toBe("running");
-        for (let i = 0; i < 60 && (await tasks.get(task.id))?.status === "running"; i++) await new Promise(resolve => setTimeout(resolve, 20));
-        expect(await tasks.get(task.id)).toMatchObject({status: "failed", termination: {kind: "timeout", timeoutMs: 500}});
+        await tasks.stop(task.id);
+        expect(await tasks.get(task.id)).toMatchObject({status: "cancelled"});
         expect(await readFile(join(cwd, "marker"), "utf8")).toBe("once\n");
       } finally {await runtime.close();}
     });
@@ -489,23 +489,21 @@ describe("bash tool contract", () => {
     });
   });
 
-  test("前台 timeout 明确说明进程树已终止", async () => {
-    await withTempProject(async (cwd) => {
-      const result = await executeToolResult(
-        "bash",
-        JSON.stringify({
-          command: "node -e \"setTimeout(() => {}, 5000)\"",
-          timeout_ms: 100,
-        }),
-        createTestContext(cwd),
-        "timeout-bash"
-      );
-      expect(result.outcome).toBe("failed");
-      expect(result.modelContent).toContain("timeout 100ms");
-      expect(result.modelContent).toContain("command and its child processes have terminated");
-      expect(result.modelContent).toContain("run_in_background=true");
-      expect(result.modelContent).toContain("Set a longer timeout_ms");
-      expect(result.modelContent).toContain("Check partial effects");
+  test.each([{}, {yield_time_ms: 100}, {run_in_background: true}])("Bash rejects removed timeout before execution: %j", async mode => {
+    await withTempProject(async cwd => {
+      const {runtime, tasks} = createTaskSession(cwd);
+      let executions = 0;
+      const base = createTestContext(cwd, {tasks});
+      const ctx = {...base, shellRunner: {...base.shellRunner, async run(input: Parameters<ShellRunnerLike["run"]>[0]) {
+        executions++; return base.shellRunner.run(input);
+      }}};
+      try {
+        const result = await executeToolResult("bash", JSON.stringify({command: "printf should-not-run", timeout_ms: 100, ...mode}), ctx, "old-timeout");
+        expect(result.outcome).toBe("failed");
+        expect(result.modelContent).toContain("timeout_ms");
+        expect(executions).toBe(0);
+        expect(await tasks.list()).toEqual([]);
+      } finally {await runtime.close();}
     });
   });
 
@@ -635,7 +633,7 @@ describe("bash tool contract", () => {
     });
   });
 
-  test("后台 Bash 安全忽略前台 timeout，不会终止已启动的服务", async () => {
+  test("后台 Bash 持续运行直到显式停止", async () => {
     await withTempProject(async (cwd) => {
       const {runtime, tasks} = createTaskSession(cwd);
       try {
@@ -644,14 +642,12 @@ describe("bash tool contract", () => {
           "bash",
           JSON.stringify({
             command: "node -e \"setInterval(() => {}, 1000)\"",
-            timeout_ms: 100,
             run_in_background: true,
           }),
           ctx,
-          "background-ignores-foreground-timeout"
+          "background-lifecycle"
         );
         expect(started.outcome).toBe("ok");
-        expect(started.modelContent).toContain("Ignored timeout_ms");
         expect(contentText(started.modelContent)).toContain("terminates when HiCode exits");
         expect(started.displayContent).toContain("terminates when HiCode exits");
         const taskId = contentText(started.modelContent).match(/task_id: (t_[0-9a-f]{12})/)?.[1];

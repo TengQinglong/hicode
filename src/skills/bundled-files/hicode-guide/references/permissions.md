@@ -6,8 +6,8 @@
 
 | Profile | Behavior |
 | --- | --- |
-| Ask for approval | Normal work within authorized boundaries proceeds; additional access goes to the user. |
-| Approve for me | Additional permission requests go through an independent review Agent; some decisions may still require the user. |
+| Ask me | Normal work within authorized boundaries proceeds; additional access goes to the user. |
+| Agent review | Additional permission requests go through an independent review Agent; some decisions may still require the user. |
 | Full Access | Commands use host execution under the current OS account and ordinary extra-access prompts are reduced. This is not sudo/root access. |
 
 `/permissions` changes the current session. Full Access selection requires confirmation. Explicit deny rules, tool validation, MCP Server approval and Hook trust still apply. Project settings cannot grant Full Access or replace the review model. SDK Hosts must explicitly permit Full Access before selecting it.

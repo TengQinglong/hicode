@@ -1,12 +1,11 @@
 import {basename} from "node:path";
 import {useEffect, useState} from "react";
 import {Box, Text, useInput} from "ink";
-import stringWidth from "string-width";
 import type {GitDiffFile, GitDiffSnapshotResult,} from "../../git/index.js";
 import type {DiffHunk} from "../../fileChanges/index.js";
 import {StructuredDiff} from "../fileChanges/StructuredDiff.js";
 import {COLORS} from "../theme.js";
-import {useTerminalWidth} from "../terminalSize.js";
+import {panelWindow, usePanelLayout, wrapPanelText} from "../panelLayout.js";
 
 interface DiffViewFile {
     path: string;
@@ -55,30 +54,6 @@ function fromGitFile(file: GitDiffFile): DiffViewFile {
     };
 }
 
-function visibleFileWindow(files: readonly DiffViewFile[], selected: number) {
-    const limit = 6;
-    const start = Math.max(0, Math.min(selected - 2, files.length - limit));
-    return {start, files: files.slice(start, start + limit)};
-}
-
-function truncateStart(value: string, width: number): string {
-    if (stringWidth(value) <= width) return value;
-    const suffixWidth = Math.max(1, width - 1);
-    const segments = [...new Intl.Segmenter(undefined, {
-        granularity: "grapheme",
-    }).segment(value)].map(({segment}) => segment);
-    let suffix = "";
-    let used = 0;
-    for (let index = segments.length - 1; index >= 0; index -= 1) {
-        const segment = segments[index]!;
-        const nextWidth = stringWidth(segment);
-        if (used + nextWidth > suffixWidth) break;
-        suffix = segment + suffix;
-        used += nextWidth;
-    }
-    return `…${suffix}`;
-}
-
 export function GitDiffDialog({
                                   loadDiff,
                                   onClose,
@@ -86,7 +61,7 @@ export function GitDiffDialog({
     loadDiff: (signal: AbortSignal) => Promise<GitDiffSnapshotResult>;
     onClose: () => void;
 }) {
-    const width = useTerminalWidth();
+    const {width, height, padding, contentWidth} = usePanelLayout();
     const [selection, setSelection] = useState<{mode: ViewMode; path?: string}>({mode: "list"});
     const [reloadRevision, setReloadRevision] = useState(0);
     const [view, setView] = useState<ViewState>({status: "loading"});
@@ -159,9 +134,10 @@ export function GitDiffDialog({
     const selected = view.status === "ready"
         ? view.files[selectedFile]
         : undefined;
-    const fileWindow = view.status === "ready"
-        ? visibleFileWindow(view.files, selectedFile)
-        : {start: 0, files: []};
+    const files = view.status === "ready" ? view.files : [];
+    const pathWidth = contentWidth < 60 ? contentWidth : Math.max(1, contentWidth - 26);
+    const range = panelWindow(files.map(file => wrapPanelText(`❯ ${file.path}`, pathWidth).length + (contentWidth < 60 ? 2 : 0)), selectedFile, height - 11);
+    const fileWindow = {start: range.start, files: files.slice(range.start, range.end)};
     const totalAdditions = view.status === "ready" &&
         view.files.every((file) => file.additions !== null)
         ? view.files.reduce((sum, file) => sum + (file.additions ?? 0), 0)
@@ -170,8 +146,6 @@ export function GitDiffDialog({
         view.files.every((file) => file.deletions !== null)
         ? view.files.reduce((sum, file) => sum + (file.deletions ?? 0), 0)
         : null;
-    const panelWidth = Math.max(1, Math.min(100, width - 4));
-    const contentWidth = panelWidth;
     const compact = contentWidth < 60;
 
     return (
@@ -179,8 +153,8 @@ export function GitDiffDialog({
             flexDirection="column"
             marginTop={1}
             marginBottom={1}
-            width={panelWidth + 2}
-            paddingLeft={2}
+            width={width}
+            paddingX={padding}
         >
             <Box>
                 <Text bold color={COLORS.accent}>± Changes</Text>
@@ -223,16 +197,15 @@ export function GitDiffDialog({
                     {fileWindow.files.map((file, offset) => {
                         const index = fileWindow.start + offset;
                         const isSelected = index === selectedFile;
-                        const maxPathWidth = Math.max(1, contentWidth - (compact ? 2 : 26));
+                        const maxPathWidth = Math.max(1, contentWidth - (compact ? 0 : 26));
                         return (
                             <Box key={file.path} flexDirection={compact ? "column" : "row"} marginBottom={compact ? 1 : 0}>
-                                <Text
+                                <Box width={compact ? contentWidth : Math.max(1, contentWidth - 26)} flexShrink={0}><Text
                                     bold={isSelected}
                                     color={isSelected ? COLORS.accent : undefined}
                                 >
-                                    {isSelected ? "❯ " : "  "}
-                                    {truncateStart(file.path, maxPathWidth)}
-                                </Text>
+                                    {wrapPanelText(`${isSelected ? "❯ " : "  "}${file.path}`, maxPathWidth).join("\n")}
+                                </Text></Box>
                                 {!compact && <Box flexGrow={1}/>}
                                 <Text>
                                     {compact ? "  " : ""}

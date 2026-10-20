@@ -18,9 +18,10 @@ describe("Welcome", () => {
     expect(frame.split("\n")[0]).toMatch(/^╔═+╗$/);
   });
 
-  test("窄终端进入紧凑布局且保持最小内容宽度", () => {
+  test("窄终端收缩并进入紧凑布局，宽终端保留58列上限", () => {
     expect(getWelcomeLayout(40)).toEqual({contentWidth: 38, compact: true});
     expect(getWelcomeLayout(20)).toEqual({contentWidth: 18, compact: true});
     expect(getWelcomeLayout(80)).toEqual({contentWidth: 58, compact: false});
+    expect(getWelcomeLayout(160)).toEqual({contentWidth: 58, compact: false});
   });
 });

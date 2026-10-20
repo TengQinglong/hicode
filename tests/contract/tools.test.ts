@@ -62,13 +62,13 @@ describe("tool registry contract", () => {
     expect(bash?.function.description).toContain("Each call is a separate process");
     expect(bash?.function.description).toContain("Do not use shell &");
     expect(bash?.function.description).toContain(
-      "run_in_background for services, GUIs and watchers, omit timeout_ms"
+      "run_in_background for services/watchers"
     );
     expect(JSON.stringify(bash?.function.parameters)).toContain(
       "previous cd state is not retained"
     );
     expect(JSON.stringify(bash?.function.parameters)).toContain(
-      "Returns a task ID immediately"
+      "Returns a Task ID after a brief startup check"
     );
   });
 

@@ -396,7 +396,6 @@ class TaskRuntime implements TaskRuntimeLike {
         this.assertOpen();
         binding.signal.throwIfAborted();
         if (continuation && (!Number.isInteger(continuation.waitMs) || continuation.waitMs < 100 || continuation.waitMs > 30_000)) throw new Error("Wait time must be 100–30000ms");
-        if (continuation?.timeoutMs !== undefined && (!Number.isInteger(continuation.timeoutMs) || continuation.timeoutMs < 100 || continuation.timeoutMs > 600_000)) throw new Error("Execution timeout must be 100–600000ms");
         continuation?.signal.throwIfAborted();
         const releaseSlot = this.reserveTaskSlot();
         try {
@@ -424,7 +423,7 @@ class TaskRuntime implements TaskRuntimeLike {
                 task,
                 input,
                 this.shellRunner,
-                {timeoutMs: continuation?.timeoutMs ?? null, onPhaseChanged: () => {
+                {onPhaseChanged: () => {
                         if (task.published) void snapshotShell(task).then(snapshot => {
                             if (task.status === "running" && task.phase === snapshot.phase) {
                                 this.notifyListeners(this.createEvent("task_progress", snapshot));

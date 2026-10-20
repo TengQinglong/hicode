@@ -38,7 +38,7 @@ export async function runShellTask(
     task: ManagedShellTask,
     input: StartShellTaskInput,
     shellRunner: ShellRunnerLike,
-    execution: {timeoutMs: number | null; onPhaseChanged(): void},
+    execution: {onPhaseChanged(): void},
     onFinished: (task: ManagedShellTask) => Promise<void>
 ): Promise<void> {
     let finalStatus: TaskStatus = "failed";
@@ -51,7 +51,7 @@ export async function runShellTask(
                 command: input.command,
                 cwd: input.cwd,
                 signal: task.controller.signal,
-                timeoutMs: execution.timeoutMs,
+                timeoutMs: null,
                 outputFilePath: task.outputPath,
                 maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
                 previewChars: 30_000,

@@ -58,7 +58,8 @@ describe("App cancellation", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       const frame = instance.lastFrame() ?? "";
       expect(frame).toContain("GLM Test");
-      expect(frame).toContain(`Plan | ${cwd}`);
+      // The status bar may truncate a long cwd; this test checks mode switching.
+      expect(frame).toContain("| Plan |");
 
       release();
       await new Promise((resolve) => setTimeout(resolve, 30));
