@@ -76,7 +76,7 @@ export class SandboxNetworkApproval {
             if (access.session.allows(host, port)) return true;
             if ([...this.executions].some((entry) => entry.denied.has(key))) return false;
             if ([...this.executions].some(entry => !entry.access?.canReview())) {
-                this.recordDenial(host, port, "approval_unavailable: this execution cannot request new network approval; for a finite install/build, run in the foreground with timeout_ms; this is not a user denial");
+                this.recordDenial(host, port, "approval_unavailable: this execution cannot request new network approval; for a finite install/build, run in the foreground without run_in_background or yield_time_ms; this is not a user denial");
                 return false;
             }
             // A Session grant is shared, but a new decision reviews a specific

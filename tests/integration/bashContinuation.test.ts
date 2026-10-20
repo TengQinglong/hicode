@@ -135,21 +135,38 @@ test("short ordinary Bash has inline output and no public task, notification or 
     });
 });
 
-test.each([{yieldMs: 500, timeoutMs: 100}, {yieldMs: 100, timeoutMs: 400}])(
-    "hard limit $timeoutMs remains independent of yield $yieldMs", async ({yieldMs, timeoutMs}) => {
-        await withTempProject(async cwd => {
-            const {resources, ctx} = fixture(cwd);
-            try {
-                const start = performance.now();
-                const result = await executeToolResult("bash", JSON.stringify({command: "sleep 30",
-                    yield_time_ms: yieldMs, timeout_ms: timeoutMs}), ctx, "limited");
-                const final = result.runningTask ? await executeToolResult("task", JSON.stringify({action: "wait", task_id: result.runningTask}), ctx, "wait") : result;
-                expect(final.outcome).toBe("failed");
-                expect(final.modelContent).toContain(`${timeoutMs}ms`);
-                expect(performance.now() - start).toBeLessThan(2000);
-            } finally {await resources.close();}
-        });
+test("yielded Shell has no execution deadline and completes through the same task", async () => {
+    await withTempProject(async cwd => {
+        const base = createTestContext(cwd, {permissionMode: "full-access"});
+        const limits: Array<number | null | undefined> = [];
+        const runner: ShellRunnerLike = {...base.shellRunner, run(input) {
+            limits.push(input.timeoutMs); return base.shellRunner.run(input);
+        }};
+        const runtime = createTaskRuntimeForTest(cwd, runner);
+        const tasks = runtime.forSession({sessionId: base.sessionId, toolResultStore: base.toolResultStore});
+        const ctx = {...base, tasks};
+        try {
+            const started = await executeToolResult("bash", JSON.stringify({
+                command: 'node -e \'const fs = require("fs"); fs.appendFileSync("starts", "once\\n"); const timer = setInterval(() => {if (fs.existsSync("release")) {clearInterval(timer); process.stdout.write("finished");}}, 10);\'',
+                yield_time_ms: 100,
+            }), ctx, "finite");
+            expect(started.runningTask).toBeDefined();
+            expect(limits).toEqual([null]);
+            const id = started.runningTask!;
+            for (let i = 0; i < 2; i++) {
+                const waited = await executeToolResult("task", JSON.stringify({action: "wait", task_id: id, wait_ms: 5}), ctx, `wait-${i}`);
+                expect(waited.completedTask).toBeUndefined();
+                expect((await tasks.get(id))?.status).toBe("running");
+            }
+            await writeFile(join(cwd, "release"), "go");
+            const done = await executeToolResult("task", JSON.stringify({action: "wait", task_id: id}), ctx, "finish");
+            expect(done.outcome).toBe("ok");
+            expect(done.modelContent).toContain("finished");
+            expect(await readFile(join(cwd, "starts"), "utf8")).toBe("once\n");
+            expect(limits).toEqual([null]);
+        } finally {await runtime.close();}
     });
+});
 
 test("waiting window includes Sandbox preparation and hands off the same pending task", async () => {
     await withTempProject(async cwd => {
@@ -270,6 +287,46 @@ test("Shell result receipt is ACKed only after paired History is saved, and wait
             expect(result.reply).toBe("Collected once.");
             expect(id).toBeDefined();
         } finally {await resources.close();}
+    });
+});
+
+test("explicit finite background work survives a normal reply and delivers its completion once in a later turn", async () => {
+    await withTempProject(async (cwd, storage) => {
+        const resources = createTestRuntimeResources(cwd, {storage});
+        const fake = createFakeLLM([
+            assistantToolCall("bash", {command: 'node -e \'const fs = require("fs"); const timer = setInterval(() => {if (fs.existsSync("release")) {clearInterval(timer); process.stdout.write("background-built");}}, 10);\'', run_in_background: true}, "background"),
+            assistantText("Started; the build is still running."),
+            options => {
+                expect(options.messages.filter(message => message.role === "user" && contentText(message.content).includes("<task-notification>"))).toHaveLength(1);
+                expect(JSON.stringify(options.messages)).toContain("background-built");
+                return assistantText("The background build completed.");
+            },
+            options => {
+                expect(options.messages.filter(message => message.role === "user" && contentText(message.content).includes("<task-notification>"))).toHaveLength(1);
+                return assistantText("No new task results.");
+            },
+        ]);
+        resources.agentRuntime.runAgent = createAgentRunner({callLLM: fake.callLLM,
+            compactHistory: async ({preTokenCount}) => ({compacted: false, preTokenCount, threshold: Number.MAX_SAFE_INTEGER})});
+        const session = createRootSessionRuntime({resources, seed: {sessionId: "background-across-turns",
+            history: [{role: "system", content: "fixture"}], compactState: createCompactState()}});
+        const state = () => ({todos: [], permissionMode: "full-access" as const, collaborationMode: "build" as const, uiEvents: []});
+        const run = (prompt: string) => runRootTurn({resources, session, prompt, signal: new AbortController().signal,
+            host: continuityHost, onEvent() {}, onHookResult() {}, onLifecycleIssue(issue) {throw issue.error;}, getSnapshotState: state});
+        let finished!: () => void;
+        const completion = new Promise<void>(resolve => {finished = resolve;});
+        const unsubscribe = session.taskSession.subscribe(event => {if (event.type === "task_finished") finished();});
+        try {
+            expect((await run("Start this build in the background; report its result later.")).reply).toContain("still running");
+            expect(session.taskSession.hasRunning()).toBe(true);
+            expect(fake.calls).toHaveLength(2);
+            await writeFile(join(cwd, "release"), "go");
+            await completion;
+            expect((await run("Check the build.")).reply).toBe("The background build completed.");
+            expect(await session.taskSession.pendingNotifications()).toEqual([]);
+            await run("Anything else?");
+            expect(fake.calls).toHaveLength(4);
+        } finally {unsubscribe(); await resources.close();}
     });
 });
 

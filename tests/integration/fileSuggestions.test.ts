@@ -23,7 +23,7 @@ test("file suggestions enumerate once, rank paths, refresh new files and keep ou
         let runs = 0;
         const source = new FileSuggestions(abort => createTestContext(cwd, {signal: abort, shellRunner: {
             sandboxStatus: base.shellRunner.sandboxStatus,
-            run: args => {runs++; return base.shellRunner.run(args);},
+            run: args => {runs++; expect(args.timeoutMs).toBe(10_000); return base.shellRunner.run(args);},
         }}));
         try {
             const first = await source.search("input", signal());
